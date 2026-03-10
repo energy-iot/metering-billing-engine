@@ -30,9 +30,12 @@ export default async function DashboardLayout({
           >
             Dashboard
           </a>
-          <span className="flex items-center rounded-md px-3 py-2 text-sm text-gray-400 cursor-not-allowed">
-            Microgrids (coming soon)
-          </span>
+          <a
+            href="/microgrids"
+            className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          >
+            Microgrids
+          </a>
           <span className="flex items-center rounded-md px-3 py-2 text-sm text-gray-400 cursor-not-allowed">
             Settings (coming soon)
           </span>
