@@ -62,6 +62,10 @@ export function MeterManager({
   // Optimistic tracking of meters added during this session (before router.refresh() completes)
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
 
+  // Refresh types state
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<string | null>(null);
+
   // Build set of already-added meter keys for dedup (prop-based + optimistic)
   const existingKeys = new Set([
     ...meters
@@ -120,10 +124,11 @@ export function MeterManager({
 
   async function handleDelete(meter: Meter) {
     const assignedTenants = tenants.filter((t) => t.meter_id === meter.id);
+    const tenantNames = assignedTenants.map((t) => t.name).join(", ");
     const message =
       assignedTenants.length > 0
-        ? `This meter is assigned to ${assignedTenants.length} tenant(s). Deleting it will unassign them.\n\nAre you sure you want to delete "${meter.name}"?`
-        : `Are you sure you want to delete "${meter.name}"?`;
+        ? `This meter is assigned to: ${tenantNames}. Deleting it will unassign their meter.\n\nContinue?`
+        : `Delete "${meter.name}"?`;
 
     if (!confirm(message)) return;
 
@@ -197,11 +202,88 @@ export function MeterManager({
     router.refresh();
   }
 
+  async function handleRefreshTypes() {
+    setRefreshing(true);
+    setRefreshResult(null);
+    setError(null);
+
+    try {
+      const edgeIds = getDiscoverEdgeIds();
+      const res = await fetch(
+        `/api/openems/discover?edgeIds=${encodeURIComponent(edgeIds)}`
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Failed to fetch meter types");
+        return;
+      }
+
+      const edges: EdgeDiscoveryResult[] = data.edges ?? [];
+
+      // Build a lookup: channelAddress → meterType
+      const typeByChannel = new Map<string, MeterType>();
+      for (const edge of edges) {
+        for (const dm of edge.meters) {
+          typeByChannel.set(
+            `${edge.edgeId}:${dm.channelAddress}`,
+            dm.meterType
+          );
+        }
+      }
+
+      // Update meters that have meter_type: null
+      let updated = 0;
+      for (const meter of meters) {
+        if (meter.meter_type !== null) continue;
+        if (meter.data_source_type !== "openems") continue;
+
+        const config = meter.data_source_config as OpenEmsDataSourceConfig;
+        const key = `${config.edgeId}:${config.channelAddress}`;
+        const discoveredType = typeByChannel.get(key);
+
+        if (!discoveredType) continue;
+
+        const newType = discoveredType !== "UNKNOWN" ? discoveredType : null;
+        if (newType === null) continue;
+
+        const { error: updateError } = await supabase
+          .from("meters")
+          .update({ meter_type: newType })
+          .eq("id", meter.id);
+
+        if (!updateError) updated++;
+      }
+
+      setRefreshResult(
+        updated > 0 ? `Updated ${updated} meter(s)` : "All meters already have types"
+      );
+      if (updated > 0) router.refresh();
+
+      // Clear message after 4 seconds
+      setTimeout(() => setRefreshResult(null), 4000);
+    } catch {
+      setError("Could not reach the server. Check your network connection.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-6">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900">Meters</h2>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {refreshResult && (
+            <span className="text-xs text-green-600">{refreshResult}</span>
+          )}
+          <button
+            onClick={handleRefreshTypes}
+            disabled={refreshing}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshing ? "Refreshing..." : "Refresh Types"}
+          </button>
           <button
             onClick={handleDiscover}
             className="rounded-md bg-green-600 px-3 py-1.5 text-sm text-white hover:bg-green-700"
