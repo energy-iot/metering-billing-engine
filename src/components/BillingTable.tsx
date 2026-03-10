@@ -50,6 +50,7 @@ export function BillingTable({
 
   const [generating, setGenerating] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generateErrors, setGenerateErrors] = useState<
     { tenantName: string; error: string }[]
@@ -116,6 +117,27 @@ export function BillingTable({
     }
   }
 
+  async function handleDelete() {
+    if (
+      !confirm(
+        "Delete this billing period? This will also delete all line items. This cannot be undone."
+      )
+    )
+      return;
+    setError(null);
+    setDeleting(true);
+    const { error: deleteError } = await supabase
+      .from("billing_periods")
+      .delete()
+      .eq("id", period.id);
+    if (deleteError) {
+      setError(deleteError.message);
+      setDeleting(false);
+      return;
+    }
+    router.push(`/microgrids/${microgridId}/billing`);
+  }
+
   async function handleClose() {
     if (
       !confirm(
@@ -171,7 +193,7 @@ export function BillingTable({
             <div className="flex gap-2">
               <button
                 onClick={handleGenerate}
-                disabled={generating || closing}
+                disabled={generating || closing || deleting}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {generating
@@ -182,10 +204,17 @@ export function BillingTable({
               </button>
               <button
                 onClick={handleClose}
-                disabled={generating || closing || lineItems.length === 0}
+                disabled={generating || closing || deleting || lineItems.length === 0}
                 className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {closing ? "Closing..." : "Close Period"}
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={generating || closing || deleting}
+                className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deleting ? "Deleting..." : "Delete"}
               </button>
             </div>
           )}

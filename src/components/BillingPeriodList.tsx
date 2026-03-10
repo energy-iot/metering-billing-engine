@@ -42,7 +42,29 @@ export function BillingPeriodList({
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
   const [creating, setCreating] = useState(false);
+  const [deletingPeriodId, setDeletingPeriodId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function handleDeletePeriod(period: BillingPeriod) {
+    if (
+      !confirm(
+        `Delete billing period ${formatDate(period.start_date)} – ${formatDate(period.end_date)}? This will also delete all line items. This cannot be undone.`
+      )
+    )
+      return;
+    setError(null);
+    setDeletingPeriodId(period.id);
+    const { error: deleteError } = await supabase
+      .from("billing_periods")
+      .delete()
+      .eq("id", period.id);
+    if (deleteError) {
+      setError(deleteError.message);
+      setDeletingPeriodId(null);
+      return;
+    }
+    router.refresh();
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -181,6 +203,15 @@ export function BillingPeriodList({
                     >
                       View
                     </Link>
+                    {period.status === "draft" && (
+                      <button
+                        onClick={() => handleDeletePeriod(period)}
+                        disabled={deletingPeriodId === period.id}
+                        className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {deletingPeriodId === period.id ? "Deleting..." : "Delete"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
