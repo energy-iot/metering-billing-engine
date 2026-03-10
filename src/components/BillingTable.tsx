@@ -116,6 +116,25 @@ export function BillingTable({
     }
   }
 
+  async function handleDelete() {
+    if (
+      !confirm(
+        "Delete this billing period? This will also delete all line items. This cannot be undone."
+      )
+    )
+      return;
+    setError(null);
+    const { error: deleteError } = await supabase
+      .from("billing_periods")
+      .delete()
+      .eq("id", period.id);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    router.push(`/microgrids/${microgridId}/billing`);
+  }
+
   async function handleClose() {
     if (
       !confirm(
@@ -186,6 +205,13 @@ export function BillingTable({
                 className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {closing ? "Closing..." : "Close Period"}
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={generating || closing}
+                className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Delete
               </button>
             </div>
           )}

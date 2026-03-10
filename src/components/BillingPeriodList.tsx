@@ -44,6 +44,25 @@ export function BillingPeriodList({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function handleDeletePeriod(period: BillingPeriod) {
+    if (
+      !confirm(
+        `Delete billing period ${formatDate(period.start_date)} – ${formatDate(period.end_date)}? This will also delete all line items.`
+      )
+    )
+      return;
+    setError(null);
+    const { error: deleteError } = await supabase
+      .from("billing_periods")
+      .delete()
+      .eq("id", period.id);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    router.refresh();
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -181,6 +200,14 @@ export function BillingPeriodList({
                     >
                       View
                     </Link>
+                    {period.status === "draft" && (
+                      <button
+                        onClick={() => handleDeletePeriod(period)}
+                        className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
