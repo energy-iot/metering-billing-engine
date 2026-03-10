@@ -415,6 +415,11 @@ describe("OpenEmsClient", () => {
         ["_sum/ConsumptionActivePower", "_sum/ProductionActivePower"]
       );
 
+      // Verify param name is "ids" (not "edgeIds") per OpenEMS B2B API
+      const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(body.params.ids).toEqual(["edge0"]);
+      expect(body.params.channels).toEqual(["_sum/ConsumptionActivePower", "_sum/ProductionActivePower"]);
+
       expect(values).toEqual([
         { edgeId: "edge0", channelAddress: "_sum/ConsumptionActivePower", value: 1500 },
         { edgeId: "edge0", channelAddress: "_sum/ProductionActivePower", value: 3000 },

@@ -130,7 +130,7 @@ export class OpenEmsClient implements MeterDataAdapter {
     const result = await this.rpc<
       Record<string, Record<string, number | null>>
     >("getEdgesChannelsValues", {
-      edgeIds,
+      ids: edgeIds,
       channels,
     });
 
