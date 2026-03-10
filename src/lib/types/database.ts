@@ -19,6 +19,7 @@ export type Meter = {
   name: string;
   data_source_type: string;
   data_source_config: Record<string, unknown>;
+  meter_type: string | null;
   created_at: string;
 };
 
