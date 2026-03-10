@@ -62,6 +62,10 @@ export function MeterManager({
   // Optimistic tracking of meters added during this session (before router.refresh() completes)
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
 
+  // Friendly name input state
+  const [namingMeterId, setNamingMeterId] = useState<string | null>(null);
+  const [namingValue, setNamingValue] = useState("");
+
   // Refresh types state
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
@@ -176,12 +180,14 @@ export function MeterManager({
     discoveredEdgeId: string,
     meter: DiscoveredMeter
   ) {
+    if (!namingValue.trim()) return;
+
     setAddingMeter(meter.componentId);
     setError(null);
 
     const { error: insertError } = await supabase.from("meters").insert({
       microgrid_id: microgridId,
-      name: meter.alias,
+      name: namingValue.trim(),
       data_source_type: "openems",
       data_source_config: {
         edgeId: discoveredEdgeId,
@@ -199,6 +205,7 @@ export function MeterManager({
     // Optimistically mark as added so UI updates immediately (no race with router.refresh)
     setAddedKeys((prev) => new Set([...prev, `${discoveredEdgeId}:${meter.componentId}`]));
     setAddingMeter(null);
+    setNamingMeterId(null);
     router.refresh();
   }
 
@@ -419,17 +426,43 @@ export function MeterManager({
                               <span className="text-xs italic text-gray-400">
                                 Already added
                               </span>
+                            ) : namingMeterId === meter.componentId ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={namingValue}
+                                  onChange={(e) => setNamingValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleAddDiscovered(edge.edgeId, meter);
+                                    if (e.key === "Escape") setNamingMeterId(null);
+                                  }}
+                                  className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                  autoFocus
+                                  placeholder="Enter meter name"
+                                />
+                                <button
+                                  onClick={() => handleAddDiscovered(edge.edgeId, meter)}
+                                  disabled={!namingValue.trim() || addingMeter === meter.componentId}
+                                  className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                  {addingMeter === meter.componentId ? "Saving..." : "Save"}
+                                </button>
+                                <button
+                                  onClick={() => setNamingMeterId(null)}
+                                  className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-600 hover:bg-gray-50"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
                             ) : (
                               <button
-                                onClick={() =>
-                                  handleAddDiscovered(edge.edgeId, meter)
-                                }
-                                disabled={addingMeter === meter.componentId}
-                                className="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                onClick={() => {
+                                  setNamingMeterId(meter.componentId);
+                                  setNamingValue(meter.alias || meter.componentId);
+                                }}
+                                className="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
                               >
-                                {addingMeter === meter.componentId
-                                  ? "Adding..."
-                                  : "Add"}
+                                Add
                               </button>
                             )}
                           </div>
