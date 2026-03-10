@@ -325,10 +325,13 @@ export function TenantTable({
                             <option value="">Unassigned</option>
                             {meters.map((meter) => (
                               <option key={meter.id} value={meter.id}>
-                                {meter.name}
+                                {meter.meter_type ? `[${meter.meter_type}] ` : ""}{meter.name}
                               </option>
                             ))}
                           </select>
+                          <p className="mt-1 text-xs text-gray-400">
+                            Assign a CONSUMPTION meter to bill this tenant for their electricity usage.
+                          </p>
                           {isSharedMeter(tenant.meter_id) && (
                             <p className="mt-1 text-xs text-yellow-600">
                               Shared with another tenant

@@ -10,6 +10,7 @@ import type {
   MeterType,
   OpenEmsDataSourceConfig,
 } from "@/lib/openems/types";
+import { METER_TYPE_INFO } from "@/lib/openems/meter-descriptions";
 
 const METER_TYPE_BADGES: Record<MeterType, { label: string; classes: string }> =
   {
@@ -181,6 +182,7 @@ export function MeterManager({
         edgeId: discoveredEdgeId,
         channelAddress: meter.channelAddress,
       },
+      meter_type: meter.meterType !== "UNKNOWN" ? meter.meterType : null,
     });
 
     if (insertError) {
@@ -287,63 +289,75 @@ export function MeterManager({
                       );
                       const badge = METER_TYPE_BADGES[meter.meterType];
 
+                      const typeInfo = METER_TYPE_INFO[meter.meterType];
+
                       return (
                         <div
                           key={meter.componentId}
-                          className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                          className={`rounded-md border px-3 py-2 ${
                             alreadyAdded
                               ? "border-gray-100 bg-gray-100"
                               : "border-gray-200 bg-white"
                           }`}
                         >
-                          <div className="flex items-center gap-3">
-                            <div>
-                              <p
-                                className={`text-sm font-medium ${
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div>
+                                <p
+                                  className={`text-sm font-medium ${
+                                    alreadyAdded
+                                      ? "text-gray-400"
+                                      : "text-gray-900"
+                                  }`}
+                                >
+                                  {meter.alias}
+                                </p>
+                                <p
+                                  className={`text-xs ${
+                                    alreadyAdded
+                                      ? "text-gray-300"
+                                      : "text-gray-500"
+                                  }`}
+                                >
+                                  {meter.componentId}
+                                </p>
+                              </div>
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                                   alreadyAdded
-                                    ? "text-gray-400"
-                                    : "text-gray-900"
+                                    ? "bg-gray-100 text-gray-400"
+                                    : badge.classes
                                 }`}
                               >
-                                {meter.alias}
-                              </p>
-                              <p
-                                className={`text-xs ${
-                                  alreadyAdded
-                                    ? "text-gray-300"
-                                    : "text-gray-500"
-                                }`}
+                                {badge.label}
+                              </span>
+                            </div>
+
+                            {alreadyAdded ? (
+                              <span className="text-xs italic text-gray-400">
+                                Already added
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() =>
+                                  handleAddDiscovered(edge.edgeId, meter)
+                                }
+                                disabled={addingMeter === meter.componentId}
+                                className="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                {meter.componentId}
+                                {addingMeter === meter.componentId
+                                  ? "Adding..."
+                                  : "Add"}
+                              </button>
+                            )}
+                          </div>
+                          {typeInfo && !alreadyAdded && (
+                            <div className="mt-1.5 ml-0 text-xs text-gray-500">
+                              <p>{typeInfo.shortDesc}</p>
+                              <p className="mt-0.5 italic text-gray-400">
+                                {typeInfo.billingHint}
                               </p>
                             </div>
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                alreadyAdded
-                                  ? "bg-gray-100 text-gray-400"
-                                  : badge.classes
-                              }`}
-                            >
-                              {badge.label}
-                            </span>
-                          </div>
-
-                          {alreadyAdded ? (
-                            <span className="text-xs italic text-gray-400">
-                              Already added
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() =>
-                                handleAddDiscovered(edge.edgeId, meter)
-                              }
-                              disabled={addingMeter === meter.componentId}
-                              className="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {addingMeter === meter.componentId
-                                ? "Adding..."
-                                : "Add"}
-                            </button>
                           )}
                         </div>
                       );
@@ -428,16 +442,36 @@ export function MeterManager({
         <div className="space-y-2">
           {meters.map((meter) => {
             const config = meter.data_source_config as OpenEmsDataSourceConfig;
+            const typeBadge = meter.meter_type
+              ? METER_TYPE_BADGES[meter.meter_type as MeterType]
+              : null;
+            const typeInfo = meter.meter_type
+              ? METER_TYPE_INFO[meter.meter_type]
+              : null;
             return (
               <div
                 key={meter.id}
                 className="flex items-center justify-between rounded-md border border-gray-100 bg-gray-50 px-4 py-3"
               >
                 <div>
-                  <p className="font-medium text-gray-900">{meter.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-gray-900">{meter.name}</p>
+                    {typeBadge && (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${typeBadge.classes}`}
+                      >
+                        {typeBadge.label}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500">
                     {config.edgeId} / {config.channelAddress}
                   </p>
+                  {typeInfo && (
+                    <p className="mt-0.5 text-xs text-gray-400">
+                      {typeInfo.shortDesc}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => handleDelete(meter)}
