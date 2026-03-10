@@ -54,3 +54,37 @@ export type ChannelValue = {
   channelAddress: string;
   value: number | null;
 };
+
+/** Edge configuration from getEdgeConfig */
+export type EdgeConfig = {
+  components: Record<string, EdgeComponent>;
+  factories: Record<string, EdgeFactory>;
+};
+
+export type EdgeComponent = {
+  alias: string;
+  factoryId: string;
+  properties: Record<string, unknown>;
+};
+
+export type EdgeFactory = {
+  natureIds: string[];
+};
+
+/** Meter type classification */
+export type MeterType = "GRID" | "PRODUCTION" | "CONSUMPTION" | "UNKNOWN";
+
+/** A discovered meter from OpenEMS */
+export type DiscoveredMeter = {
+  componentId: string;
+  alias: string;
+  meterType: MeterType;
+  channelAddress: string;
+};
+
+/** Discovery result per edge */
+export type EdgeDiscoveryResult = {
+  edgeId: string;
+  online: boolean;
+  meters: DiscoveredMeter[];
+};
