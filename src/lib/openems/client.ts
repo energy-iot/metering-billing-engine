@@ -2,6 +2,7 @@ import type { MeterConfig, MeterDataAdapter, MeterReading } from "@/lib/adapters
 import { OpenEmsError } from "./errors";
 import type {
   ChannelValue,
+  EdgeConfig,
   EdgeStatus,
   JsonRpcResponse,
   MeterEnergyResult,
@@ -87,6 +88,25 @@ export class OpenEmsClient implements MeterDataAdapter {
       edgeId,
       online: status.online,
     }));
+  }
+
+  /**
+   * Get the full configuration of an edge (components + factories).
+   */
+  async getEdgeConfig(edgeId: string): Promise<EdgeConfig> {
+    const result = await this.rpc<{
+      payload: JsonRpcResponse<EdgeConfig>;
+    }>("edgeRpc", {
+      edgeId,
+      payload: {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "getEdgeConfig",
+        params: {},
+      },
+    });
+
+    return result.payload.result;
   }
 
   /**
