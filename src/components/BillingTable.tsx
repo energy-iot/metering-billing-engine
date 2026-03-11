@@ -268,6 +268,12 @@ export function BillingTable({
                     Tenant
                   </th>
                   <th className="pb-2 pr-4 text-right font-medium text-gray-700">
+                    Begin (kWh)
+                  </th>
+                  <th className="pb-2 pr-4 text-right font-medium text-gray-700">
+                    End (kWh)
+                  </th>
+                  <th className="pb-2 pr-4 text-right font-medium text-gray-700">
                     Usage (kWh)
                   </th>
                   {tiers.map((tier, i) => (
@@ -300,7 +306,7 @@ export function BillingTable({
                         </td>
                         <td
                           className="py-3 pr-4 text-right text-gray-400"
-                          colSpan={tiers.length * 2 + 2}
+                          colSpan={tiers.length * 2 + 4}
                         >
                           {tenant.meter_id ? "No data" : "No meter"}
                         </td>
@@ -315,6 +321,26 @@ export function BillingTable({
                     >
                       <td className="py-3 pr-4 text-gray-900">
                         {tenant.name}
+                      </td>
+                      <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
+                        {item.start_kwh !== null && item.start_kwh !== undefined ? (
+                          <>
+                            {formatKwh(item.start_kwh)}
+                            <CopyButton value={item.start_kwh} />
+                          </>
+                        ) : (
+                          <span className="text-gray-400">&mdash;</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
+                        {item.end_kwh !== null && item.end_kwh !== undefined ? (
+                          <>
+                            {formatKwh(item.end_kwh)}
+                            <CopyButton value={item.end_kwh} />
+                          </>
+                        ) : (
+                          <span className="text-gray-400">&mdash;</span>
+                        )}
                       </td>
                       <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
                         {formatKwh(item.usage_kwh)}
@@ -349,6 +375,8 @@ export function BillingTable({
                 {lineItems.length > 0 && (
                   <tr className="border-t-2 border-gray-300 font-medium">
                     <td className="py-3 pr-4 text-gray-900">Total</td>
+                    <td className="py-3 pr-4"></td>
+                    <td className="py-3 pr-4"></td>
                     <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
                       {formatKwh(grandTotalKwh)}
                       <CopyButton value={grandTotalKwh} />

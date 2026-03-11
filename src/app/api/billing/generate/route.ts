@@ -146,6 +146,52 @@ export async function POST(request: NextRequest) {
     tenantMeterMap.set(meter.id, tenant.id);
   }
 
+  // 5b. Collect meter IDs and look up prior-period end readings
+  const meterIdsForGeneration = tenantList
+    .filter((t) => t.meter_id && meterMap.has(t.meter_id))
+    .map((t) => t.meter_id!);
+
+  const priorEndKwhMap = new Map<string, number>();
+
+  if (meterIdsForGeneration.length > 0) {
+    // Step A: Get prior period IDs (end_date <= current start_date)
+    const { data: priorPeriods } = await supabase
+      .from("billing_periods")
+      .select("id")
+      .eq("microgrid_id", billingPeriod.microgrid_id)
+      .lte("end_date", billingPeriod.start_date)
+      .neq("id", billingPeriod.id)
+      .order("end_date", { ascending: false });
+
+    if (priorPeriods && priorPeriods.length > 0) {
+      const priorPeriodIds = priorPeriods.map((p) => p.id);
+
+      // Step B: Get line items from those periods with end_kwh set
+      const { data: priorItems } = await supabase
+        .from("billing_line_items")
+        .select("meter_id, end_kwh, billing_period_id")
+        .in("billing_period_id", priorPeriodIds)
+        .in("meter_id", meterIdsForGeneration)
+        .not("end_kwh", "is", null);
+
+      if (priorItems) {
+        const periodOrder = new Map(
+          priorPeriodIds.map((id, i) => [id, i])
+        );
+        priorItems.sort(
+          (a, b) =>
+            (periodOrder.get(a.billing_period_id) ?? 999) -
+            (periodOrder.get(b.billing_period_id) ?? 999)
+        );
+        for (const item of priorItems) {
+          if (item.meter_id && !priorEndKwhMap.has(item.meter_id)) {
+            priorEndKwhMap.set(item.meter_id, Number(item.end_kwh));
+          }
+        }
+      }
+    }
+  }
+
   if (meterConfigs.length === 0 && tenantList.length > 0) {
     // No meters to query, but we still delete old line items
     await supabase
@@ -177,6 +223,8 @@ export async function POST(request: NextRequest) {
       tenant_id: string;
       meter_id: string;
       usage_kwh: number;
+      start_kwh: number;
+      end_kwh: number;
       tier_breakdown: { label: string; kwh: number; amount: number }[];
       total_amount: number;
     }[] = [];
@@ -201,11 +249,16 @@ export async function POST(request: NextRequest) {
         rateSchedule.tax_rate
       );
 
+      const startKwh = priorEndKwhMap.get(tenant.meter_id!) ?? 0;
+      const endKwh = startKwh + usageKwh;
+
       lineItemRows.push({
         billing_period_id: body.billingPeriodId,
         tenant_id: tenant.id,
         meter_id: tenant.meter_id,
         usage_kwh: usageKwh,
+        start_kwh: startKwh,
+        end_kwh: endKwh,
         tier_breakdown: calc.tierBreakdown,
         total_amount: calc.totalAmount,
       });
