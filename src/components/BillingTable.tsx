@@ -118,7 +118,9 @@ export function BillingTable({
   }
 
   async function handleDelete() {
-    const dateRange = `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
+    const dateRange = period.start_date === period.end_date
+      ? formatDate(period.start_date)
+      : `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
     const message =
       period.status === "closed"
         ? `Permanently delete this closed billing period (${dateRange}) and all its finalized bills? This cannot be undone.`
@@ -175,8 +177,9 @@ export function BillingTable({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">
-              {formatDate(period.start_date)} &ndash;{" "}
-              {formatDate(period.end_date)}
+              {period.start_date === period.end_date
+                ? formatDate(period.start_date)
+                : <>{formatDate(period.start_date)} &ndash; {formatDate(period.end_date)}</>}
             </h2>
             <span
               className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${

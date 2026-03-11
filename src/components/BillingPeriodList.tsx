@@ -61,7 +61,9 @@ export function BillingPeriodList({
   const [error, setError] = useState<string | null>(null);
 
   async function handleDeletePeriod(period: BillingPeriod) {
-    const dateRange = `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
+    const dateRange = period.start_date === period.end_date
+      ? formatDate(period.start_date)
+      : `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
     const message =
       period.status === "closed"
         ? `Permanently delete this closed billing period (${dateRange}) and all its finalized bills? This cannot be undone.`
@@ -90,8 +92,8 @@ export function BillingPeriodList({
       return;
     }
 
-    if (startDate >= endDate) {
-      setError("Start date must be before end date");
+    if (startDate > endDate) {
+      setError("Start date must be on or before end date");
       return;
     }
 
@@ -199,8 +201,9 @@ export function BillingPeriodList({
               {periods.map((period) => (
                 <tr key={period.id} className="border-b border-gray-100">
                   <td className="py-3 pr-4 text-gray-900">
-                    {formatDate(period.start_date)} &ndash;{" "}
-                    {formatDate(period.end_date)}
+                    {period.start_date === period.end_date
+                      ? formatDate(period.start_date)
+                      : <>{formatDate(period.start_date)} &ndash; {formatDate(period.end_date)}</>}
                   </td>
                   <td className="py-3 pr-4">
                     <span
