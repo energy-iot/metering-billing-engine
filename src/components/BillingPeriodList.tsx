@@ -27,12 +27,27 @@ function formatDate(dateStr: string) {
   });
 }
 
+function formatKwh(value: number): string {
+  return new Intl.NumberFormat("en", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatAmount(value: number): string {
+  return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
+}
+
 export function BillingPeriodList({
   microgridId,
   periods,
+  summaries,
+  currency,
 }: {
   microgridId: string;
   periods: BillingPeriod[];
+  summaries: Record<string, { totalKwh: number; totalAmount: number }>;
+  currency: string;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -175,6 +190,8 @@ export function BillingPeriodList({
                   Date Range
                 </th>
                 <th className="pb-2 pr-4 font-medium text-gray-700">Status</th>
+                <th className="pb-2 pr-4 text-right font-medium text-gray-700">Total kWh</th>
+                <th className="pb-2 pr-4 text-right font-medium text-gray-700">Total ({currency})</th>
                 <th className="pb-2 font-medium text-gray-700">Actions</th>
               </tr>
             </thead>
@@ -195,6 +212,16 @@ export function BillingPeriodList({
                     >
                       {period.status}
                     </span>
+                  </td>
+                  <td className="py-3 pr-4 text-right text-gray-900">
+                    {summaries[period.id]
+                      ? formatKwh(summaries[period.id].totalKwh)
+                      : "0"}
+                  </td>
+                  <td className="py-3 pr-4 text-right text-gray-900">
+                    {summaries[period.id]
+                      ? formatAmount(summaries[period.id].totalAmount)
+                      : "N/A"}
                   </td>
                   <td className="py-3">
                     <Link

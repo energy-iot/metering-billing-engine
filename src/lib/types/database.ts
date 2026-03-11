@@ -73,6 +73,8 @@ export type BillingLineItem = {
   tenant_id: string;
   meter_id: string | null;
   usage_kwh: number;
+  start_kwh: number | null;
+  end_kwh: number | null;
   tier_breakdown: TierBreakdown[];
   total_amount: number;
   created_at: string;
