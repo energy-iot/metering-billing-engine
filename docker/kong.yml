@@ -17,4 +17,6 @@ plugins:
     config:
       origins: ["http://localhost:3000"]
       methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
-      headers: [Authorization, Content-Type, apikey, x-client-info]
+      headers: [Authorization, Content-Type, apikey, x-client-info, x-supabase-api-version]
+      exposed_headers: [X-Total-Count, Link, X-Supabase-Api-Version]
+      credentials: true
