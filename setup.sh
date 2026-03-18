@@ -138,12 +138,12 @@ if [ "$MODE" = "local" ]; then
   if check_existing_env; then
     log "Generating .env.local from local Supabase..."
 
-    supabase status -o env \
-      --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
-      --override-name anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
-      --override-name service_role_key=SUPABASE_SERVICE_ROLE_KEY \
-      | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY)=' \
-      > .env.local
+    # Map supabase status env var names to the names our app expects
+    supabase status -o env 2>/dev/null | awk -F= '
+      /^API_URL=/ { print "NEXT_PUBLIC_SUPABASE_URL=" substr($0, index($0,"=")+1) }
+      /^ANON_KEY=/ { print "NEXT_PUBLIC_SUPABASE_ANON_KEY=" substr($0, index($0,"=")+1) }
+      /^SERVICE_ROLE_KEY=/ { print "SUPABASE_SERVICE_ROLE_KEY=" substr($0, index($0,"=")+1) }
+    ' > .env.local
 
     # Validate we got all three values
     if ! grep -q '^NEXT_PUBLIC_SUPABASE_URL=' .env.local || \
