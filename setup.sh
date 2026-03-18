@@ -126,21 +126,43 @@ if [ "$MODE" = "local" ]; then
   supabase start
 
   # Step 2: Apply migrations + seed
-  log "Applying migrations and seeding database..."
-  supabase db reset --yes
+  if [ -f .env.local ] && [ "$FORCE" = false ]; then
+    # Re-run scenario — skip db reset to preserve data
+    log "Supabase already configured. Skipping db reset (use --force to reset database)."
+  else
+    log "Applying migrations and seed data..."
+    supabase db reset --yes
+  fi
 
   # Step 3: Generate .env.local
   if check_existing_env; then
     log "Generating .env.local from local Supabase..."
 
-    # Extract env vars from supabase status
-    eval "$(supabase status -o env \
+    supabase status -o env \
       --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
       --override-name anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
       --override-name service_role_key=SUPABASE_SERVICE_ROLE_KEY \
-      | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY)=')"
+      | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY)=' \
+      > .env.local
 
-    generate_env_local "$NEXT_PUBLIC_SUPABASE_URL" "$NEXT_PUBLIC_SUPABASE_ANON_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
+    # Validate we got all three values
+    if ! grep -q '^NEXT_PUBLIC_SUPABASE_URL=' .env.local || \
+       ! grep -q '^NEXT_PUBLIC_SUPABASE_ANON_KEY=' .env.local || \
+       ! grep -q '^SUPABASE_SERVICE_ROLE_KEY=' .env.local; then
+      err "Failed to extract Supabase credentials from 'supabase status'"
+      rm -f .env.local
+      exit 1
+    fi
+
+    # Append OpenEMS defaults
+    cat >> .env.local <<'ENVEOF'
+
+# OpenEMS B2B REST API
+OPENEMS_B2B_URL=http://localhost:8075
+OPENEMS_B2B_USERNAME=admin
+OPENEMS_B2B_PASSWORD=Icui4cyou
+ENVEOF
+
     log ".env.local created (local mode)"
   fi
 
@@ -167,7 +189,6 @@ if [ "$MODE" = "local" ]; then
 elif [ "$MODE" = "cloud" ]; then
   # Step 1: Collect credentials
   HAS_FLAGS=false
-  HAS_PROMPTS=false
 
   if [ -n "$CLOUD_URL" ] || [ -n "$CLOUD_ANON_KEY" ] || [ -n "$CLOUD_SERVICE_ROLE_KEY" ]; then
     HAS_FLAGS=true

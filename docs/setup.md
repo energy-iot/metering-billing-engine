@@ -83,6 +83,7 @@ Usage:
 | `--anon-key=KEY` | Supabase anon/publishable key (cloud mode only) |
 | `--service-role-key=KEY` | Supabase service role key (cloud mode only) |
 | `--force` | Overwrite `.env.local` if it already exists |
+| `--help`, `-h` | Show usage information and exit |
 
 ### What the script does
 
@@ -149,7 +150,7 @@ The MBE connects to OpenEMS via the B2B REST API at `http://localhost:8075`. Thi
 |---------|----------|
 | `Docker daemon is not running` | Start Docker Desktop, then re-run `./setup.sh` |
 | `supabase: command not found` | Install: `brew install supabase/tap/supabase` |
-| `function gen_salt(unknown) does not exist` | The seed.sql may need `extensions.crypt()` prefix -- file an issue |
+| `function gen_salt(unknown) does not exist` | Verify seed.sql uses `extensions.crypt()` / `extensions.gen_salt()`. Run `supabase db reset` to re-apply. |
 | `.env.local already exists` | Use `./setup.sh --force` to overwrite |
 | Login fails with "Invalid credentials" | Run `supabase db reset` to re-seed the admin user |
 | `Failed to reach OpenEMS at localhost:8075` | Start the docker-openems stack first (see Full-Stack Setup) |
