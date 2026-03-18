@@ -1,0 +1,134 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-roles.sql:/docker-entrypoint-initdb.d/01-init-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gotrue:
+    image: supabase/gotrue:v2.187.0
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      GOTRUE_API_HOST: "0.0.0.0"
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_SITE_URL: http://localhost:3000
+      API_EXTERNAL_URL: http://localhost:54321
+      GOTRUE_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_DISABLE_SIGNUP: "false"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGRST_DB_URI: postgres://postgres:postgres@postgres:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_EXTRA_SEARCH_PATH: public,extensions
+      PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    # No health check — postgrest image is minimal Nix build with no shell/curl/wget
+
+  kong:
+    image: kong:3.5
+    depends_on:
+      gotrue: { condition: service_healthy }
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_LOG_LEVEL: info
+    volumes:
+      - ./docker/kong.yml:/etc/kong/kong.yml:ro
+    ports:
+      - "54321:8000"
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mbe-migrate:
+    image: postgres:15-alpine
+    depends_on:
+      gotrue: { condition: service_healthy }
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+      - ./supabase/seed.sql:/seed.sql:ro
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    command: |
+      sh -c '
+      echo "Waiting for auth schema..."
+      until psql -c "SELECT 1 FROM auth.users LIMIT 0" 2>/dev/null; do sleep 1; done
+
+      if psql -c "SELECT 1 FROM organizations LIMIT 0" 2>/dev/null; then
+        echo "Migrations already applied, skipping."
+        exit 0
+      fi
+
+      echo "Granting auth schema access..."
+      psql -c "GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;"
+      psql -c "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, service_role;"
+
+      echo "Applying migrations..."
+      for f in /migrations/*.sql; do echo "  $$(basename $$f)"; psql -f "$$f"; done
+      echo "Applying seed..."
+      psql -f /seed.sql
+      echo "Done."
+      '
+    restart: "no"
+
+  mbe-app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+    depends_on:
+      kong: { condition: service_healthy }
+      mbe-migrate: { condition: service_completed_successfully }
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      SUPABASE_INTERNAL_URL: http://kong:8000
+      OPENEMS_B2B_URL: http://host.docker.internal:8075
+      OPENEMS_B2B_USERNAME: admin
+      OPENEMS_B2B_PASSWORD: Icui4cyou
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
