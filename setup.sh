@@ -5,6 +5,7 @@
 # Usage:
 #   ./setup.sh                     # local mode (default)
 #   ./setup.sh --local             # explicit local mode
+#   ./setup.sh --docker            # docker mode, full stack in Docker
 #   ./setup.sh --cloud             # cloud mode, interactive prompts
 #   ./setup.sh --cloud --url=URL --anon-key=KEY --service-role-key=KEY
 #                                  # cloud mode, non-interactive
@@ -33,6 +34,7 @@ CLOUD_SERVICE_ROLE_KEY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)  MODE="local"; shift ;;
+    --docker) MODE="docker"; shift ;;
     --cloud)  MODE="cloud"; shift ;;
     --force)  FORCE=true; shift ;;
     --url=*)  CLOUD_URL="${1#--url=}"; shift ;;
@@ -42,6 +44,7 @@ while [ $# -gt 0 ]; do
       echo "Usage:"
       echo "  ./setup.sh                     Local mode (default)"
       echo "  ./setup.sh --local             Explicit local mode"
+      echo "  ./setup.sh --docker            Docker mode, full stack in Docker"
       echo "  ./setup.sh --cloud             Cloud mode, interactive prompts"
       echo "  ./setup.sh --cloud --url=URL --anon-key=KEY --service-role-key=KEY"
       echo "                                 Cloud mode, non-interactive"
@@ -66,20 +69,36 @@ check_command() {
 log "Mode: ${MODE}"
 log ""
 
-# Common prerequisites
-check_command "node" "https://nodejs.org/ or brew install node"
-check_command "npm" "bundled with Node.js"
-
-if [ "$MODE" = "local" ]; then
+if [ "$MODE" = "docker" ]; then
+  # Docker mode: only needs docker + docker compose
   check_command "docker" "https://www.docker.com/products/docker-desktop/"
 
-  # Check Docker daemon is running
   if ! docker info >/dev/null 2>&1; then
     err "Docker daemon is not running. Start Docker Desktop and try again."
     exit 1
   fi
 
-  check_command "supabase" "brew install supabase/tap/supabase"
+  if ! docker compose version >/dev/null 2>&1; then
+    err "docker compose is required but not available."
+    err "  Install Docker Desktop 4.0+ which includes docker compose."
+    exit 1
+  fi
+else
+  # Local/cloud modes: need node + npm
+  check_command "node" "https://nodejs.org/ or brew install node"
+  check_command "npm" "bundled with Node.js"
+
+  if [ "$MODE" = "local" ]; then
+    check_command "docker" "https://www.docker.com/products/docker-desktop/"
+
+    # Check Docker daemon is running
+    if ! docker info >/dev/null 2>&1; then
+      err "Docker daemon is not running. Start Docker Desktop and try again."
+      exit 1
+    fi
+
+    check_command "supabase" "brew install supabase/tap/supabase"
+  fi
 fi
 
 log "Prerequisites OK"
@@ -119,8 +138,46 @@ check_existing_env() {
   return 0
 }
 
+# ── Docker mode ──────────────────────────────────────────────────────
+if [ "$MODE" = "docker" ]; then
+  if [ "$FORCE" = true ]; then
+    log "Force mode: tearing down existing containers and volumes..."
+    docker compose down -v
+  fi
+
+  log "Building and starting Docker stack..."
+  docker compose up --build -d
+
+  log "Waiting for app to be ready..."
+  RETRIES=0
+  MAX_RETRIES=60
+  until curl -sf http://localhost:3000/ >/dev/null 2>&1; do
+    RETRIES=$((RETRIES + 1))
+    if [ "$RETRIES" -ge "$MAX_RETRIES" ]; then
+      err "App did not become ready within ${MAX_RETRIES} seconds."
+      err "Check logs with: docker compose logs"
+      exit 1
+    fi
+    sleep 1
+  done
+
+  log ""
+  log "=== Setup Complete (docker mode) ==="
+  log ""
+  log "  App:         http://localhost:3000"
+  log "  Supabase:    http://localhost:54321"
+  log ""
+  log "  Login:       admin@eiot.energy / admin123"
+  log ""
+  log "Useful commands:"
+  log "  docker compose logs -f         Follow logs"
+  log "  docker compose stop            Stop (preserves data)"
+  log "  docker compose down            Stop + remove containers (preserves data)"
+  log "  docker compose down -v         Stop + remove everything (fresh start)"
+  log ""
+
 # ── Local mode ───────────────────────────────────────────────────────
-if [ "$MODE" = "local" ]; then
+elif [ "$MODE" = "local" ]; then
   # Step 1: Start local Supabase
   log "Starting local Supabase..."
   supabase start
