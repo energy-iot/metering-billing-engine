@@ -1,5 +1,6 @@
 import type { MeterConfig, MeterDataAdapter, MeterReading } from "@/lib/adapters/types";
 import { OpenEmsError } from "./errors";
+import type { OpenEmsAuth } from "./auth";
 import type {
   ChannelValue,
   EdgeConfig,
@@ -10,15 +11,10 @@ import type {
 } from "./types";
 
 export class OpenEmsClient implements MeterDataAdapter {
-  private readonly authHeader: string;
-
   constructor(
     private readonly baseUrl: string,
-    username: string,
-    password: string
-  ) {
-    this.authHeader = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
-  }
+    private readonly auth: OpenEmsAuth
+  ) {}
 
   /**
    * Send a JSON-RPC request to the OpenEMS B2B REST endpoint.
@@ -27,23 +23,22 @@ export class OpenEmsClient implements MeterDataAdapter {
     method: string,
     params: Record<string, unknown>
   ): Promise<T> {
-    const body = {
+    // INVARIANT: the same `body` string MUST be passed to both `auth.apply`
+    // (which hashes it for the SigV4 signature) AND `fetch` (which transmits it).
+    // Any byte-level divergence breaks the signature and returns 403.
+    const body = JSON.stringify({
       jsonrpc: "2.0" as const,
       id: crypto.randomUUID(),
       method,
       params,
-    };
+    });
+
+    const url = this.auth.resolveUrl(this.baseUrl);
+    const headers = await this.auth.apply({ url, method: "POST", body });
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/jsonrpc`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: this.authHeader,
-        },
-        body: JSON.stringify(body),
-      });
+      response = await fetch(url, { method: "POST", headers, body });
     } catch (err) {
       throw new OpenEmsError(
         `Failed to reach OpenEMS at ${this.baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
@@ -53,11 +48,11 @@ export class OpenEmsClient implements MeterDataAdapter {
       );
     }
 
-    if (response.status === 401) {
+    if (response.status === 401 || response.status === 403) {
       throw new OpenEmsError(
         "OpenEMS B2B authentication failed",
         "OPENEMS_AUTH_FAILED",
-        401
+        response.status
       );
     }
 

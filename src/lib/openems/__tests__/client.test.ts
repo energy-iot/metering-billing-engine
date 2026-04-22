@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpenEmsClient } from "../client";
+import { BasicAuth } from "../auth";
 import { OpenEmsError } from "../errors";
 import type { MeterConfig } from "@/lib/adapters/types";
 
@@ -30,7 +31,10 @@ describe("OpenEmsClient", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    client = new OpenEmsClient("http://localhost:8075", "admin", "testpass");
+    client = new OpenEmsClient(
+      "http://localhost:8075",
+      new BasicAuth("admin", "testpass")
+    );
     fetchSpy = vi.spyOn(globalThis, "fetch");
   });
 
@@ -478,6 +482,21 @@ describe("OpenEmsClient", () => {
       ).rejects.toMatchObject({
         code: "OPENEMS_AUTH_FAILED",
         statusCode: 401,
+      });
+    });
+
+    it("throws OPENEMS_AUTH_FAILED on 403 response (SigV4 permission failure)", async () => {
+      fetchSpy.mockResolvedValue(mockResponse({}, 403));
+
+      await expect(
+        client.getEdgesStatus(["edge0"])
+      ).rejects.toThrow(OpenEmsError);
+
+      await expect(
+        client.getEdgesStatus(["edge0"])
+      ).rejects.toMatchObject({
+        code: "OPENEMS_AUTH_FAILED",
+        statusCode: 403,
       });
     });
 
