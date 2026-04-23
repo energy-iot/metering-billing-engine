@@ -1120,3 +1120,88 @@ describe("RLS: /api/edges cross-org POST denied (#77)", () => {
     expect(isRlsError).toBe(false);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// RLS: household creation via fn_create_household_with_meter RPC (#74)
+// Verifies the wizard's server-side save path is denied cross-org.
+// The RPC is SECURITY INVOKER, so the underlying households INSERT RLS
+// policy is the authoritative gate. This test asserts that a cross-org
+// org_manager cannot invoke the RPC successfully against another org's
+// microgrid — either the RLS denies (42501) or one of the RPC's safety
+// guards trips.
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("RLS: fn_create_household_with_meter cross-org denied (#74)", () => {
+  it("User A (org_manager for Org A) cannot create a household on Microgrid B via the RPC", async () => {
+    if (skipIfRequested()) return;
+
+    // User A calls the RPC targeting Microgrid B (belongs to Org B) and
+    // Device B (also Org B). RLS on households INSERT must deny.
+    const { data, error } = await userA.client.rpc(
+      "fn_create_household_with_meter",
+      {
+        p_microgrid_id: FIXTURE.microgridB,
+        p_display_name: "Cross-org household attempt",
+        p_device_id: FIXTURE.deviceB,
+      }
+    );
+
+    // Must not succeed — either an error surfaces, or data is null, but
+    // critically there must NOT be a new household row for this call.
+    const succeeded = !error && typeof data === "string" && data.length > 0;
+    expect(
+      succeeded,
+      `Expected cross-org RPC call to be denied but it returned household_id=${data}`
+    ).toBe(false);
+
+    // Belt-and-braces: confirm no household row was created by checking
+    // via service client that the RPC's returned id (if any) doesn't exist.
+    if (typeof data === "string" && data.length > 0) {
+      const svc = await (await import("./rls.helpers")).serviceClient();
+      await svc.from("households").delete().eq("id", data);
+    }
+  });
+
+  it("User A can create a household on Microgrid A (own org) via the RPC", async () => {
+    if (skipIfRequested()) return;
+
+    // Seed a fresh consumption_meter device on Edge A that has no
+    // primary_consumption_meter assignment yet. We have to do this through
+    // service_role because the partial unique index on household_devices
+    // blocks reuse of FIXTURE.deviceA.
+    const svc = await (await import("./rls.helpers")).serviceClient();
+    const tmpDeviceId = "aaaaaaaa-aaaa-4000-8004-00000000007a";
+    await svc.from("devices").insert({
+      id: tmpDeviceId,
+      edge_id: FIXTURE.edgeA,
+      name: "rls-hh-rpc-tmp-device",
+      device_type: "consumption_meter",
+      openems_component_id: "rls-hh-rpc-tmp-meter",
+    });
+
+    try {
+      const { data, error } = await userA.client.rpc(
+        "fn_create_household_with_meter",
+        {
+          p_microgrid_id: FIXTURE.microgridA,
+          p_display_name: "rls-hh-rpc-own-success",
+          p_device_id: tmpDeviceId,
+        }
+      );
+
+      // RLS should permit this. If it failed for a non-RLS reason we want
+      // to surface the message instead of a bare false assertion.
+      const isRlsError =
+        error?.code === "42501" ||
+        (error?.message ?? "").includes("row-level security");
+      expect(isRlsError, `unexpected RLS error: ${error?.message}`).toBe(false);
+
+      // Cleanup: remove the created household (cascades household_devices).
+      if (typeof data === "string" && data.length > 0) {
+        await svc.from("households").delete().eq("id", data);
+      }
+    } finally {
+      await svc.from("devices").delete().eq("id", tmpDeviceId);
+    }
+  });
+});

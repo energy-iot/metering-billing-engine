@@ -3,12 +3,13 @@ import type { Device, Household } from "@/lib/types/domain";
 import { HouseholdsSection } from "./households-section";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import type { AvailableMeter } from "@/components/forms/HouseholdWizard";
 
-// Setup > Households (D2 / #53).
-// Lists households for this microgrid and exposes an "Add household" modal
-// with the six AB fields (display_name, primary_phone, primary_email,
-// address_line1, address_line2, unit_label). The polished 4-step wizard is
-// a separate future ticket.
+// Setup > Households (D2 / #53, upgraded in UX2 / #74).
+// Lists households for this microgrid and exposes the 4-step Add-Household
+// wizard. The wizard covers all six household fields PLUS a mandatory
+// primary_consumption_meter assignment. Available-meters are fetched here
+// server-side and passed as a prop to avoid leaking any cross-org data.
 
 export default async function SetupHouseholdsPage({
   params,
@@ -27,6 +28,7 @@ export default async function SetupHouseholdsPage({
     { data: households, error: householdsError },
     { data: devices, error: devicesError },
     { data: primaryAssignments, error: assignmentsError },
+    { data: edgesForMg, error: edgesError },
   ] = await Promise.all([
     supabase
       .from("households")
@@ -52,15 +54,20 @@ export default async function SetupHouseholdsPage({
       .from("household_devices")
       .select("household_id, device_id")
       .eq("role", "primary_consumption_meter"),
+    supabase
+      .from("edges")
+      .select("id, name")
+      .eq("microgrid_id", id),
   ]);
 
-  if (householdsError || devicesError || assignmentsError) {
+  if (householdsError || devicesError || assignmentsError || edgesError) {
     return (
       <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading data:{" "}
         {householdsError?.message ??
           devicesError?.message ??
-          assignmentsError?.message}
+          assignmentsError?.message ??
+          edgesError?.message}
       </div>
     );
   }
@@ -70,6 +77,37 @@ export default async function SetupHouseholdsPage({
     primaryDeviceAssignments[row.household_id] = row.device_id;
   }
 
+  // Build the set of device_ids already assigned as primary_consumption_meter
+  // so we can exclude them from the wizard's available-meters list. The
+  // server-side RLS scope ensures we only see household_devices rows within
+  // this user's accessible orgs, but we additionally filter by this
+  // microgrid's edges below.
+  const assignedPrimaryDeviceIds = new Set(
+    (primaryAssignments ?? []).map((r) => r.device_id)
+  );
+
+  const edgeNameById = new Map<string, string>(
+    (edgesForMg ?? []).map((e) => [e.id, e.name ?? ""])
+  );
+
+  const availableMeters: AvailableMeter[] = (devices ?? [])
+    .filter(
+      (d) =>
+        d.device_type === "consumption_meter" &&
+        !assignedPrimaryDeviceIds.has(d.id)
+    )
+    .map((d) => ({
+      id: d.id,
+      name: d.name,
+      device_type: d.device_type,
+      edge_name: edgeNameById.get(d.edge_id) ?? "",
+    }))
+    // Sort by (edge_name, device name) as per the spec query.
+    .sort((a, b) => {
+      const e = a.edge_name.localeCompare(b.edge_name);
+      return e !== 0 ? e : a.name.localeCompare(b.name);
+    });
+
   return (
     <>
       <HierarchyNav levels={levels} className="mb-4" />
@@ -78,6 +116,7 @@ export default async function SetupHouseholdsPage({
         households={households ?? []}
         devices={devices ?? []}
         primaryDeviceAssignments={primaryDeviceAssignments}
+        availableMeters={availableMeters}
       />
     </>
   );

@@ -1,0 +1,860 @@
+"use client";
+
+/**
+ * HouseholdWizard — 4-step Add-Household flow (UX2 / #74).
+ *
+ * Replaces the minimal modal from D2 (#53). Captures all household fields
+ * PLUS a mandatory primary_consumption_meter assignment in a single
+ * transactional RPC call (fn_create_household_with_meter).
+ *
+ * Steps:
+ *   1. Basics   — display_name (required), primary_phone, primary_email
+ *   2. Address  — address_line1, address_line2, unit_label (all optional)
+ *   3. Meter    — RadioGroup of available consumption_meter devices
+ *   4. Review   — read-only summary, submit button
+ *
+ * The wizard is rendered inside a Radix Dialog; the caller owns the open/close
+ * state. On successful save it calls router.refresh() + onOpenChange(false).
+ *
+ * Available-meters feed: pre-fetched server-side in the wrapping page and
+ * passed in as `availableMeters`. Do NOT refetch from the browser — the
+ * Supabase JS client cannot express the `NOT IN (subquery)` clause cleanly
+ * via PostgREST, and keeping it server-side means no leaked org data.
+ */
+
+import * as React from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { Banner } from "@/components/ui/banner";
+import { RadioGroup } from "@/components/ui/radio-group";
+import { RadioCard } from "@/components/ui/radio-card";
+import { StatusChip } from "@/components/ui/status-chip";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { humanReadable } from "@/lib/openems/device-descriptions";
+import type { DeviceType } from "@/lib/types/domain";
+
+// ── Types ────────────────────────────────────────────────────────────────
+
+/** Shape of an available-meter row passed from the server component. */
+export type AvailableMeter = {
+  id: string;
+  name: string;
+  device_type: DeviceType;
+  edge_name: string;
+};
+
+export interface HouseholdWizardProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  microgridId: string;
+  availableMeters: AvailableMeter[];
+  /** Route to the edges discovery page — surfaced in the empty-state banner. */
+  edgesSetupHref: string;
+}
+
+type Step = 1 | 2 | 3 | 4;
+
+type FormState = {
+  display_name: string;
+  primary_phone: string;
+  primary_email: string;
+  address_line1: string;
+  address_line2: string;
+  unit_label: string;
+  device_id: string;
+};
+
+const EMPTY_STATE: FormState = {
+  display_name: "",
+  primary_phone: "",
+  primary_email: "",
+  address_line1: "",
+  address_line2: "",
+  unit_label: "",
+  device_id: "",
+};
+
+const STEP_LABELS: Record<Step, string> = {
+  1: "Basics",
+  2: "Address",
+  3: "Meter",
+  4: "Review",
+};
+
+// ── Validation ────────────────────────────────────────────────────────────
+
+function isStepValid(step: Step, state: FormState, meterCount: number): boolean {
+  switch (step) {
+    case 1:
+      return state.display_name.trim().length > 0;
+    case 2:
+      // All fields optional.
+      return true;
+    case 3:
+      // Must pick one of the available meters. Empty-state (zero meters) can
+      // never satisfy this — Save is disabled at the caller.
+      return meterCount > 0 && state.device_id.length > 0;
+    case 4:
+      // Review is valid iff 1 + 3 are (address is always optional).
+      return (
+        state.display_name.trim().length > 0 &&
+        meterCount > 0 &&
+        state.device_id.length > 0
+      );
+  }
+}
+
+function hasAnyData(state: FormState): boolean {
+  return (
+    state.display_name.trim().length > 0 ||
+    state.primary_phone.trim().length > 0 ||
+    state.primary_email.trim().length > 0 ||
+    state.address_line1.trim().length > 0 ||
+    state.address_line2.trim().length > 0 ||
+    state.unit_label.trim().length > 0 ||
+    state.device_id.length > 0
+  );
+}
+
+// ── Component ────────────────────────────────────────────────────────────
+
+export function HouseholdWizard({
+  open,
+  onOpenChange,
+  microgridId,
+  availableMeters,
+  edgesSetupHref,
+}: HouseholdWizardProps) {
+  const router = useRouter();
+
+  const [step, setStep] = React.useState<Step>(1);
+  const [visited, setVisited] = React.useState<Set<Step>>(() => new Set([1]));
+  const [state, setState] = React.useState<FormState>(EMPTY_STATE);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+  const [confirmCancelOpen, setConfirmCancelOpen] = React.useState(false);
+
+  // Refs for focus management — each step's first required/focusable field.
+  const step1FirstFieldRef = React.useRef<HTMLInputElement>(null);
+  const step2FirstFieldRef = React.useRef<HTMLInputElement>(null);
+  const step3FirstFieldRef = React.useRef<HTMLButtonElement>(null);
+  const step4FirstElementRef = React.useRef<HTMLButtonElement>(null);
+
+  // Reset wizard state when opened.
+  React.useEffect(() => {
+    if (open) {
+      setStep(1);
+      setVisited(new Set([1]));
+      setState(EMPTY_STATE);
+      setSubmitting(false);
+      setSubmitError(null);
+      setConfirmCancelOpen(false);
+    }
+  }, [open]);
+
+  // Focus management — on every step change, move focus to the first
+  // focusable field of the new step. Run in a layout effect so the element
+  // is in the DOM before we try to focus.
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const target =
+      step === 1
+        ? step1FirstFieldRef.current
+        : step === 2
+          ? step2FirstFieldRef.current
+          : step === 3
+            ? step3FirstFieldRef.current
+            : step4FirstElementRef.current;
+    // Focus in the next microtask to ensure Radix Dialog didn't snap focus
+    // elsewhere after mounting.
+    queueMicrotask(() => {
+      target?.focus();
+    });
+  }, [step, open]);
+
+  const update = React.useCallback(
+    <K extends keyof FormState>(key: K, value: FormState[K]) => {
+      setState((prev) => ({ ...prev, [key]: value }));
+    },
+    []
+  );
+
+  const goToStep = React.useCallback((next: Step) => {
+    setVisited((prev) => {
+      const nextVisited = new Set(prev);
+      nextVisited.add(next);
+      return nextVisited;
+    });
+    setStep(next);
+  }, []);
+
+  const handleNext = React.useCallback(() => {
+    if (step >= 4) return;
+    if (!isStepValid(step, state, availableMeters.length)) return;
+    goToStep((step + 1) as Step);
+  }, [step, state, availableMeters.length, goToStep]);
+
+  const handleBack = React.useCallback(() => {
+    if (step <= 1) return;
+    goToStep((step - 1) as Step);
+  }, [step, goToStep]);
+
+  const handleCancelClick = React.useCallback(() => {
+    if (hasAnyData(state)) {
+      setConfirmCancelOpen(true);
+    } else {
+      onOpenChange(false);
+    }
+  }, [state, onOpenChange]);
+
+  const confirmCancel = React.useCallback(async () => {
+    setConfirmCancelOpen(false);
+    onOpenChange(false);
+  }, [onOpenChange]);
+
+  const handleSubmit = React.useCallback(async () => {
+    setSubmitError(null);
+    if (!isStepValid(4, state, availableMeters.length)) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/households/with-meter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          microgrid_id: microgridId,
+          display_name: state.display_name.trim(),
+          primary_phone: state.primary_phone.trim() || null,
+          primary_email: state.primary_email.trim() || null,
+          address_line1: state.address_line1.trim() || null,
+          address_line2: state.address_line2.trim() || null,
+          unit_label: state.unit_label.trim() || null,
+          device_id: state.device_id,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setSubmitError(body.error ?? `Could not save (HTTP ${res.status}).`);
+        setSubmitting(false);
+        return;
+      }
+      router.refresh();
+      onOpenChange(false);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Network error. Please retry."
+      );
+      setSubmitting(false);
+    }
+  }, [state, availableMeters.length, microgridId, router, onOpenChange]);
+
+  const canProceed = isStepValid(step, state, availableMeters.length);
+  const noMeters = availableMeters.length === 0;
+  const canSave = isStepValid(4, state, availableMeters.length);
+
+  // Pre-computed completed-set for the progress indicator. A step is
+  // "completed" when it has been visited AND its fields are valid.
+  const completedSteps = React.useMemo<Set<Step>>(() => {
+    const out = new Set<Step>();
+    ([1, 2, 3, 4] as const).forEach((s) => {
+      if (visited.has(s) && isStepValid(s, state, availableMeters.length)) {
+        out.add(s);
+      }
+    });
+    return out;
+  }, [visited, state, availableMeters.length]);
+
+  return (
+    <>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) {
+            // Don't close via overlay click when data is present — route
+            // through the Cancel-guard flow instead.
+            if (hasAnyData(state)) {
+              setConfirmCancelOpen(true);
+              return;
+            }
+          }
+          onOpenChange(next);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/55" />
+          <Dialog.Content
+            aria-modal
+            className={cn(
+              "fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[94%] -translate-x-1/2 -translate-y-1/2",
+              "max-h-[92vh] overflow-y-auto rounded-md border border-border bg-card shadow-elev-3 outline-none"
+            )}
+          >
+            {/* top rail */}
+            <div aria-hidden="true" className="h-[6px] bg-primary" />
+
+            <div className="px-6 pt-5">
+              <Dialog.Title className="text-xl font-semibold tracking-tight text-foreground">
+                Add household
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-[13px] text-muted-foreground">
+                Four quick steps. You&apos;ll assign a primary meter in step 3
+                so billing starts on the next period.
+              </Dialog.Description>
+            </div>
+
+            {/* Progress indicator */}
+            <StepIndicator
+              currentStep={step}
+              completedSteps={completedSteps}
+              visitedSteps={visited}
+              onStepClick={(s) => {
+                // Only jump-back to completed (visited AND valid) steps.
+                if (s < step && completedSteps.has(s)) {
+                  goToStep(s);
+                }
+              }}
+            />
+
+            <div className="px-6 pb-2 pt-4">
+              {submitError && (
+                <div className="mb-4">
+                  <Banner tone="destructive" title="Could not save household">
+                    {submitError}
+                  </Banner>
+                </div>
+              )}
+
+              {step === 1 && (
+                <StepBasics
+                  state={state}
+                  update={update}
+                  firstFieldRef={step1FirstFieldRef}
+                  disabled={submitting}
+                />
+              )}
+              {step === 2 && (
+                <StepAddress
+                  state={state}
+                  update={update}
+                  firstFieldRef={step2FirstFieldRef}
+                  disabled={submitting}
+                />
+              )}
+              {step === 3 && (
+                <StepMeter
+                  state={state}
+                  update={update}
+                  onFirstRadio={(el) => {
+                    step3FirstFieldRef.current = el;
+                  }}
+                  meters={availableMeters}
+                  edgesSetupHref={edgesSetupHref}
+                  disabled={submitting}
+                />
+              )}
+              {step === 4 && (
+                <StepReview
+                  state={state}
+                  meters={availableMeters}
+                  firstElementRef={step4FirstElementRef}
+                  onJumpTo={(s) => {
+                    // Review "edit" links jump back only to completed steps.
+                    if (completedSteps.has(s)) goToStep(s);
+                  }}
+                />
+              )}
+            </div>
+
+            {/* Footer actions */}
+            <div className="mt-4 flex items-center justify-between gap-2 border-t border-border bg-muted px-6 pb-[18px] pt-[14px]">
+              <button
+                type="button"
+                onClick={handleCancelClick}
+                disabled={submitting}
+                className="inline-flex h-8 items-center rounded-md px-3.5 text-[13px] font-medium text-foreground hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <div className="flex items-center gap-2">
+                {step > 1 && (
+                  <button
+                    type="button"
+                    onClick={handleBack}
+                    disabled={submitting}
+                    className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3.5 text-[13px] font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                  >
+                    Back
+                  </button>
+                )}
+
+                {step < 4 ? (
+                  <button
+                    type="button"
+                    onClick={handleNext}
+                    disabled={!canProceed || submitting || (step === 3 && noMeters)}
+                    className={cn(
+                      "inline-flex h-8 items-center rounded-md bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "disabled:cursor-not-allowed disabled:opacity-50"
+                    )}
+                  >
+                    Next
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={!canSave || submitting || noMeters}
+                    className={cn(
+                      "inline-flex h-8 items-center rounded-md bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "disabled:cursor-not-allowed disabled:opacity-50"
+                    )}
+                  >
+                    {submitting ? "Saving…" : "Create household"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <ConfirmDialog
+        open={confirmCancelOpen}
+        onOpenChange={setConfirmCancelOpen}
+        tone="neutral"
+        title="Discard unsaved household?"
+        description="Your entries in this wizard will be lost. This is not an irreversible action against the database — nothing has been saved yet."
+        confirmLabel="Discard"
+        onConfirm={confirmCancel}
+      />
+    </>
+  );
+}
+
+// ── Step indicator ───────────────────────────────────────────────────────
+
+function StepIndicator({
+  currentStep,
+  completedSteps,
+  visitedSteps,
+  onStepClick,
+}: {
+  currentStep: Step;
+  completedSteps: Set<Step>;
+  visitedSteps: Set<Step>;
+  onStepClick: (step: Step) => void;
+}) {
+  const steps: Step[] = [1, 2, 3, 4];
+  return (
+    <nav
+      aria-label="Progress"
+      className="flex items-center gap-1 border-b border-border px-6 pb-4 pt-3"
+    >
+      {steps.map((s, idx) => {
+        const isActive = s === currentStep;
+        const isCompleted = completedSteps.has(s);
+        const isVisited = visitedSteps.has(s);
+        // A step is clickable only when it's a completed step earlier than
+        // the current step — i.e. a jump-back target.
+        const isClickable = isCompleted && s < currentStep;
+        return (
+          <React.Fragment key={s}>
+            <button
+              type="button"
+              onClick={() => onStepClick(s)}
+              disabled={!isClickable}
+              aria-current={isActive ? "step" : undefined}
+              className={cn(
+                "flex items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                isActive && "bg-primary/10 text-primary",
+                !isActive && isCompleted && "text-foreground hover:bg-muted",
+                !isActive && !isCompleted && isVisited && "text-muted-foreground",
+                !isActive && !isVisited && "text-muted-foreground opacity-60",
+                isClickable ? "cursor-pointer" : "cursor-default"
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold",
+                  isActive && "bg-primary text-primary-foreground",
+                  !isActive && isCompleted && "bg-success text-success-foreground",
+                  !isActive && !isCompleted && "bg-border text-foreground"
+                )}
+              >
+                {isCompleted && !isActive ? "✓" : s}
+              </span>
+              <span>
+                {s} / 4 {STEP_LABELS[s]}
+              </span>
+            </button>
+            {idx < steps.length - 1 && (
+              <span aria-hidden="true" className="h-px flex-1 bg-border" />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ── Step 1: Basics ───────────────────────────────────────────────────────
+
+function StepBasics({
+  state,
+  update,
+  firstFieldRef,
+  disabled,
+}: {
+  state: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  firstFieldRef: React.RefObject<HTMLInputElement | null>;
+  disabled: boolean;
+}) {
+  return (
+    <fieldset className="space-y-4" disabled={disabled}>
+      <legend className="sr-only">Step 1 of 4: Basics</legend>
+      <div>
+        <label
+          htmlFor="hh-display-name"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Display name <span aria-hidden="true">*</span>
+          <span className="sr-only"> (required)</span>
+        </label>
+        <Input
+          id="hh-display-name"
+          ref={firstFieldRef}
+          type="text"
+          value={state.display_name}
+          onChange={(e) => update("display_name", e.target.value)}
+          placeholder="Block A, Unit 1"
+          required
+          aria-required="true"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label
+            htmlFor="hh-primary-phone"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Primary phone
+          </label>
+          <Input
+            id="hh-primary-phone"
+            type="text"
+            value={state.primary_phone}
+            onChange={(e) => update("primary_phone", e.target.value)}
+            placeholder="+256 …"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="hh-primary-email"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Primary email
+          </label>
+          <Input
+            id="hh-primary-email"
+            type="email"
+            value={state.primary_email}
+            onChange={(e) => update("primary_email", e.target.value)}
+            placeholder="optional"
+          />
+        </div>
+      </div>
+    </fieldset>
+  );
+}
+
+// ── Step 2: Address ──────────────────────────────────────────────────────
+
+function StepAddress({
+  state,
+  update,
+  firstFieldRef,
+  disabled,
+}: {
+  state: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  firstFieldRef: React.RefObject<HTMLInputElement | null>;
+  disabled: boolean;
+}) {
+  return (
+    <fieldset className="space-y-4" disabled={disabled}>
+      <legend className="sr-only">Step 2 of 4: Address</legend>
+      <p className="text-xs text-muted-foreground">
+        Optional — used for technician dispatch and visit context.
+      </p>
+      <div>
+        <label
+          htmlFor="hh-address-line1"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Address line 1
+        </label>
+        <Input
+          id="hh-address-line1"
+          ref={firstFieldRef}
+          type="text"
+          value={state.address_line1}
+          onChange={(e) => update("address_line1", e.target.value)}
+          placeholder="Plot 14, Kisakye Ln"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label
+            htmlFor="hh-address-line2"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Address line 2
+          </label>
+          <Input
+            id="hh-address-line2"
+            type="text"
+            value={state.address_line2}
+            onChange={(e) => update("address_line2", e.target.value)}
+            placeholder="Block A"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="hh-unit-label"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Unit label
+          </label>
+          <Input
+            id="hh-unit-label"
+            type="text"
+            value={state.unit_label}
+            onChange={(e) => update("unit_label", e.target.value)}
+            placeholder="Unit 1"
+          />
+        </div>
+      </div>
+    </fieldset>
+  );
+}
+
+// ── Step 3: Meter pick ───────────────────────────────────────────────────
+
+function StepMeter({
+  state,
+  update,
+  onFirstRadio,
+  meters,
+  edgesSetupHref,
+  disabled,
+}: {
+  state: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  onFirstRadio: (el: HTMLButtonElement) => void;
+  meters: AvailableMeter[];
+  edgesSetupHref: string;
+  disabled: boolean;
+}) {
+  if (meters.length === 0) {
+    return (
+      <div className="space-y-3">
+        <Banner
+          tone="warn"
+          title="No available meters"
+          action={
+            <Link
+              href={edgesSetupHref}
+              className="inline-flex items-center rounded-md border border-warning bg-card px-3 py-1 text-xs font-medium text-warning-fg hover:bg-muted"
+            >
+              Go to Setup &gt; Edges
+            </Link>
+          }
+        >
+          All consumption meters on this microgrid are already assigned to a
+          household. Discover more devices on the edges setup page before
+          adding another household here.
+        </Banner>
+      </div>
+    );
+  }
+
+  return (
+    <fieldset className="space-y-3" disabled={disabled}>
+      <legend className="sr-only">Step 3 of 4: Meter assignment</legend>
+      <p className="text-xs text-muted-foreground">
+        Pick the consumption meter that will produce this household&apos;s bill
+        each period.
+      </p>
+      <RadioGroup
+        value={state.device_id}
+        onValueChange={(v) => update("device_id", v)}
+        aria-label="Available consumption meters"
+        className="gap-2"
+      >
+        {meters.map((meter, idx) => {
+          // The first radio input needs to be a focus target when entering
+          // this step. We attach the ref to the first card only by wrapping
+          // the RadioCard's inner item via a side-effect — but RadioCard
+          // doesn't forward the inner radio ref. Instead we use a targetted
+          // DOM query after mount: we focus the first `role=radio` element
+          // in the list if this is the first card.
+          return (
+            <RadioCard
+              key={meter.id}
+              value={meter.id}
+              title={
+                <span className="flex items-center gap-2">
+                  <span>{meter.name}</span>
+                  <StatusChip
+                    kind="deviceType"
+                    status={meter.device_type}
+                  />
+                </span>
+              }
+              description={meter.edge_name}
+              meta={humanReadable(meter.device_type)}
+              // Mark the first card so we can locate it for focus.
+              id={idx === 0 ? "hh-meter-first" : undefined}
+            />
+          );
+        })}
+      </RadioGroup>
+      <FirstMeterFocuser onFound={onFirstRadio} meters={meters} />
+    </fieldset>
+  );
+}
+
+/**
+ * FirstMeterFocuser — finds the first radio button in step 3 and wires it
+ * to the step-3 focus callback. Works around RadioCard not exposing an
+ * inner ref to the radio input. This runs once after mount and on meters
+ * change.
+ */
+function FirstMeterFocuser({
+  onFound,
+  meters,
+}: {
+  onFound: (el: HTMLButtonElement) => void;
+  meters: AvailableMeter[];
+}) {
+  React.useEffect(() => {
+    if (meters.length === 0) return;
+    // Radix RadioGroupItem renders as a <button role="radio">.
+    const el =
+      (document.getElementById("hh-meter-first") as HTMLButtonElement | null) ??
+      (document.querySelector('[role="radio"]') as HTMLButtonElement | null);
+    if (el) {
+      onFound(el);
+      el.focus();
+    }
+  }, [onFound, meters]);
+  return null;
+}
+
+// ── Step 4: Review ───────────────────────────────────────────────────────
+
+function StepReview({
+  state,
+  meters,
+  firstElementRef,
+  onJumpTo,
+}: {
+  state: FormState;
+  meters: AvailableMeter[];
+  firstElementRef: React.RefObject<HTMLButtonElement | null>;
+  onJumpTo: (step: Step) => void;
+}) {
+  const selectedMeter = meters.find((m) => m.id === state.device_id);
+  return (
+    <div className="space-y-4">
+      <p className="sr-only">Step 4 of 4: Review</p>
+      <ReviewSection
+        title="Basics"
+        onEdit={() => onJumpTo(1)}
+        editRef={firstElementRef}
+      >
+        <ReviewRow label="Display name" value={state.display_name} />
+        <ReviewRow
+          label="Primary phone"
+          value={state.primary_phone || "—"}
+        />
+        <ReviewRow
+          label="Primary email"
+          value={state.primary_email || "—"}
+        />
+      </ReviewSection>
+
+      <ReviewSection title="Address" onEdit={() => onJumpTo(2)}>
+        <ReviewRow
+          label="Address line 1"
+          value={state.address_line1 || "—"}
+        />
+        <ReviewRow
+          label="Address line 2"
+          value={state.address_line2 || "—"}
+        />
+        <ReviewRow label="Unit label" value={state.unit_label || "—"} />
+      </ReviewSection>
+
+      <ReviewSection title="Primary meter" onEdit={() => onJumpTo(3)}>
+        {selectedMeter ? (
+          <>
+            <ReviewRow label="Device" value={selectedMeter.name} />
+            <ReviewRow label="Edge" value={selectedMeter.edge_name} />
+            <ReviewRow
+              label="Type"
+              value={humanReadable(selectedMeter.device_type)}
+            />
+          </>
+        ) : (
+          <p className="text-sm text-destructive-fg">No meter selected.</p>
+        )}
+      </ReviewSection>
+    </div>
+  );
+}
+
+function ReviewSection({
+  title,
+  onEdit,
+  editRef,
+  children,
+}: {
+  title: string;
+  onEdit: () => void;
+  editRef?: React.RefObject<HTMLButtonElement | null>;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-md border border-border bg-card p-3">
+      <header className="mb-2 flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h4>
+        <button
+          type="button"
+          ref={editRef}
+          onClick={onEdit}
+          className="text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Edit
+        </button>
+      </header>
+      <dl className="space-y-1 text-sm">{children}</dl>
+    </section>
+  );
+}
+
+function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <dt className="w-32 shrink-0 text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm text-foreground">{value}</dd>
+    </div>
+  );
+}
