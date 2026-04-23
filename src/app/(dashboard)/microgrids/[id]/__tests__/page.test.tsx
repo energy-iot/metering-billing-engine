@@ -20,13 +20,17 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 const getEdgesStatusMock = vi.fn();
+const queryDailyEnergyMock = vi.fn().mockResolvedValue({});
 vi.mock("@/lib/openems", async () => {
   const actual = await vi.importActual<typeof import("@/lib/openems")>(
     "@/lib/openems",
   );
   return {
     ...actual,
-    getOpenEmsClient: () => ({ getEdgesStatus: getEdgesStatusMock }),
+    getOpenEmsClient: () => ({
+      getEdgesStatus: getEdgesStatusMock,
+      queryDailyEnergy: queryDailyEnergyMock,
+    }),
   };
 });
 
@@ -53,31 +57,36 @@ vi.mock("next/link", () => ({
 import MicrogridDashboardPage from "../page";
 
 // ── Query builder helpers ─────────────────────────────────────────────────────
+//
+// buildQuery returns a fully chainable proxy so any call chain (select, eq,
+// eq, order, limit, returns, etc.) resolves to { data, error: null }.
+// This prevents breakage when new query chains are added to the page.
 
-function buildEdgesQuery(data: unknown) {
-  return {
-    select: () => ({
-      eq: () => ({
-        returns: () => Promise.resolve({ data, error: null }),
-      }),
-    }),
-  };
+function buildQuery(data: unknown) {
+  const terminal = () => Promise.resolve({ data, error: null });
+
+  function makeChainable(): Record<string, unknown> {
+    return new Proxy({} as Record<string, unknown>, {
+      get(_target, prop) {
+        if (prop === "returns") return terminal;
+        if (prop === "then") {
+          return (resolve: (v: { data: unknown; error: null }) => unknown) =>
+            Promise.resolve({ data, error: null }).then(resolve);
+        }
+        return () => makeChainable();
+      },
+    });
+  }
+
+  return makeChainable();
 }
 
+// Kept for backward-compat with existing test call sites.
+function buildEdgesQuery(data: unknown) {
+  return buildQuery(data);
+}
 function buildBillingPeriodsQuery(data: unknown) {
-  return {
-    select: () => ({
-      eq: () => ({
-        eq: () => ({
-          order: () => ({
-            limit: () => ({
-              returns: () => Promise.resolve({ data, error: null }),
-            }),
-          }),
-        }),
-      }),
-    }),
-  };
+  return buildQuery(data);
 }
 
 function makeFrom(
@@ -87,8 +96,9 @@ function makeFrom(
   return (table: string) => {
     if (table === "edges") return buildEdgesQuery(edgeRows);
     if (table === "billing_periods") return buildBillingPeriodsQuery(periodRows);
-    // Fallback — shouldn't be hit in these tests
-    return buildEdgesQuery([]);
+    // All other tables (households, billing_line_items, microgrid_recent_activity)
+    // return empty arrays so the page renders without widget data.
+    return buildQuery([]);
   };
 }
 
