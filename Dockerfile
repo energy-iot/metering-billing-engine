@@ -7,6 +7,9 @@ ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ARG NEXT_PUBLIC_SUPABASE_COOKIE_NAME
 RUN npm run build
+# Ensure /app/public exists so the runner stage COPY succeeds even when
+# the project has no public/ directory (Next.js treats it as optional).
+RUN mkdir -p /app/public
 
 FROM node:20-alpine AS runner
 WORKDIR /app

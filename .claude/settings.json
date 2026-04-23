@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developer.pesapal.com)",
+      "Read(//Users/redwanhussain/Documents/energy_iot/docker-openems/**)"
+    ]
+  }
+}
