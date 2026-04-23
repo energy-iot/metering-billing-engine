@@ -1,6 +1,126 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   MBE Design System — Tokens (globals.css)
+   Drop this into src/app/globals.css (overwriting the file shadcn init writes).
+
+   ## Themability contract
+
+   `--brand-hue` is the single fork-rebrand variable. It re-derives
+   `--primary`, `--accent`, `--accent-foreground`, and `--ring` only.
+   `--success`, `--warning`, `--destructive` are FIXED by hue (152 / 78 / 27)
+   so the irreversibility / status / safety affordances NEVER collapse into
+   the brand affordance.
+
+   Safe ranges for `--brand-hue` (oklch hue degrees):
+     ✓ 200–280  (blues, indigos)            — default 262 (indigo)
+     ✓ 280–340  (purples, magentas)
+     ✓ 60–105   (yellow-greens, NOT pure yellow)
+   Avoid:
+     ✗ 0–55     (reds → collides with --destructive at hue 27)
+     ✗ 130–175  (greens → collides with --success at hue 152)
+     ✗ 50–95    (yellows → collides with --warning at hue 78)
+
+   If a fork must use a forbidden hue, override `--success`/`--warning`/
+   `--destructive` directly in the fork's :root — but be aware that
+   color-blind users rely on these being well-separated in hue + chroma.
+
+   ## Token consumption
+
+   Spacing scale lives in tailwind.config.ts (`theme.extend.spacing`).
+   Elevation in `theme.extend.boxShadow` as `elev-1/2/3`. Components
+   should use `bg-success-muted`, `text-warning-fg`, `shadow-elev-2`,
+   `rounded-md` — never inline boxShadow or hex/oklch literals.
+───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --background: oklch(99.0% 0.004 95);
+  --foreground: oklch(18.0% 0.010 250);
+  --card: oklch(100% 0 0);
+  --card-foreground: oklch(18.0% 0.010 250);
+  --muted: oklch(97.2% 0.005 95);
+  --muted-foreground: oklch(46.0% 0.012 250);
+  --border: oklch(91.0% 0.006 90);
+  --input: oklch(91.0% 0.006 90);
+  --ring: oklch(62.0% 0.15 var(--brand-hue, 262));
+
+  /* Brand — fork rebrands by changing --brand-hue. */
+  --brand-hue: 262;
+  --primary: oklch(52.0% 0.16 var(--brand-hue));
+  --primary-foreground: oklch(99.0% 0.004 95);
+  --accent: oklch(94.0% 0.035 var(--brand-hue));
+  --accent-foreground: oklch(30.0% 0.12 var(--brand-hue));
+
+  /* Semantic anchor — FIXED hue. */
+  --success: oklch(58.0% 0.14 152);
+  --success-foreground: oklch(99.0% 0.004 95);
+  --success-muted: oklch(93.0% 0.05 152);
+  --success-fg: oklch(28.0% 0.10 152);
+
+  --warning: oklch(62.0% 0.15 78);
+  --warning-foreground: oklch(20.0% 0.04 78);
+  --warning-muted: oklch(95.0% 0.05 78);
+  --warning-fg: oklch(34.0% 0.10 78);
+
+  --destructive: oklch(57.0% 0.19 27);
+  --destructive-foreground: oklch(99.0% 0.004 95);
+  --destructive-muted: oklch(94.0% 0.04 27);
+  --destructive-fg: oklch(34.0% 0.13 27);
+
+  --radius: 0.5rem;
+  --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SF Mono, Menlo, Consolas, monospace;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-success-fg: var(--success-fg);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-muted: var(--warning-muted);
+  --color-warning-fg: var(--warning-fg);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-muted: var(--destructive-muted);
+  --color-destructive-fg: var(--destructive-fg);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
 @import "tailwindcss";
+@plugin "tw-animate-css";
 
 body {
-  background: #ffffff;
-  color: #171717;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
 }
+
+/* Use Tailwind's `font-mono tabular-nums` utility pair in components.
+   This back-compat class is kept only for any inline existing usage. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* Animations used by Chip (loading) + skeletons. */
+@keyframes mbe-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+@keyframes mbe-shimmer { 0% { transform: translateX(-100%) } 100% { transform: translateX(100%) } }
