@@ -76,3 +76,68 @@ describe("StatusChip — deviceType kind", () => {
     );
   });
 });
+
+// #102 — OpenEMS Backend health chip (4 states).
+describe("StatusChip — openemsBackendHealth kind", () => {
+  it("renders 'healthy' with success background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="openemsBackendHealth" status="healthy" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-success-muted");
+    // Dot is a first child span with bg-success (per Chip.tsx dotByTone).
+    expect(chip?.querySelector("span")?.className).toContain("bg-success");
+    expect(container.textContent).toContain("Healthy");
+  });
+
+  it("renders 'stale' with warn background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="openemsBackendHealth" status="stale" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-warning-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-warning");
+    expect(container.textContent).toContain("Stale");
+  });
+
+  it("renders 'failing' with alert background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="openemsBackendHealth" status="failing" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-destructive-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-destructive");
+    expect(container.textContent).toContain("Failing");
+  });
+
+  it("renders 'not_configured' with neutral background + NO dot", () => {
+    const { container } = render(
+      <StatusChip kind="openemsBackendHealth" status="not_configured" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-muted");
+    // No dot child → first child text node is the label, not a dot span.
+    // Asserting no span descendant with a bg-* dot class:
+    const dot = chip?.querySelector(
+      "span.bg-success, span.bg-warning, span.bg-destructive, span.bg-muted-foreground",
+    );
+    expect(dot).toBeNull();
+    expect(container.textContent).toContain("Not connected");
+  });
+
+  it("wraps the chip in a focusable tooltip trigger when `tooltip` is set", () => {
+    const { container } = render(
+      <StatusChip
+        kind="openemsBackendHealth"
+        status="healthy"
+        tooltip="Last successful discovery: 2h ago"
+      />,
+    );
+    // The outer wrapper span is tabIndex=0 (keyboard-focusable).
+    const wrapper = container.querySelector("span[tabindex='0']");
+    expect(wrapper).not.toBeNull();
+    // Chip is inside the wrapper.
+    const chip = wrapper?.querySelector("span");
+    expect(chip?.className).toContain("bg-success-muted");
+  });
+});

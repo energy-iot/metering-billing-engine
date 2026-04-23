@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid, currentUserIsSuperAdmin } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
@@ -97,7 +97,11 @@ export async function PUT(
         ? body.secretAccessKey
         : undefined;
 
-    if (!region || !accessKeyId || !secretAccessKey) {
+    // Region + accessKeyId are always required for cloud_aws.
+    // secretAccessKey required-ness is deferred until after we know whether
+    // an existing ciphertext is preserved (#102 AC-SECRET-PRESERVE). We
+    // resolve that below after reading the microgrid row.
+    if (!region || !accessKeyId) {
       return NextResponse.json(
         {
           error:
@@ -111,11 +115,20 @@ export async function PUT(
   const supabase = await createClient();
 
   // Permission check — 404 on hidden/missing (don't leak existence).
+  // Also read the existing encrypted secret so we can support the
+  // "leave blank to keep the current secret" flow (#102 AC-SECRET-PRESERVE).
   const { data: mgRow, error: mgErr } = await supabase
     .from("microgrids")
-    .select("id, name")
+    .select(
+      "id, name, ems_type, ems_aws_secret_access_key_encrypted"
+    )
     .eq("id", microgridId)
-    .maybeSingle<{ id: string; name: string }>();
+    .maybeSingle<{
+      id: string;
+      name: string;
+      ems_type: "cloud_aws" | "direct_url" | null;
+      ems_aws_secret_access_key_encrypted: string | null;
+    }>();
 
   if (mgErr) {
     return NextResponse.json(
@@ -126,9 +139,35 @@ export async function PUT(
   if (!mgRow) {
     return NextResponse.json({ error: "Microgrid not found." }, { status: 404 });
   }
+
+  // Secret-preserve gate (cloud_aws only):
+  //   If user submitted blank secretAccessKey AND an existing ciphertext is on
+  //   record, we preserve the existing ciphertext. Otherwise (no ciphertext
+  //   AND blank) we require a secret.
+  const preserveExistingSecret =
+    type === "cloud_aws" &&
+    (!secretAccessKey || secretAccessKey.length === 0) &&
+    mgRow.ems_aws_secret_access_key_encrypted !== null &&
+    mgRow.ems_aws_secret_access_key_encrypted !== undefined;
+
+  if (type === "cloud_aws" && !secretAccessKey && !preserveExistingSecret) {
+    return NextResponse.json(
+      {
+        error:
+          "type='cloud_aws' requires region, accessKeyId, and secretAccessKey",
+      },
+      { status: 400 }
+    );
+  }
   if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
     return NextResponse.json(
       { error: "You do not have permission to configure this microgrid." },
+      { status: 403 }
+    );
+  }
+  if (!(await currentUserIsSuperAdmin(supabase))) {
+    return NextResponse.json(
+      { error: "Only super admins can update OpenEMS backend config." },
       { status: 403 }
     );
   }
@@ -197,7 +236,7 @@ export async function PUT(
   // (the RPC is stateless). Discover runs in its own transaction below.
 
   let encryptedSecret: string | null = null;
-  if (type === "cloud_aws" && secretAccessKey) {
+  if (type === "cloud_aws" && secretAccessKey && !preserveExistingSecret) {
     const { data, error } = await supabase.rpc("fn_ems_encrypt_secret", {
       p_plaintext: secretAccessKey,
     });
@@ -212,14 +251,20 @@ export async function PUT(
     encryptedSecret = data as string;
   }
 
+  // Build the UPDATE payload. When preserving the secret we OMIT the
+  // ems_aws_secret_access_key_encrypted column entirely so the existing
+  // ciphertext is left untouched. Omitting the column also prevents a
+  // bytea round-trip encode/decode.
   const updatePayload: Record<string, unknown> = {
     ems_type: type,
     ems_backend_url: backendUrl.trim(),
     ems_aws_region: type === "cloud_aws" ? region : null,
     ems_aws_access_key_id: type === "cloud_aws" ? accessKeyId : null,
-    ems_aws_secret_access_key_encrypted:
-      type === "cloud_aws" ? encryptedSecret : null,
   };
+  if (!preserveExistingSecret) {
+    updatePayload.ems_aws_secret_access_key_encrypted =
+      type === "cloud_aws" ? encryptedSecret : null;
+  }
 
   const { error: updErr } = await supabase
     .from("microgrids")
@@ -252,6 +297,27 @@ export async function PUT(
   // We build the client from the body (not from getMicrogridEmsConfig) so the
   // Discover-after-Save round-trip doesn't depend on RLS for reading the
   // encrypted secret back. This is explicitly the "candidate config" path.
+  //
+  // When preserving the existing secret, decrypt it once via fn_get_ems_secret
+  // (SECURITY DEFINER; returns plaintext for super_admin / service_role).
+  let effectiveSecret: string | undefined = secretAccessKey;
+  if (type === "cloud_aws" && preserveExistingSecret) {
+    const { data: decrypted, error: decryptErr } = await supabase.rpc(
+      "fn_get_ems_secret",
+      { _microgrid_id: microgridId }
+    );
+    if (decryptErr || !decrypted) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not retrieve the existing secret to test the connection. Re-enter the secret access key to proceed.",
+        },
+        { status: 500 }
+      );
+    }
+    effectiveSecret = decrypted as string;
+  }
+
   const candidateConfig: OpenEmsClientConfig =
     type === "cloud_aws"
       ? {
@@ -259,7 +325,7 @@ export async function PUT(
           url: backendUrl.trim(),
           region: region as string,
           accessKeyId: accessKeyId as string,
-          secretAccessKey: secretAccessKey as string,
+          secretAccessKey: effectiveSecret as string,
         }
       : { type: "direct_url", url: backendUrl.trim() };
 

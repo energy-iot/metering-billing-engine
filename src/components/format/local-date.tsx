@@ -11,6 +11,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { useLocale } from "./locale-context";
+import { timeAgo } from "@/lib/time-ago";
 
 const cache = new Map<string, Intl.DateTimeFormat>();
 function getDF(locale: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
@@ -27,6 +28,13 @@ export interface LocalDateProps extends React.HTMLAttributes<HTMLSpanElement> {
   value: Date | string;
   locale?: string;
   opts?: Intl.DateTimeFormatOptions;
+  /**
+   * Render the value as a relative time string ("2h ago") via `timeAgo()`
+   * instead of the absolute Intl.DateTimeFormat output. Added in #102 for
+   * the "Last successful discovery: <relative>" summary. Mutually
+   * exclusive with `opts` (ignored when `relative` is true).
+   */
+  relative?: boolean;
 }
 
 const DEFAULT_OPTS: Intl.DateTimeFormatOptions = {
@@ -35,13 +43,16 @@ const DEFAULT_OPTS: Intl.DateTimeFormatOptions = {
   day: "numeric",
 };
 
-export function LocalDate({ value, locale, opts, className, ...props }: LocalDateProps) {
+export function LocalDate({ value, locale, opts, relative, className, ...props }: LocalDateProps) {
   const ctx = useLocale();
   const lc = locale ?? ctx.locale;
   const d = value instanceof Date ? value : new Date(value);
+  const text = relative
+    ? timeAgo(d, lc)
+    : getDF(lc, opts ?? DEFAULT_OPTS).format(d);
   return (
     <span className={cn("font-mono tabular-nums", className)} {...props}>
-      {getDF(lc, opts ?? DEFAULT_OPTS).format(d)}
+      {text}
     </span>
   );
 }
