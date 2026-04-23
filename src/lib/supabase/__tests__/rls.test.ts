@@ -384,7 +384,7 @@ describe("RLS: organizations", () => {
   it("User A cannot INSERT into Org B", async () => {
     if (skipIfRequested()) return;
     await expectWriteDenied(userA.client, "organizations", {
-      id: "cccccccc-test-ffff-0000-000000000001",
+      id: "cccccccc-0076-4000-8000-000000000001",
       name: "Unauthorized Org",
     });
   });
@@ -911,7 +911,7 @@ describe("UX4a (#76) entity CRUD write-path denials", () => {
   it("User A (org_manager) cannot INSERT a brand-new organization", async () => {
     if (skipIfRequested()) return;
     await expectWriteDenied(userA.client, "organizations", {
-      id: "cccccccc-test-0076-0000-000000000001",
+      id: "cccccccc-0076-4000-8000-000000000002",
       name: "Cross-org Org via UX4a",
     });
   });
@@ -919,7 +919,7 @@ describe("UX4a (#76) entity CRUD write-path denials", () => {
   it("User C (no role) cannot INSERT an organization", async () => {
     if (skipIfRequested()) return;
     await expectWriteDenied(userC.client, "organizations", {
-      id: "cccccccc-test-0076-0000-000000000002",
+      id: "cccccccc-0076-4000-8000-000000000003",
       name: "No-role Org",
     });
   });
@@ -946,7 +946,7 @@ describe("UX4a (#76) entity CRUD write-path denials", () => {
   // Sanity: super_admin CAN insert through the same table
   it("User D (super_admin) CAN INSERT a temporary organization", async () => {
     if (skipIfRequested()) return;
-    const tmpId = "cccccccc-test-0076-0000-000000000003";
+    const tmpId = "cccccccc-0076-4000-8000-000000000004";
     const { data, error } = await userD.client
       .from("organizations")
       .insert({ id: tmpId, name: "UX4a super_admin sanity" })
