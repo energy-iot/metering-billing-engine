@@ -335,42 +335,34 @@ export async function PUT(
         );
       }
     } catch (err) {
-      // Map OpenEmsError to the same outcome kinds as step 7 so the UI banner
-      // reuses existing handling. These are pre-save errors — nothing is persisted.
+      // Step 5 is a pre-save gate — nothing is persisted on OpenEmsError.
+      // Return 503 (not 200) so the client can distinguish pre-save failure
+      // from step 7's post-save health reporting (which stays 200).
       if (err instanceof OpenEmsError) {
+        let reason: "auth_failed" | "unreachable" | "unknown_error";
+        let errorMsg: string;
         if (err.code === "OPENEMS_AUTH_FAILED") {
-          return NextResponse.json(
-            {
-              status: "auth_failed",
-              message:
-                "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).",
-            },
-            { status: 200 }
-          );
+          reason = "auth_failed";
+          errorMsg =
+            "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
         } else if (err.code === "OPENEMS_UNREACHABLE") {
-          return NextResponse.json(
-            {
-              status: "unreachable",
-              message: `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`,
-            },
-            { status: 200 }
-          );
+          reason = "unreachable";
+          errorMsg = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
         } else {
-          return NextResponse.json(
-            {
-              status: "unknown_error",
-              message: "Edge validation failed with an unexpected error. Check server logs.",
-            },
-            { status: 200 }
-          );
+          reason = "unknown_error";
+          errorMsg = "Edge validation failed with an unexpected error. Check server logs.";
         }
+        return NextResponse.json(
+          { error: errorMsg, reason },
+          { status: 503 }
+        );
       }
       return NextResponse.json(
         {
-          status: "unknown_error",
-          message: "Edge validation failed with an unexpected error. Check server logs.",
+          error: "Edge validation failed with an unexpected error. Check server logs.",
+          reason: "unknown_error",
         },
-        { status: 200 }
+        { status: 503 }
       );
     }
   }

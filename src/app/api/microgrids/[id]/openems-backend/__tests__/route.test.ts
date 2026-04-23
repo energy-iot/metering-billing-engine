@@ -398,7 +398,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     });
   });
 
-  it("auth_failed path (step 5 edge validation): returns 200 + status='auth_failed'", async () => {
+  it("auth_failed path (step 5 edge validation): returns 503 + reason='auth_failed', persist NOT called", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
 
@@ -419,13 +419,15 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const json = await res.json();
-    expect(json.status).toBe("auth_failed");
-    expect(json.message).toContain("rotated access key");
+    expect(json.reason).toBe("auth_failed");
+    expect(json.error).toContain("rotated access key");
+    // No UPDATE should have been called — only mgSelect + billingPeriods (2 from() calls)
+    expect(mockFrom).toHaveBeenCalledTimes(2);
   });
 
-  it("unreachable path (step 5 edge validation): returns 200 + status='unreachable'", async () => {
+  it("unreachable path (step 5 edge validation): returns 503 + reason='unreachable', persist NOT called", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
 
@@ -443,10 +445,38 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const json = await res.json();
-    expect(json.status).toBe("unreachable");
-    expect(json.message).toContain("Could not reach");
+    expect(json.reason).toBe("unreachable");
+    expect(json.error).toContain("Could not reach");
+    // No UPDATE should have been called — only mgSelect + billingPeriods (2 from() calls)
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
+
+  it("step 5 OPENEMS_AUTH_FAILED → 503 with { error, reason: 'auth_failed' }; persist NOT called", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([]));
+
+    const { OpenEmsError } = await import("@/lib/openems");
+    getEdgesStatusMock.mockRejectedValue(
+      new OpenEmsError("auth failed", "OPENEMS_AUTH_FAILED", 401)
+    );
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0"],
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json).toMatchObject({ reason: "auth_failed" });
+    expect(typeof json.error).toBe("string");
+    // Persist (microgrids UPDATE) must NOT have been called.
+    expect(mockFrom).toHaveBeenCalledTimes(2);
   });
 
   it("zero_edges path: empty known_edge_ids → skip RPC, return zero_edges without calling getEdgesStatus", async () => {

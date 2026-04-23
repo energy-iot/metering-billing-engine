@@ -267,6 +267,35 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
         return;
       }
 
+      if (res.status === 503) {
+        // Step 5 pre-save failure — config was NOT saved. Form stays open.
+        const reason =
+          typeof json.reason === "string" ? json.reason : "unknown_error";
+        if (reason === "auth_failed") {
+          setOutcome({
+            kind: "auth_failed",
+            message:
+              (typeof json.error === "string" ? json.error : "") ||
+              "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).",
+          });
+        } else if (reason === "unreachable") {
+          setOutcome({
+            kind: "unreachable",
+            message:
+              (typeof json.error === "string" ? json.error : "") ||
+              "Could not reach the OpenEMS Backend. Check the URL and that the host is reachable from Vercel.",
+          });
+        } else {
+          setOutcome({
+            kind: "unknown_error",
+            message:
+              (typeof json.error === "string" ? json.error : "") ||
+              "Edge validation failed with an unexpected error. Check server logs.",
+          });
+        }
+        return;
+      }
+
       if (!res.ok) {
         setOutcome({
           kind: "generic_error",

@@ -37,6 +37,9 @@ AS $$
     END;
 $$;
 
+GRANT EXECUTE ON FUNCTION fn_edge_ids_all_nonempty(TEXT[])
+  TO anon, authenticated, service_role;
+
 ALTER TABLE microgrids
   ADD CONSTRAINT microgrids_ems_known_edge_ids_nonempty_strings
   CHECK (fn_edge_ids_all_nonempty(ems_known_edge_ids));
