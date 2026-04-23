@@ -8,6 +8,8 @@ import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EdgesCRUDShell } from "./edges-crud-shell";
 import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { EdgeRowActions } from "./edge-row-actions";
 
 // Setup > Edges (D2 / #53, #77).
 // Lists every edge attached to this microgrid. Rows link to edge detail.
@@ -49,6 +51,8 @@ export default async function SetupEdgesPage({
   const { id } = await params;
   const sp = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
+
+  const canManage = await currentUserCanAccessMicrogrid(supabase, id);
 
   const levels = await getHierarchyLevels(supabase, {
     kind: "edges-listing",
@@ -185,11 +189,11 @@ export default async function SetupEdgesPage({
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {/* Client shell handles per-row Configure… button */}
-                      <EdgesCRUDShell
+                      {/* Kebab menu: Configure + Delete (gated on canManage) */}
+                      <EdgeRowActions
+                        edge={edge}
                         microgridId={id}
-                        mode="configure-button"
-                        edge={edge as Edge}
+                        canManage={canManage}
                       />
                     </td>
                   </tr>
