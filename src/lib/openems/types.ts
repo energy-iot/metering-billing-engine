@@ -96,13 +96,3 @@ export type EdgeDiscoveryResponse = {
   devices: DiscoveredDevice[];
 };
 
-/**
- * @deprecated Use EdgeDiscoveryResponse instead (single-edge contract, F #57).
- * EdgeDiscoveryResult is kept for backward-compatibility only; callers that
- * used the old multi-edge array shape should migrate to EdgeDiscoveryResponse.
- */
-export type EdgeDiscoveryResult = {
-  edgeId: string;
-  online: boolean;
-  devices: DiscoveredDevice[];
-};
