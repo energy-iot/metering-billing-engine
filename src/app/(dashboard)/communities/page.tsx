@@ -3,7 +3,6 @@ import { createClient } from "@/lib/supabase/server";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { AddEntityButton } from "@/components/forms/AddEntityButton";
-import { EditEntityButton } from "@/components/forms/EditEntityButton";
 import type { Community } from "@/lib/types/domain";
 
 type CommunityRow = Community & {
@@ -100,34 +99,24 @@ export default async function CommunitiesPage() {
               : 0;
 
           return (
-            <div
+            <Link
               key={community.id}
+              href={`/communities/${community.id}`}
               className="flex flex-col rounded-lg border border-border bg-card p-6 transition-colors hover:border-border"
             >
-              <Link
-                href={`/microgrids?community=${community.id}`}
-                className="flex-1"
-              >
-                <h2 className="font-medium text-foreground">
-                  {community.name}
-                </h2>
-                {locationLabel && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {locationLabel}
-                  </p>
-                )}
-                <div className="mt-3 text-sm text-muted-foreground">
-                  {microgridCount} microgrid
-                  {microgridCount !== 1 ? "s" : ""}
-                </div>
-              </Link>
-              <div className="mt-4 flex justify-end">
-                <EditEntityButton
-                  entity="community"
-                  initialValues={community}
-                />
+              <h2 className="font-medium text-foreground">
+                {community.name}
+              </h2>
+              {locationLabel && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {locationLabel}
+                </p>
+              )}
+              <div className="mt-3 text-sm text-muted-foreground">
+                {microgridCount} microgrid
+                {microgridCount !== 1 ? "s" : ""}
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>

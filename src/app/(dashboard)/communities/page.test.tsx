@@ -126,8 +126,8 @@ describe("CommunitiesPage", () => {
     expect(html).toContain("Kisakye");
     expect(html).toContain("Kampala, Uganda");
     expect(html).toContain("3 microgrids");
-    // Link should point to /microgrids?community=<id>
-    expect(html).toContain("/microgrids?community=comm-1");
+    // Link should point to /communities/<id>
+    expect(html).toContain("/communities/comm-1");
   });
 
   it("renders multiple rows when multiple communities are returned", async () => {

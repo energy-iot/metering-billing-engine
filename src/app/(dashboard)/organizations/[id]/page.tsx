@@ -89,7 +89,7 @@ export default async function OrganizationDetailPage({
               return (
                 <li key={c.id}>
                   <Link
-                    href={`/microgrids?community=${c.id}`}
+                    href={`/communities/${c.id}`}
                     className="text-sm text-foreground hover:underline"
                   >
                     {c.name}
