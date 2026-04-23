@@ -14,11 +14,11 @@ export function CopyButton({ value }: { value: number }) {
   return (
     <button
       onClick={handleCopy}
-      className="ml-1 inline-flex items-center text-xs text-gray-400 hover:text-gray-600"
+      className="ml-1 inline-flex items-center text-xs text-muted-foreground hover:text-foreground"
       title="Copy value"
     >
       {copied ? (
-        <span className="text-green-600">Copied</span>
+        <span className="text-success-fg">Copied</span>
       ) : (
         <svg
           xmlns="http://www.w3.org/2000/svg"

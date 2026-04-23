@@ -11,26 +11,8 @@ import type {
   OpenEmsDataSourceConfig,
 } from "@/lib/openems/types";
 import { METER_TYPE_INFO } from "@/lib/openems/meter-descriptions";
-
-const METER_TYPE_BADGES: Record<MeterType, { label: string; classes: string }> =
-  {
-    GRID: {
-      label: "Grid",
-      classes: "bg-blue-100 text-blue-800",
-    },
-    PRODUCTION: {
-      label: "Production",
-      classes: "bg-green-100 text-green-800",
-    },
-    CONSUMPTION: {
-      label: "Consumption",
-      classes: "bg-orange-100 text-orange-800",
-    },
-    UNKNOWN: {
-      label: "Unknown",
-      classes: "bg-gray-100 text-gray-800",
-    },
-  };
+import { StatusChip } from "@/components/ui/status-chip";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function MeterManager({
   microgridId,
@@ -69,6 +51,10 @@ export function MeterManager({
   // Refresh types state
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
+
+  // Delete dialog state
+  const [meterToDelete, setMeterToDelete] = useState<Meter | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   // Build set of already-added meter keys for dedup (prop-based + optimistic)
   const existingKeys = new Set([
@@ -126,28 +112,35 @@ export function MeterManager({
     router.refresh();
   }
 
-  async function handleDelete(meter: Meter) {
-    const assignedTenants = tenants.filter((t) => t.meter_id === meter.id);
-    const tenantNames = assignedTenants.map((t) => t.name).join(", ");
-    const message =
-      assignedTenants.length > 0
-        ? `This meter is assigned to: ${tenantNames}. Deleting it will unassign their meter.\n\nContinue?`
-        : `Delete "${meter.name}"?`;
+  function openDeleteDialog(meter: Meter) {
+    setMeterToDelete(meter);
+    setDeleteDialogOpen(true);
+  }
 
-    if (!confirm(message)) return;
-
+  async function handleDelete() {
+    if (!meterToDelete) return;
     const { error: deleteError } = await supabase
       .from("meters")
       .delete()
-      .eq("id", meter.id);
+      .eq("id", meterToDelete.id);
 
     if (deleteError) {
-      setError(deleteError.message);
-      return;
+      throw new Error(deleteError.message);
     }
 
     router.refresh();
   }
+
+  // Build delete dialog description
+  const deleteDescription = meterToDelete
+    ? (() => {
+        const assignedTenants = tenants.filter((t) => t.meter_id === meterToDelete.id);
+        const tenantNames = assignedTenants.map((t) => t.name).join(", ");
+        return assignedTenants.length > 0
+          ? `This meter is assigned to: ${tenantNames}. Deleting it will unassign their meter.`
+          : `Delete "${meterToDelete.name}"?`;
+      })()
+    : undefined;
 
   async function handleDiscover() {
     setShowDiscovery(true);
@@ -277,23 +270,34 @@ export function MeterManager({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
+    <div className="rounded-lg border border-border bg-card p-6">
+      {/* Delete Meter ConfirmDialog */}
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="Delete meter?"
+        description={deleteDescription}
+        confirmLabel="Delete"
+        tone="destructive"
+        onConfirm={handleDelete}
+      />
+
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Meters</h2>
+        <h2 className="text-lg font-semibold text-foreground">Meters</h2>
         <div className="flex items-center gap-2">
           {refreshResult && (
-            <span className="text-xs text-green-600">{refreshResult}</span>
+            <span className="text-xs text-success-fg">{refreshResult}</span>
           )}
           <button
             onClick={handleRefreshTypes}
             disabled={refreshing}
-            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
           >
             {refreshing ? "Refreshing..." : "Refresh Types"}
           </button>
           <button
             onClick={handleDiscover}
-            className="rounded-md bg-green-600 px-3 py-1.5 text-sm text-white hover:bg-green-700"
+            className="rounded-md bg-success px-3 py-1.5 text-sm text-success-foreground hover:opacity-90"
           >
             Discover Meters
           </button>
@@ -302,7 +306,7 @@ export function MeterManager({
               setShowForm(!showForm);
               setShowDiscovery(false);
             }}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
           >
             {showForm ? "Cancel" : "Add Meter"}
           </button>
@@ -310,33 +314,33 @@ export function MeterManager({
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="mb-4 rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
         </div>
       )}
 
       {showDiscovery && (
-        <div className="mb-4 rounded-md border border-gray-200 bg-gray-50 p-4">
+        <div className="mb-4 rounded-md border border-border bg-muted p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">
+            <h3 className="text-sm font-semibold text-foreground">
               Discovered Meters
             </h3>
             <button
               onClick={() => setShowDiscovery(false)}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-muted-foreground hover:text-foreground"
             >
               Close
             </button>
           </div>
 
           {discoveryLoading && (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted-foreground">
               Scanning OpenEMS for meters...
             </p>
           )}
 
           {discoveryError && (
-            <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div className="rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
               {discoveryError}
             </div>
           )}
@@ -344,7 +348,7 @@ export function MeterManager({
           {!discoveryLoading &&
             !discoveryError &&
             discoveryResults.length === 0 && (
-              <p className="text-sm text-gray-500">No edges found.</p>
+              <p className="text-sm text-muted-foreground">No edges found.</p>
             )}
 
           {!discoveryLoading &&
@@ -354,20 +358,20 @@ export function MeterManager({
                 <div className="mb-2 flex items-center gap-2">
                   <span
                     className={`inline-block h-2.5 w-2.5 rounded-full ${
-                      edge.online ? "bg-green-500" : "bg-red-500"
+                      edge.online ? "bg-success" : "bg-destructive"
                     }`}
                     title={edge.online ? "Online" : "Offline"}
                   />
-                  <span className="text-sm font-medium text-gray-700">
+                  <span className="text-sm font-medium text-foreground">
                     {edge.edgeId}
                   </span>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-muted-foreground">
                     {edge.online ? "Online" : "Offline"}
                   </span>
                 </div>
 
                 {edge.meters.length === 0 ? (
-                  <p className="ml-5 text-sm text-gray-400">
+                  <p className="ml-5 text-sm text-muted-foreground">
                     No meters found on this edge.
                   </p>
                 ) : (
@@ -376,7 +380,6 @@ export function MeterManager({
                       const alreadyAdded = existingKeys.has(
                         `${edge.edgeId}:${meter.componentId}`
                       );
-                      const badge = METER_TYPE_BADGES[meter.meterType];
 
                       const typeInfo = METER_TYPE_INFO[meter.meterType];
 
@@ -385,8 +388,8 @@ export function MeterManager({
                           key={meter.componentId}
                           className={`rounded-md border px-3 py-2 ${
                             alreadyAdded
-                              ? "border-gray-100 bg-gray-100"
-                              : "border-gray-200 bg-white"
+                              ? "border-border bg-muted"
+                              : "border-border bg-card"
                           }`}
                         >
                           <div className="flex items-center justify-between">
@@ -395,8 +398,8 @@ export function MeterManager({
                                 <p
                                   className={`text-sm font-medium ${
                                     alreadyAdded
-                                      ? "text-gray-400"
-                                      : "text-gray-900"
+                                      ? "text-muted-foreground"
+                                      : "text-foreground"
                                   }`}
                                 >
                                   {meter.alias}
@@ -404,26 +407,22 @@ export function MeterManager({
                                 <p
                                   className={`text-xs ${
                                     alreadyAdded
-                                      ? "text-gray-300"
-                                      : "text-gray-500"
+                                      ? "text-muted-foreground"
+                                      : "text-muted-foreground"
                                   }`}
                                 >
                                   {meter.componentId}
                                 </p>
                               </div>
-                              <span
-                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                  alreadyAdded
-                                    ? "bg-gray-100 text-gray-400"
-                                    : badge.classes
-                                }`}
-                              >
-                                {badge.label}
-                              </span>
+                              {alreadyAdded ? (
+                                <StatusChip kind="meterType" status={meter.meterType} state="disabled" />
+                              ) : (
+                                <StatusChip kind="meterType" status={meter.meterType} />
+                              )}
                             </div>
 
                             {alreadyAdded ? (
-                              <span className="text-xs italic text-gray-400">
+                              <span className="text-xs italic text-muted-foreground">
                                 Already added
                               </span>
                             ) : namingMeterId === meter.componentId ? (
@@ -436,20 +435,20 @@ export function MeterManager({
                                     if (e.key === "Enter") handleAddDiscovered(edge.edgeId, meter);
                                     if (e.key === "Escape") setNamingMeterId(null);
                                   }}
-                                  className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                  className="rounded-md border border-border px-2 py-1 text-sm"
                                   autoFocus
                                   placeholder="Enter meter name"
                                 />
                                 <button
                                   onClick={() => handleAddDiscovered(edge.edgeId, meter)}
                                   disabled={!namingValue.trim() || addingMeter === meter.componentId}
-                                  className="rounded-md bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                                  className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
                                 >
                                   {addingMeter === meter.componentId ? "Saving..." : "Save"}
                                 </button>
                                 <button
                                   onClick={() => setNamingMeterId(null)}
-                                  className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-600 hover:bg-gray-50"
+                                  className="rounded-md border border-border px-3 py-1 text-sm text-foreground hover:bg-muted"
                                 >
                                   Cancel
                                 </button>
@@ -460,16 +459,16 @@ export function MeterManager({
                                   setNamingMeterId(meter.componentId);
                                   setNamingValue(meter.alias || meter.componentId);
                                 }}
-                                className="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
+                                className="rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground hover:opacity-90"
                               >
                                 Add
                               </button>
                             )}
                           </div>
                           {typeInfo && !alreadyAdded && (
-                            <div className="mt-1.5 ml-0 text-xs text-gray-500">
+                            <div className="mt-1.5 ml-0 text-xs text-muted-foreground">
                               <p>{typeInfo.shortDesc}</p>
-                              <p className="mt-0.5 italic text-gray-400">
+                              <p className="mt-0.5 italic text-muted-foreground">
                                 {typeInfo.billingHint}
                               </p>
                             </div>
@@ -487,10 +486,10 @@ export function MeterManager({
       {showForm && (
         <form
           onSubmit={handleAdd}
-          className="mb-4 space-y-3 rounded-md border border-gray-200 bg-gray-50 p-4"
+          className="mb-4 space-y-3 rounded-md border border-border bg-muted p-4"
         >
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Name
             </label>
             <input
@@ -498,23 +497,23 @@ export function MeterManager({
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="e.g. Unit 1 Meter"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Data Source
             </label>
             <input
               type="text"
               value="openems"
               disabled
-              className="mt-1 block w-full rounded-md border border-gray-200 bg-gray-100 px-3 py-2 text-gray-500"
+              className="mt-1 block w-full rounded-md border border-border bg-muted px-3 py-2 text-muted-foreground"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Edge ID
             </label>
             <input
@@ -522,12 +521,12 @@ export function MeterManager({
               value={edgeId}
               onChange={(e) => setEdgeId(e.target.value)}
               required
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="e.g. edge0"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Channel Address
             </label>
             <input
@@ -535,14 +534,14 @@ export function MeterManager({
               value={channelAddress}
               onChange={(e) => setChannelAddress(e.target.value)}
               required
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="e.g. meter0/ActiveConsumptionEnergy"
             />
           </div>
           <button
             type="submit"
             disabled={saving}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? "Adding..." : "Add Meter"}
           </button>
@@ -550,47 +549,40 @@ export function MeterManager({
       )}
 
       {meters.length === 0 ? (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted-foreground">
           No meters configured. Add a meter to start assigning tenants.
         </p>
       ) : (
         <div className="space-y-2">
           {meters.map((meter) => {
             const config = meter.data_source_config as OpenEmsDataSourceConfig;
-            const typeBadge = meter.meter_type
-              ? METER_TYPE_BADGES[meter.meter_type as MeterType]
-              : null;
             const typeInfo = meter.meter_type
               ? METER_TYPE_INFO[meter.meter_type]
               : null;
             return (
               <div
                 key={meter.id}
-                className="flex items-center justify-between rounded-md border border-gray-100 bg-gray-50 px-4 py-3"
+                className="flex items-center justify-between rounded-md border border-border bg-muted px-4 py-3"
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-medium text-gray-900">{meter.name}</p>
-                    {typeBadge && (
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${typeBadge.classes}`}
-                      >
-                        {typeBadge.label}
-                      </span>
+                    <p className="font-medium text-foreground">{meter.name}</p>
+                    {meter.meter_type && (
+                      <StatusChip kind="meterType" status={meter.meter_type} />
                     )}
                   </div>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-muted-foreground">
                     {config.edgeId} / {config.channelAddress}
                   </p>
                   {typeInfo && (
-                    <p className="mt-0.5 text-xs text-gray-400">
+                    <p className="mt-0.5 text-xs text-muted-foreground">
                       {typeInfo.shortDesc}
                     </p>
                   )}
                 </div>
                 <button
-                  onClick={() => handleDelete(meter)}
-                  className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
+                  onClick={() => openDeleteDialog(meter)}
+                  className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted"
                 >
                   Delete
                 </button>

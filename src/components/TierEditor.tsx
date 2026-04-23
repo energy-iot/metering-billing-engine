@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { RateSchedule, TierConfig } from "@/lib/types/database";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function TierEditor({
   microgridId,
@@ -29,6 +30,10 @@ export function TierEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Last-tier warning dialog state
+  const [lastTierDialogOpen, setLastTierDialogOpen] = useState(false);
+  const [pendingRemoveIndex, setPendingRemoveIndex] = useState<number | null>(null);
 
   function updateTier(index: number, updates: Partial<TierConfig>) {
     setTiers((prev) =>
@@ -70,11 +75,21 @@ export function TierEditor({
 
   function removeTier(index: number) {
     if (tiers.length === 1) {
-      if (!confirm("Removing the last tier will leave an empty schedule. Continue?")) {
-        return;
-      }
+      setPendingRemoveIndex(index);
+      setLastTierDialogOpen(true);
+      return;
     }
+    doRemoveTier(index);
+  }
 
+  async function handleLastTierConfirm() {
+    if (pendingRemoveIndex !== null) {
+      doRemoveTier(pendingRemoveIndex);
+      setPendingRemoveIndex(null);
+    }
+  }
+
+  function doRemoveTier(index: number) {
     setTiers((prev) => {
       const updated = prev.filter((_, i) => i !== index);
       // Ensure the new last tier has max_kwh = null
@@ -183,56 +198,67 @@ export function TierEditor({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
+    <div className="rounded-lg border border-border bg-card p-6">
+      {/* Last-tier warning ConfirmDialog */}
+      <ConfirmDialog
+        open={lastTierDialogOpen}
+        onOpenChange={setLastTierDialogOpen}
+        title="Remove last tier?"
+        description="Removing the last tier will leave an empty schedule. Continue?"
+        confirmLabel="Remove"
+        tone="neutral"
+        onConfirm={handleLastTierConfirm}
+      />
+
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Rate Schedule</h2>
+        <h2 className="text-lg font-semibold text-foreground">Rate Schedule</h2>
         <button
           onClick={addTier}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
         >
           Add Tier
         </button>
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="mb-4 rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="mb-4 rounded-md bg-green-50 p-3 text-sm text-green-700">
+        <div className="mb-4 rounded-md bg-success-muted p-3 text-sm text-success-fg">
           {success}
         </div>
       )}
 
       {tiers.length === 0 ? (
-        <p className="mb-6 text-sm text-gray-500">
+        <p className="mb-6 text-sm text-muted-foreground">
           No tiers configured. Add a tier to define the rate schedule.
         </p>
       ) : (
         <div className="mb-6 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="pb-2 pr-4 font-medium text-gray-700">Label</th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">
+              <tr className="border-b border-border">
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">Label</th>
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">
                   Min kWh
                 </th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">
                   Max kWh
                 </th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">
                   Rate per kWh ({currency})
                 </th>
-                <th className="pb-2 font-medium text-gray-700">Actions</th>
+                <th className="pb-2 font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
               {tiers.map((tier, index) => {
                 const isLastTier = index === tiers.length - 1;
                 return (
-                  <tr key={index} className="border-b border-gray-100">
+                  <tr key={index} className="border-b border-border">
                     <td className="py-3 pr-4">
                       <input
                         type="text"
@@ -240,7 +266,7 @@ export function TierEditor({
                         onChange={(e) =>
                           updateTier(index, { label: e.target.value })
                         }
-                        className="w-full rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                       />
                     </td>
                     <td className="py-3 pr-4">
@@ -253,12 +279,12 @@ export function TierEditor({
                           })
                         }
                         min={1}
-                        className="w-24 rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="w-24 rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                       />
                     </td>
                     <td className="py-3 pr-4">
                       {isLastTier ? (
-                        <span className="inline-block w-24 px-2 py-1 text-gray-500">
+                        <span className="inline-block w-24 px-2 py-1 text-muted-foreground">
                           &infin;
                         </span>
                       ) : (
@@ -273,7 +299,7 @@ export function TierEditor({
                             })
                           }
                           min={tier.min_kwh + 1}
-                          className="w-24 rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-24 rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                         />
                       )}
                     </td>
@@ -288,13 +314,13 @@ export function TierEditor({
                         }
                         min={0}
                         step="any"
-                        className="w-28 rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="w-28 rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                       />
                     </td>
                     <td className="py-3">
                       <button
                         onClick={() => removeTier(index)}
-                        className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
+                        className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted"
                       >
                         Remove
                       </button>
@@ -309,7 +335,7 @@ export function TierEditor({
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label className="block text-sm font-medium text-foreground">
             Service Charge ({currency})
           </label>
           <input
@@ -318,11 +344,11 @@ export function TierEditor({
             onChange={(e) => setServiceCharge(parseFloat(e.target.value) || 0)}
             min={0}
             step="any"
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label className="block text-sm font-medium text-foreground">
             Tax Rate (%)
           </label>
           <input
@@ -334,7 +360,7 @@ export function TierEditor({
             min={0}
             max={100}
             step="any"
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
           />
         </div>
       </div>
@@ -342,7 +368,7 @@ export function TierEditor({
       <button
         onClick={handleSave}
         disabled={saving}
-        className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {saving ? "Saving..." : "Save Rate Schedule"}
       </button>

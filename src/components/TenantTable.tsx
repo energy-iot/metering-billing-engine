@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Meter, Tenant } from "@/lib/types/database";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function TenantTable({
   microgridId,
@@ -32,6 +33,10 @@ export function TenantTable({
   const [editPhone, setEditPhone] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+
+  // Delete dialog state
+  const [tenantToDelete, setTenantToDelete] = useState<Tenant | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   // Compute which meters are shared (assigned to multiple tenants)
   const meterAssignmentCounts = new Map<string, number>();
@@ -129,17 +134,20 @@ export function TenantTable({
     router.refresh();
   }
 
-  async function handleDelete(tenant: Tenant) {
-    if (!confirm(`Are you sure you want to delete "${tenant.name}"?`)) return;
+  function openDeleteDialog(tenant: Tenant) {
+    setTenantToDelete(tenant);
+    setDeleteDialogOpen(true);
+  }
 
+  async function handleDelete() {
+    if (!tenantToDelete) return;
     const { error: deleteError } = await supabase
       .from("tenants")
       .delete()
-      .eq("id", tenant.id);
+      .eq("id", tenantToDelete.id);
 
     if (deleteError) {
-      setError(deleteError.message);
-      return;
+      throw new Error(deleteError.message);
     }
 
     router.refresh();
@@ -162,19 +170,34 @@ export function TenantTable({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
+    <div className="rounded-lg border border-border bg-card p-6">
+      {/* Delete Tenant ConfirmDialog */}
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="Delete tenant?"
+        description={
+          tenantToDelete
+            ? `Are you sure you want to delete "${tenantToDelete.name}"?`
+            : undefined
+        }
+        confirmLabel="Delete"
+        tone="destructive"
+        onConfirm={handleDelete}
+      />
+
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Tenants</h2>
+        <h2 className="text-lg font-semibold text-foreground">Tenants</h2>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
         >
           {showAddForm ? "Cancel" : "Add Tenant"}
         </button>
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="mb-4 rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
         </div>
       )}
@@ -182,10 +205,10 @@ export function TenantTable({
       {showAddForm && (
         <form
           onSubmit={handleAdd}
-          className="mb-4 space-y-3 rounded-md border border-gray-200 bg-gray-50 p-4"
+          className="mb-4 space-y-3 rounded-md border border-border bg-muted p-4"
         >
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Name
             </label>
             <input
@@ -193,38 +216,38 @@ export function TenantTable({
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               required
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="Tenant name"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Phone
             </label>
             <input
               type="text"
               value={newPhone}
               onChange={(e) => setNewPhone(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="Optional"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-foreground">
               Email
             </label>
             <input
               type="email"
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               placeholder="Optional"
             />
           </div>
           <button
             type="submit"
             disabled={addSaving}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {addSaving ? "Adding..." : "Add Tenant"}
           </button>
@@ -232,26 +255,26 @@ export function TenantTable({
       )}
 
       {tenants.length === 0 ? (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted-foreground">
           No tenants yet. Add a tenant to get started.
         </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="pb-2 pr-4 font-medium text-gray-700">Name</th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">Phone</th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">Email</th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">
+              <tr className="border-b border-border">
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">Name</th>
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">Phone</th>
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">Email</th>
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">
                   Assigned Meter
                 </th>
-                <th className="pb-2 font-medium text-gray-700">Actions</th>
+                <th className="pb-2 font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
               {tenants.map((tenant) => (
-                <tr key={tenant.id} className="border-b border-gray-100">
+                <tr key={tenant.id} className="border-b border-border">
                   {editingId === tenant.id ? (
                     <>
                       <td className="py-3 pr-4">
@@ -260,7 +283,7 @@ export function TenantTable({
                           value={editName}
                           onChange={(e) => setEditName(e.target.value)}
                           required
-                          className="w-full rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                         />
                       </td>
                       <td className="py-3 pr-4">
@@ -268,7 +291,7 @@ export function TenantTable({
                           type="text"
                           value={editPhone}
                           onChange={(e) => setEditPhone(e.target.value)}
-                          className="w-full rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                         />
                       </td>
                       <td className="py-3 pr-4">
@@ -276,11 +299,11 @@ export function TenantTable({
                           type="email"
                           value={editEmail}
                           onChange={(e) => setEditEmail(e.target.value)}
-                          className="w-full rounded-md border border-gray-300 px-2 py-1 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
                         />
                       </td>
                       <td className="py-3 pr-4">
-                        <span className="text-gray-500">
+                        <span className="text-muted-foreground">
                           {getMeterName(tenant.meter_id)}
                         </span>
                       </td>
@@ -289,13 +312,13 @@ export function TenantTable({
                           <button
                             onClick={() => handleEditSave(tenant.id)}
                             disabled={editSaving}
-                            className="rounded-md px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent disabled:opacity-50"
                           >
                             {editSaving ? "Saving..." : "Save"}
                           </button>
                           <button
                             onClick={cancelEdit}
-                            className="rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+                            className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted"
                           >
                             Cancel
                           </button>
@@ -304,13 +327,13 @@ export function TenantTable({
                     </>
                   ) : (
                     <>
-                      <td className="py-3 pr-4 text-gray-900">
+                      <td className="py-3 pr-4 text-foreground">
                         {tenant.name}
                       </td>
-                      <td className="py-3 pr-4 text-gray-600">
+                      <td className="py-3 pr-4 text-muted-foreground">
                         {tenant.phone ?? "-"}
                       </td>
-                      <td className="py-3 pr-4 text-gray-600">
+                      <td className="py-3 pr-4 text-muted-foreground">
                         {tenant.email ?? "-"}
                       </td>
                       <td className="py-3 pr-4">
@@ -320,7 +343,7 @@ export function TenantTable({
                             onChange={(e) =>
                               handleMeterChange(tenant.id, e.target.value)
                             }
-                            className="rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="rounded-md border border-border px-2 py-1 text-sm text-foreground focus:outline-none"
                           >
                             <option value="">Unassigned</option>
                             {meters.map((meter) => (
@@ -329,11 +352,11 @@ export function TenantTable({
                               </option>
                             ))}
                           </select>
-                          <p className="mt-1 text-xs text-gray-400">
+                          <p className="mt-1 text-xs text-muted-foreground">
                             Assign a CONSUMPTION meter to bill this tenant for their electricity usage.
                           </p>
                           {isSharedMeter(tenant.meter_id) && (
-                            <p className="mt-1 text-xs text-yellow-600">
+                            <p className="mt-1 text-xs text-warning-fg">
                               Shared with another tenant
                             </p>
                           )}
@@ -343,13 +366,13 @@ export function TenantTable({
                         <div className="flex gap-2">
                           <button
                             onClick={() => startEdit(tenant)}
-                            className="rounded-md px-2 py-1 text-sm text-blue-600 hover:bg-blue-50"
+                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
                           >
                             Edit
                           </button>
                           <button
-                            onClick={() => handleDelete(tenant)}
-                            className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50"
+                            onClick={() => openDeleteDialog(tenant)}
+                            className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted"
                           >
                             Delete
                           </button>

@@ -29,7 +29,7 @@ export default async function TenantsPage({
 
   if (tenantsError || metersError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading data: {tenantsError?.message ?? metersError?.message}
       </div>
     );
