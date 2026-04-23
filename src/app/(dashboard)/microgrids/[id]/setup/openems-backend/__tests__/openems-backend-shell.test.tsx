@@ -152,6 +152,7 @@ const BASE_MG = {
   ems_backend_url: null,
   ems_aws_region: null,
   ems_aws_access_key_id: null,
+  ems_known_edge_ids: [] as string[],
   ems_last_discover_at: null,
   ems_last_discover_status: null,
   ems_last_discover_error: null,
@@ -165,6 +166,7 @@ const CONFIGURED_CLOUD = {
   ems_backend_url: "https://abc.lambda-url.us-east-1.on.aws/",
   ems_aws_region: "us-east-1",
   ems_aws_access_key_id: "AKIAIOSFODNN7EXAMPLE",
+  ems_known_edge_ids: ["edge0", "edge1"],
   ems_last_discover_at: "2026-04-23T10:00:00Z",
   ems_last_discover_status: "success",
   ems_last_discover_error: null,
@@ -367,8 +369,8 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
     );
     await openForm();
     await submitForm();
-    // Success banner
-    expect(screen.getByText(/connected\. found 3 edges/i)).toBeDefined();
+    // Success banner — message comes from the server response
+    expect(screen.getByText(/connected\./i)).toBeDefined();
     // Advance past the 1500ms collapse timer
     await act(async () => {
       vi.advanceTimersByTime(1600);
@@ -402,7 +404,7 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
     );
     await openForm();
     await submitForm();
-    expect(screen.getByText(/zero edges discovered/i)).toBeDefined();
+    expect(screen.getByText(/no edges discovered/i)).toBeDefined();
     // Form still rendered
     expect(
       screen.getByRole("button", { name: /save & test connection/i })
@@ -545,5 +547,178 @@ describe("OpenemsBackendShell — secret preserve on blank (#102 AC-TEST-PRESERV
     const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
     expect(body.type).toBe("cloud_aws");
     expect("secretAccessKey" in body).toBe(false);
+  });
+});
+
+describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
+  function mockFetch(response: {
+    ok?: boolean;
+    status?: number;
+    body: unknown;
+  }) {
+    const res = {
+      ok: response.ok ?? true,
+      status: response.status ?? 200,
+      json: () => Promise.resolve(response.body),
+    } as unknown as Response;
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(res);
+  }
+
+  async function openForm() {
+    fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
+  }
+
+  async function submitForm() {
+    const btn = screen.getByRole("button", { name: /save & test connection/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  it("Prefill case 1: empty-state (ems_type=null) → field initialized to 'edge0'", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={BASE_MG}
+        health="not_configured"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4={null}
+        isSuperAdmin={true}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /cloud \(aws\)/i }));
+    const field = screen.getByLabelText(/known edge ids/i) as HTMLInputElement;
+    expect(field.value).toBe("edge0");
+  });
+
+  it("Prefill case 2: reconfigure with populated list → field shows joined list", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
+    const field = screen.getByLabelText(/known edge ids/i) as HTMLInputElement;
+    expect(field.value).toBe("edge0, edge1");
+  });
+
+  it("Prefill case 3: reconfigure with deliberately empty list → field is empty string", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={{
+          ...CONFIGURED_CLOUD,
+          ems_known_edge_ids: [],
+        }}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
+    const field = screen.getByLabelText(/known edge ids/i) as HTMLInputElement;
+    expect(field.value).toBe("");
+  });
+
+  it("known_edge_ids is parsed and included in PUT payload as array", async () => {
+    const fetchSpy = mockFetch({
+      ok: true,
+      status: 200,
+      body: { status: "success", message: "Connected.", edgeCount: 2, edges: [] },
+    });
+
+    render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    await openForm();
+
+    // Set edge IDs with extra whitespace and duplicates
+    const field = screen.getByLabelText(/known edge ids/i);
+    fireEvent.change(field, { target: { value: " edge0 , edge1 , edge0 " } });
+
+    await submitForm();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+    // Trimmed, deduped
+    expect(body.known_edge_ids).toEqual(["edge0", "edge1"]);
+  });
+
+  it("invalid_edges 400 → destructive banner listing invalid IDs, form stays open", async () => {
+    mockFetch({
+      ok: false,
+      status: 400,
+      body: {
+        error: "Some edge IDs were not found on the backend. Remove or fix them before saving.",
+        invalid_edges: ["edgeX", "edgeY"],
+      },
+    });
+
+    render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    await openForm();
+    await submitForm();
+
+    // Destructive banner with "Edge IDs not found" title
+    expect(screen.getByRole("heading", { name: /edge ids not found/i })).toBeDefined();
+    // Lists the invalid IDs
+    expect(screen.getByText(/edgex, edgey/i)).toBeDefined();
+    // Form stays open
+    expect(screen.getByRole("button", { name: /save & test connection/i })).toBeDefined();
+  });
+
+  it("Configured-state summary card shows Edge IDs line", () => {
+    const { container } = render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    expect(container.textContent).toContain("Edge IDs");
+    expect(container.textContent).toContain("edge0, edge1");
+  });
+
+  it("Configured-state summary card shows '—' when edge list is empty", () => {
+    const { container } = render(
+      <OpenemsBackendShell
+        microgrid={{ ...CONFIGURED_CLOUD, ems_known_edge_ids: [] }}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4="3ACH"
+        isSuperAdmin={true}
+      />
+    );
+    expect(container.textContent).toContain("Edge IDs");
+    // The — character for empty
+    expect(container.textContent).toContain("—");
   });
 });
