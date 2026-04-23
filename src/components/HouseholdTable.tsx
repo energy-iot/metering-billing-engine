@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Device, Household } from "@/lib/types/domain";
@@ -387,6 +388,12 @@ export function HouseholdTable({
                       </td>
                       <td className="py-3">
                         <div className="flex gap-2">
+                          <Link
+                            href={`/microgrids/${microgridId}/setup/households/${household.id}`}
+                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
+                          >
+                            View
+                          </Link>
                           <button
                             onClick={() => startEdit(household)}
                             className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"

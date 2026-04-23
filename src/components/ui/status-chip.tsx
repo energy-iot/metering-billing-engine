@@ -17,6 +17,7 @@ type Kind =
   | "edgeSource"
   | "deviceType"
   | "household"
+  | "householdDeviceRole"
   | "meterType";
 
 type StatusMap = Record<string, { label: string; tone: ChipProps["tone"]; dot?: boolean }>;
@@ -64,6 +65,22 @@ const MAPS: Record<Kind, StatusMap> = {
     inverter:          { label: "Inverter",          tone: "brand" },
     ev_charger:        { label: "EV charger",        tone: "brand" },
     other:             { label: "Other",             tone: "neutral" },
+  },
+  // Household device role — mirrors `household_device_role` enum in AB schema.
+  // Tone rationale:
+  //   primary_consumption_meter → warn (the billable metering device; draws attention)
+  //   secondary_meter           → neutral (supplementary measurement, non-primary)
+  //   battery                   → success (storage asset)
+  //   solar                     → success (generation asset)
+  //   ev_charger                → brand (controllable load)
+  //   other                     → neutral (catchall)
+  householdDeviceRole: {
+    primary_consumption_meter: { label: "Primary meter", tone: "warn" },
+    secondary_meter:           { label: "Secondary meter", tone: "neutral" },
+    battery:                   { label: "Battery",         tone: "success" },
+    solar:                     { label: "Solar",           tone: "success" },
+    ev_charger:                { label: "EV charger",      tone: "brand" },
+    other:                     { label: "Other",           tone: "neutral" },
   },
   meterType: {
     // Lowercase keys (original)
