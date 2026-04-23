@@ -4,6 +4,8 @@ import type { Microgrid } from "@/lib/types/domain";
 import { TabNav } from "./tab-nav";
 import { LocaleProvider } from "@/components/format/locale-context";
 import { EditEntityButton } from "@/components/forms/EditEntityButton";
+import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 
 // HierarchyNav is NOT placed here — leaf pages own their breadcrumb.
 // Each leaf page calls getHierarchyLevels() with the correct scope depth
@@ -19,11 +21,10 @@ export default async function MicrogridLayout({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data, error } = await supabase
-    .from("microgrids")
-    .select("*")
-    .eq("id", id)
-    .single();
+  const [{ data, error }, canManage] = await Promise.all([
+    supabase.from("microgrids").select("*").eq("id", id).single(),
+    currentUserCanAccessMicrogrid(supabase, id),
+  ]);
 
   if (error || !data) {
     notFound();
@@ -49,7 +50,16 @@ export default async function MicrogridLayout({
               </p>
             )}
           </div>
-          <EditEntityButton entity="microgrid" initialValues={microgrid} />
+          <div className="flex items-center gap-2">
+            <EditEntityButton entity="microgrid" initialValues={microgrid} />
+            {canManage && (
+              <DeleteEntityButton
+                entity="microgrid"
+                id={microgrid.id}
+                name={microgrid.name}
+              />
+            )}
+          </div>
         </div>
         <TabNav microgridId={id} />
         <div className="mt-6">{children}</div>

@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EditEntityButton } from "@/components/forms/EditEntityButton";
+import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
+import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import { currentUserCanAccessCommunity } from "@/lib/auth/access";
 import type { Community } from "@/lib/types/domain";
 
@@ -34,10 +36,13 @@ function emDash(value: string | null | undefined): string {
 
 export default async function CommunityDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const sp = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
 
   const [{ data: community }, canEdit, levels] = await Promise.all([
@@ -71,7 +76,8 @@ export default async function CommunityDetailPage({
 
   return (
     <div>
-      <HierarchyNav levels={levels} className="mb-4" />
+      <DeletedSuccessBanner searchParams={sp} />
+      <HierarchyNav levels={levels} className="mb-4 mt-4" />
 
       {/* Page header */}
       <div className="mb-6 flex items-start justify-between gap-4">
@@ -88,7 +94,14 @@ export default async function CommunityDetailPage({
           )}
         </div>
         {canEdit && (
-          <EditEntityButton entity="community" initialValues={community} />
+          <div className="flex items-center gap-2">
+            <EditEntityButton entity="community" initialValues={community} />
+            <DeleteEntityButton
+              entity="community"
+              id={community.id}
+              name={community.name}
+            />
+          </div>
         )}
       </div>
 

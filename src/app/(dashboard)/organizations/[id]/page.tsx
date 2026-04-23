@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { EditEntityButton } from "@/components/forms/EditEntityButton";
+import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
+import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import { currentUserIsSuperAdmin } from "@/lib/auth/access";
 import type { Organization } from "@/lib/types/domain";
 
@@ -15,10 +17,13 @@ import type { Organization } from "@/lib/types/domain";
  */
 export default async function OrganizationDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const sp = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
 
   const [{ data: org }, { data: communities }, isSuperAdmin] = await Promise.all([
@@ -58,7 +63,8 @@ export default async function OrganizationDetailPage({
 
   return (
     <div>
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <DeletedSuccessBanner searchParams={sp} />
+      <div className="mb-6 mt-4 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">{org.name}</h1>
           {addressLines.length > 0 && (
@@ -69,7 +75,16 @@ export default async function OrganizationDetailPage({
             </address>
           )}
         </div>
-        {isSuperAdmin && <EditEntityButton entity="organization" initialValues={org} />}
+        {isSuperAdmin && (
+          <div className="flex items-center gap-2">
+            <EditEntityButton entity="organization" initialValues={org} />
+            <DeleteEntityButton
+              entity="organization"
+              id={org.id}
+              name={org.name}
+            />
+          </div>
+        )}
       </div>
 
       <section className="rounded-lg border border-border bg-card p-6">
