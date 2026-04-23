@@ -88,7 +88,24 @@ export async function POST(
     );
   }
 
+  // Read ems_known_edge_ids via a separate query — deliberately not extending
+  // getMicrogridEmsConfig so that helper's responsibility stays scoped to
+  // "build a connection config". Catalog data is a separate concern (#112).
+  const { data: mgRow } = await supabase
+    .from("microgrids")
+    .select("ems_known_edge_ids")
+    .eq("id", microgridId)
+    .maybeSingle<{ ems_known_edge_ids: string[] }>();
+
+  const knownEdgeIds: string[] = mgRow?.ems_known_edge_ids ?? [];
+
   // Run Discover.
+  // Pass knownEdgeIds to getEdgesStatus instead of []. getEdgesStatus([])
+  // returns {} on real OpenEMS backends (verified 2026-04-23 against Kisakye);
+  // knownEdgeIds is the correct approach (#112).
+  //
+  // If knownEdgeIds is empty, skip the RPC and return zero_edges immediately
+  // (no edges declared yet — user must configure them via the OpenEMS Backend tab).
   let discoverStatus:
     | "success"
     | "auth_failed"
@@ -103,51 +120,57 @@ export async function POST(
     alreadyLinked: boolean;
   }> = [];
 
-  try {
-    const client = createOpenEmsClient(emsConfig);
-    const statuses = await client.getEdgesStatus([]);
+  if (knownEdgeIds.length === 0) {
+    discoverStatus = "zero_edges";
+    discoverMessage =
+      "No edges declared yet — add some in Reconfigure → Known edge IDs to enable the Add Edge flow.";
+  } else {
+    try {
+      const client = createOpenEmsClient(emsConfig);
+      const statuses = await client.getEdgesStatus(knownEdgeIds);
 
-    if (statuses.length === 0) {
-      discoverStatus = "zero_edges";
-      discoverMessage =
-        "Connected, but the OpenEMS Backend returned zero edges. Check that edges are registered under this backend.";
-    } else {
-      // N+1 avoidance: prefetch existing edge ids once.
-      const prefetched = new Set<string>();
-      const { data: existing } = await supabase
-        .from("edges")
-        .select("openems_edge_id")
-        .eq("microgrid_id", microgridId);
-      for (const e of existing ?? []) {
-        if (e.openems_edge_id) prefetched.add(e.openems_edge_id);
-      }
-
-      discoveredEdges = statuses.map((s) => ({
-        openems_edge_id: s.edgeId,
-        name: s.edgeId,
-        metadata: { online: s.online },
-        alreadyLinked: prefetched.has(s.edgeId),
-      }));
-      discoverMessage = `Connected. ${discoveredEdges.length} edge${discoveredEdges.length === 1 ? "" : "s"} discovered.`;
-    }
-  } catch (err) {
-    if (err instanceof OpenEmsError) {
-      if (err.code === "OPENEMS_AUTH_FAILED") {
-        discoverStatus = "auth_failed";
+      if (statuses.length === 0) {
+        discoverStatus = "zero_edges";
         discoverMessage =
-          "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
-      } else if (err.code === "OPENEMS_UNREACHABLE") {
-        discoverStatus = "unreachable";
-        discoverMessage = `Could not reach OpenEMS Backend at ${emsConfig.url}. Check the URL and that the host is reachable from Vercel.`;
+          "Connected, but the OpenEMS Backend returned zero edges. Check that edges are registered under this backend.";
+      } else {
+        // N+1 avoidance: prefetch existing edge ids once.
+        const prefetched = new Set<string>();
+        const { data: existing } = await supabase
+          .from("edges")
+          .select("openems_edge_id")
+          .eq("microgrid_id", microgridId);
+        for (const e of existing ?? []) {
+          if (e.openems_edge_id) prefetched.add(e.openems_edge_id);
+        }
+
+        discoveredEdges = statuses.map((s) => ({
+          openems_edge_id: s.edgeId,
+          name: s.edgeId,
+          metadata: { online: s.online },
+          alreadyLinked: prefetched.has(s.edgeId),
+        }));
+        discoverMessage = `Connected. ${discoveredEdges.length} edge${discoveredEdges.length === 1 ? "" : "s"} discovered.`;
+      }
+    } catch (err) {
+      if (err instanceof OpenEmsError) {
+        if (err.code === "OPENEMS_AUTH_FAILED") {
+          discoverStatus = "auth_failed";
+          discoverMessage =
+            "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_UNREACHABLE") {
+          discoverStatus = "unreachable";
+          discoverMessage = `Could not reach OpenEMS Backend at ${emsConfig.url}. Check the URL and that the host is reachable from Vercel.`;
+        } else {
+          discoverStatus = "unknown_error";
+          discoverMessage =
+            "Discover failed with an unexpected error. Check server logs.";
+        }
       } else {
         discoverStatus = "unknown_error";
         discoverMessage =
           "Discover failed with an unexpected error. Check server logs.";
       }
-    } else {
-      discoverStatus = "unknown_error";
-      discoverMessage =
-        "Discover failed with an unexpected error. Check server logs.";
     }
   }
 

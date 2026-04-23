@@ -14,25 +14,34 @@ const UUID_RE =
  * Body shape:
  *   { type: 'cloud_aws' | 'direct_url',
  *     backendUrl: string,
- *     region?, accessKeyId?, secretAccessKey?   // cloud_aws
- *     confirmed_name?: string                   // closed-period bypass
+ *     known_edge_ids: string[],                // edge IDs to validate (#112)
+ *     region?, accessKeyId?, secretAccessKey?  // cloud_aws only
+ *     confirmed_name?: string                  // closed-period bypass
  *   }
  *
- * Mandatory execution order (AC-ROUTE-1, amendments 2026-04-23):
+ * Mandatory execution order (AC-ROUTE-1, amendments 2026-04-23 + #112):
  *
  *   1. Validate body shape → 400 on malformed.
+ *      Accepts known_edge_ids as string[] (non-array → 400).
  *   2. Permission check via currentUserCanAccessMicrogrid. 404 if the
  *      microgrid is hidden/missing (don't leak existence with a 403).
- *   3. Mid-period lock — 3-branch decision tree:
+ *   3. Secret-preserve gate (cloud_aws): if secretAccessKey blank and an
+ *      existing ciphertext is on record, preserve it. Otherwise 400.
+ *   4. Mid-period lock — 3-branch decision tree:
  *        (a) draft exists            → hard 409
  *        (b) closed exists (no draft) → 409 with requires_typed_confirmation
  *                                       unless body.confirmed_name matches
  *        (c) no periods              → free pass
- *   4. Persist the config (first transaction). fn_ems_encrypt_secret encrypts
- *      the AWS secret key if supplied.
- *   5. Run Discover against the newly-saved config (second transaction;
- *      status fields updated regardless of success).
- *   6. Return { status, message, edgeCount?, edges? }.
+ *   5. Edge-ID validation (#112): if known_edge_ids is non-empty, build the
+ *      candidate OpenEmsClientConfig (using effectiveSecret already resolved
+ *      in step 3) and call getEdgesStatus(known_edge_ids). Any ID absent
+ *      from the response → 400 with invalid_edges. No DB write on failure.
+ *   6. Persist the config (first transaction). fn_ems_encrypt_secret encrypts
+ *      the AWS secret key if supplied. Saves ems_known_edge_ids.
+ *   7. Run Discover against the saved config (second transaction; status
+ *      fields updated regardless of success). Passes known_edge_ids to
+ *      getEdgesStatus instead of []; reuses statuses stashed in step 5.
+ *   8. Return { status, message, edgeCount?, edges? }.
  *
  * Error mapping (OpenEmsError):
  *   auth failure  → status='auth_failed'   message with rotated-key hint
@@ -82,6 +91,33 @@ export async function PUT(
       { error: "backendUrl is required" },
       { status: 400 }
     );
+  }
+
+  // Validate known_edge_ids — must be an array of strings.
+  // Server-side sanitize: trim, filter empties, dedupe (preserve first occurrence).
+  if (!Array.isArray(body.known_edge_ids)) {
+    return NextResponse.json(
+      { error: "known_edge_ids must be an array of strings" },
+      { status: 400 }
+    );
+  }
+  for (const el of body.known_edge_ids as unknown[]) {
+    if (typeof el !== "string") {
+      return NextResponse.json(
+        { error: "known_edge_ids must be an array of strings" },
+        { status: 400 }
+      );
+    }
+  }
+  const rawEdgeIds = body.known_edge_ids as string[];
+  const seenEdgeIds = new Set<string>();
+  const known_edge_ids: string[] = [];
+  for (const id of rawEdgeIds) {
+    const trimmed = id.trim();
+    if (trimmed && !seenEdgeIds.has(trimmed)) {
+      seenEdgeIds.add(trimmed);
+      known_edge_ids.push(trimmed);
+    }
   }
 
   let region: string | undefined;
@@ -229,7 +265,117 @@ export async function PUT(
 
   // Branch (c): no periods — fall through.
 
-  // ── Transaction 1: persist config ──────────────────────────────────────
+  // ── Steps 3b + 5 prep: resolve effectiveSecret early so step 5 can reuse ─
+  //
+  // We build the candidate OpenEmsClientConfig here (before the DB write) so
+  // step 5 (edge-ID validation) can use it without a second decrypt round-trip.
+  // effectiveSecret is also reused by step 7 (Discover after save).
+  let effectiveSecret: string | undefined = secretAccessKey;
+  if (type === "cloud_aws" && preserveExistingSecret) {
+    const { data: decrypted, error: decryptErr } = await supabase.rpc(
+      "fn_get_ems_secret",
+      { _microgrid_id: microgridId }
+    );
+    if (decryptErr || !decrypted) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not retrieve the existing secret to test the connection. Re-enter the secret access key to proceed.",
+        },
+        { status: 500 }
+      );
+    }
+    effectiveSecret = decrypted as string;
+  }
+
+  const candidateConfig: OpenEmsClientConfig =
+    type === "cloud_aws"
+      ? {
+          type: "cloud_aws",
+          url: backendUrl.trim(),
+          region: region as string,
+          accessKeyId: accessKeyId as string,
+          secretAccessKey: effectiveSecret as string,
+        }
+      : { type: "direct_url", url: backendUrl.trim() };
+
+  // ── Step 5: Edge-ID validation (#112) ─────────────────────────────────────
+  //
+  // MUST run BEFORE the UPDATE (step 6) so invalid configs are never persisted.
+  // If known_edge_ids is empty, skip the round-trip (empty list is allowed).
+  // Stash statuses for step 7 reuse to avoid a second round-trip.
+  let step5Statuses: Array<{ edgeId: string; online: boolean }> | null = null;
+
+  if (known_edge_ids.length > 0) {
+    try {
+      const client = createOpenEmsClient(candidateConfig);
+      step5Statuses = await client.getEdgesStatus(known_edge_ids);
+      const foundIds = new Set(step5Statuses.map((s) => s.edgeId));
+      const invalidEdges = known_edge_ids.filter((id) => !foundIds.has(id));
+      if (invalidEdges.length > 0) {
+        const {
+          data: { user: actorUser },
+        } = await supabase.auth.getUser();
+        console.info(
+          JSON.stringify({
+            event: "openems.save.invalid_edges",
+            microgrid_id: microgridId,
+            actor_user_id: actorUser?.id ?? null,
+            invalid_edges: invalidEdges,
+            at: new Date().toISOString(),
+          })
+        );
+        return NextResponse.json(
+          {
+            error:
+              "Some edge IDs were not found on the backend. Remove or fix them before saving.",
+            invalid_edges: invalidEdges,
+          },
+          { status: 400 }
+        );
+      }
+    } catch (err) {
+      // Map OpenEmsError to the same outcome kinds as step 7 so the UI banner
+      // reuses existing handling. These are pre-save errors — nothing is persisted.
+      if (err instanceof OpenEmsError) {
+        if (err.code === "OPENEMS_AUTH_FAILED") {
+          return NextResponse.json(
+            {
+              status: "auth_failed",
+              message:
+                "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).",
+            },
+            { status: 200 }
+          );
+        } else if (err.code === "OPENEMS_UNREACHABLE") {
+          return NextResponse.json(
+            {
+              status: "unreachable",
+              message: `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`,
+            },
+            { status: 200 }
+          );
+        } else {
+          return NextResponse.json(
+            {
+              status: "unknown_error",
+              message: "Edge validation failed with an unexpected error. Check server logs.",
+            },
+            { status: 200 }
+          );
+        }
+      }
+      return NextResponse.json(
+        {
+          status: "unknown_error",
+          message: "Edge validation failed with an unexpected error. Check server logs.",
+        },
+        { status: 200 }
+      );
+    }
+  }
+
+  // ── Step 6: Transaction 1 — persist config ─────────────────────────────────
   //
   // We encrypt the AWS secret via a single RPC + a separate UPDATE. This is
   // two DB round-trips but only one committed transaction for the write
@@ -260,6 +406,7 @@ export async function PUT(
     ems_backend_url: backendUrl.trim(),
     ems_aws_region: type === "cloud_aws" ? region : null,
     ems_aws_access_key_id: type === "cloud_aws" ? accessKeyId : null,
+    ems_known_edge_ids: known_edge_ids,
   };
   if (!preserveExistingSecret) {
     updatePayload.ems_aws_secret_access_key_encrypted =
@@ -292,43 +439,17 @@ export async function PUT(
     );
   }
 
-  // ── Transaction 2: Discover — runs against the candidate config directly.
+  // ── Step 7: Transaction 2 — Discover ───────────────────────────────────────
   //
-  // We build the client from the body (not from getMicrogridEmsConfig) so the
-  // Discover-after-Save round-trip doesn't depend on RLS for reading the
-  // encrypted secret back. This is explicitly the "candidate config" path.
+  // Pass known_edge_ids to getEdgesStatus instead of []. getEdgesStatus([])
+  // returns {} on real OpenEMS backends (verified 2026-04-23 against Kisakye);
+  // the known_edge_ids approach is the correct fix (#112).
   //
-  // When preserving the existing secret, decrypt it once via fn_get_ems_secret
-  // (SECURITY DEFINER; returns plaintext for super_admin / service_role).
-  let effectiveSecret: string | undefined = secretAccessKey;
-  if (type === "cloud_aws" && preserveExistingSecret) {
-    const { data: decrypted, error: decryptErr } = await supabase.rpc(
-      "fn_get_ems_secret",
-      { _microgrid_id: microgridId }
-    );
-    if (decryptErr || !decrypted) {
-      return NextResponse.json(
-        {
-          error:
-            "Could not retrieve the existing secret to test the connection. Re-enter the secret access key to proceed.",
-        },
-        { status: 500 }
-      );
-    }
-    effectiveSecret = decrypted as string;
-  }
-
-  const candidateConfig: OpenEmsClientConfig =
-    type === "cloud_aws"
-      ? {
-          type: "cloud_aws",
-          url: backendUrl.trim(),
-          region: region as string,
-          accessKeyId: accessKeyId as string,
-          secretAccessKey: effectiveSecret as string,
-        }
-      : { type: "direct_url", url: backendUrl.trim() };
-
+  // When known_edge_ids is empty, skip the RPC and return zero_edges immediately
+  // (no edges declared yet — user must configure them via Reconfigure).
+  //
+  // If step 5 already fetched statuses (non-empty list path), reuse them to
+  // avoid a second round-trip to the backend.
   let discoverStatus:
     | "success"
     | "auth_failed"
@@ -343,61 +464,66 @@ export async function PUT(
     alreadyLinked: boolean;
   }> = [];
 
-  try {
-    const client = createOpenEmsClient(candidateConfig);
-    // We need all edges; the Backend exposes getEdgesStatus which returns
-    // a map keyed by edge id. For a candidate config we don't know edge IDs
-    // ahead of time — but the JSON-RPC `getEdgesStatus` needs the list of
-    // IDs. Convention on OpenEMS Backend: an empty list is invalid. So we
-    // use `edgeRpc → getEdges` via a side-channel in a follow-up. For
-    // pilot, we ask the Backend for its edges via `getEdges` RPC which is
-    // a documented Cloud extension. If it fails, we fall back to an empty
-    // list and surface zero_edges.
-    //
-    // For now we implement a minimal-viable Discover by invoking
-    // getEdgesStatus([]) which on many backends returns the full catalog.
-    // A proper getEdges method will land alongside #102 UI work.
-    const statuses = await client.getEdgesStatus([]);
-    if (statuses.length === 0) {
-      discoverStatus = "zero_edges";
-      discoverMessage =
-        "Connected, but the OpenEMS Backend returned zero edges. Check that edges are registered under this backend.";
-    } else {
-      const prefetched = new Set<string>();
-      const { data: existing } = await supabase
-        .from("edges")
-        .select("openems_edge_id")
-        .eq("microgrid_id", microgridId);
-      for (const e of existing ?? []) {
-        if (e.openems_edge_id) prefetched.add(e.openems_edge_id);
-      }
-
-      discoveredEdges = statuses.map((s) => ({
-        openems_edge_id: s.edgeId,
-        name: s.edgeId, // Backend doesn't return a display name here; UI may enrich later.
-        metadata: { online: s.online },
-        alreadyLinked: prefetched.has(s.edgeId),
-      }));
-      discoverMessage = `Connected. ${discoveredEdges.length} edge${discoveredEdges.length === 1 ? "" : "s"} discovered.`;
-    }
-  } catch (err) {
-    if (err instanceof OpenEmsError) {
-      if (err.code === "OPENEMS_AUTH_FAILED") {
-        discoverStatus = "auth_failed";
+  if (known_edge_ids.length === 0) {
+    // Empty list — skip the RPC; surface as zero_edges.
+    discoverStatus = "zero_edges";
+    discoverMessage =
+      "Saved. No edges declared yet — add some in Reconfigure → Known edge IDs to enable the Add Edge flow.";
+  } else {
+    try {
+      const client = createOpenEmsClient(candidateConfig);
+      // Reuse statuses from step 5 when available; otherwise re-fetch.
+      const statuses = step5Statuses ?? await client.getEdgesStatus(known_edge_ids);
+      if (statuses.length === 0) {
+        discoverStatus = "zero_edges";
         discoverMessage =
-          "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
-      } else if (err.code === "OPENEMS_UNREACHABLE") {
-        discoverStatus = "unreachable";
-        discoverMessage = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
+          "Connected, but the OpenEMS Backend returned zero edges. Check that edges are registered under this backend.";
+      } else {
+        const prefetched = new Set<string>();
+        const { data: existing } = await supabase
+          .from("edges")
+          .select("openems_edge_id")
+          .eq("microgrid_id", microgridId);
+        for (const e of existing ?? []) {
+          if (e.openems_edge_id) prefetched.add(e.openems_edge_id);
+        }
+
+        discoveredEdges = statuses.map((s) => ({
+          openems_edge_id: s.edgeId,
+          name: s.edgeId, // Backend doesn't return a display name here; UI may enrich later.
+          metadata: { online: s.online },
+          alreadyLinked: prefetched.has(s.edgeId),
+        }));
+
+        const onlineCount = statuses.filter((s) => s.online).length;
+        const offlineCount = statuses.length - onlineCount;
+        const validatedCount = statuses.length;
+        const totalCount = known_edge_ids.length;
+        if (offlineCount > 0) {
+          discoverMessage = `Connected. ${validatedCount} of ${totalCount} edge${totalCount === 1 ? "" : "s"} validated — ${offlineCount} offline.`;
+        } else {
+          discoverMessage = `Connected. ${validatedCount} of ${totalCount} edge${totalCount === 1 ? "" : "s"} validated.`;
+        }
+      }
+    } catch (err) {
+      if (err instanceof OpenEmsError) {
+        if (err.code === "OPENEMS_AUTH_FAILED") {
+          discoverStatus = "auth_failed";
+          discoverMessage =
+            "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_UNREACHABLE") {
+          discoverStatus = "unreachable";
+          discoverMessage = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
+        } else {
+          discoverStatus = "unknown_error";
+          discoverMessage =
+            "Discover failed with an unexpected error. Check server logs.";
+        }
       } else {
         discoverStatus = "unknown_error";
         discoverMessage =
           "Discover failed with an unexpected error. Check server logs.";
       }
-    } else {
-      discoverStatus = "unknown_error";
-      discoverMessage =
-        "Discover failed with an unexpected error. Check server logs.";
     }
   }
 
@@ -433,6 +559,7 @@ export async function PUT(
           microgrid_id: microgridId,
           actor_user_id: user?.id ?? null,
           ems_type: type,
+          known_edge_ids_count: known_edge_ids.length,
           result_status: discoverStatus,
           edge_count: discoveredEdges.length,
           duration_ms: Date.now() - startedAt,

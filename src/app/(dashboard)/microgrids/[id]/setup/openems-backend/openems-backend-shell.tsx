@@ -38,6 +38,7 @@ type MicrogridProps = {
   ems_backend_url: string | null;
   ems_aws_region: string | null;
   ems_aws_access_key_id: string | null;
+  ems_known_edge_ids: string[];
   ems_last_discover_at: string | null;
   ems_last_discover_status: string | null;
   ems_last_discover_error: string | null;
@@ -62,7 +63,8 @@ type SaveOutcome =
   | { kind: "unreachable"; message: string }
   | { kind: "unknown_error"; message: string }
   | { kind: "permission_denied"; message: string }
-  | { kind: "generic_error"; message: string };
+  | { kind: "generic_error"; message: string }
+  | { kind: "invalid_edges"; message: string; invalidEdges: string[] };
 
 const AWS_REGIONS = [
   "us-east-1",
@@ -109,6 +111,20 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
   );
   const [secretAccessKey, setSecretAccessKey] = React.useState<string>("");
 
+  // Known edge IDs input state.
+  // Prefill logic (3 cases, pinned in #112):
+  //   1. Empty-state form (new microgrid, ems_type == null) → "edge0"
+  //   2. Reconfigure form with a populated list → joined list (e.g. "edge0, edge1")
+  //   3. Reconfigure form with deliberately empty list (ems_type set, list=[]) → ""
+  //      Do NOT re-prefill "edge0" — the user deliberately saved an empty list.
+  const [knownEdgeIds, setKnownEdgeIds] = React.useState<string>(() => {
+    if (initialMode === "empty") return "edge0";
+    if (microgrid.ems_known_edge_ids.length > 0) {
+      return microgrid.ems_known_edge_ids.join(", ");
+    }
+    return "";
+  });
+
   // Mid-period guard banner visibility (derived from draftPeriodsCount +
   // "user clicked Reconfigure"). Distinct from the form-visible flag so
   // that dismissing the banner never opens the form; the user must click
@@ -142,6 +158,8 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     setRegion(microgrid.ems_aws_region ?? "us-east-1");
     setAccessKeyId(microgrid.ems_aws_access_key_id ?? "");
     setSecretAccessKey("");
+    // Prefill known edge IDs from the saved list (case 2 + 3 above).
+    setKnownEdgeIds(microgrid.ems_known_edge_ids.join(", "));
     setIsEditing(true);
   }
 
@@ -157,14 +175,27 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
   // ── Build PUT payload from form state ──────────────────────────────────
   function buildPayload(): Record<string, unknown> | null {
     if (!formType) return null;
+
+    // Parse known_edge_ids: split on comma, trim, filter empties, dedupe.
+    const seenIds = new Set<string>();
+    const parsedEdgeIds: string[] = [];
+    for (const part of knownEdgeIds.split(",")) {
+      const trimmed = part.trim();
+      if (trimmed && !seenIds.has(trimmed)) {
+        seenIds.add(trimmed);
+        parsedEdgeIds.push(trimmed);
+      }
+    }
+
     if (formType === "direct_url") {
-      return { type: "direct_url", backendUrl };
+      return { type: "direct_url", backendUrl, known_edge_ids: parsedEdgeIds };
     }
     const base: Record<string, unknown> = {
       type: "cloud_aws",
       backendUrl,
       region,
       accessKeyId,
+      known_edge_ids: parsedEdgeIds,
     };
     // Only include secretAccessKey when the user actually typed one — an empty
     // string signals "preserve the existing secret" to the server (#102
@@ -215,6 +246,17 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
       }
 
       if (res.status === 400) {
+        // Check for invalid_edges rejection (step 5 validation in the PUT route).
+        if (Array.isArray(json.invalid_edges) && json.invalid_edges.length > 0) {
+          setOutcome({
+            kind: "invalid_edges",
+            message:
+              (typeof json.error === "string" ? json.error : "") ||
+              "Some edge IDs were not found on the backend.",
+            invalidEdges: json.invalid_edges as string[],
+          });
+          return;
+        }
         setOutcome({
           kind: "generic_error",
           message:
@@ -491,6 +533,16 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
                 </div>
               </>
             )}
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Edge IDs
+              </p>
+              <p className="mt-1 font-mono text-xs text-foreground">
+                {microgrid.ems_known_edge_ids.length > 0
+                  ? microgrid.ems_known_edge_ids.join(", ")
+                  : "—"}
+              </p>
+            </div>
           </div>
 
           {/* Right column */}
@@ -649,6 +701,26 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
         </div>
       )}
 
+      {/* Known edge IDs — shown for both connection types, below credentials (#112) */}
+      <div>
+        <label htmlFor="known-edge-ids" className="mb-1 block text-xs font-medium text-foreground">
+          Known edge IDs
+        </label>
+        <Input
+          id="known-edge-ids"
+          type="text"
+          value={knownEdgeIds}
+          onChange={(e) => setKnownEdgeIds(e.target.value)}
+          placeholder="edge0, edge1, edge2"
+          autoComplete="off"
+          spellCheck={false}
+          className="font-mono text-xs"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Comma-separated edge IDs registered on this OpenEMS backend. You can find these in the OpenEMS Backend admin UI under Edges.
+        </p>
+      </div>
+
       {outcome && (
         <OutcomeBanner outcome={outcome} />
       )}
@@ -741,15 +813,22 @@ function OutcomeBanner({ outcome }: { outcome: SaveOutcome }) {
   if (outcome.kind === "success") {
     return (
       <Banner tone="success" title="Connected">
-        Connected. Found {outcome.edgeCount} edge
-        {outcome.edgeCount === 1 ? "" : "s"}.
+        {outcome.message || `Connected. ${outcome.edgeCount} edge${outcome.edgeCount === 1 ? "" : "s"} validated.`}
       </Banner>
     );
   }
   if (outcome.kind === "zero_edges") {
     return (
-      <Banner tone="warn" title="Zero edges discovered">
+      <Banner tone="warn" title="No edges discovered">
         {outcome.message || "The OpenEMS Backend returned zero edges."}
+      </Banner>
+    );
+  }
+  if (outcome.kind === "invalid_edges") {
+    return (
+      <Banner tone="destructive" title="Edge IDs not found">
+        {outcome.message} Remove or fix:{" "}
+        <span className="font-mono">{outcome.invalidEdges.join(", ")}</span>
       </Banner>
     );
   }

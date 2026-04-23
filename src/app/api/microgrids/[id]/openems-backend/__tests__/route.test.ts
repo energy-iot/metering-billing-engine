@@ -190,10 +190,41 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
         backendUrl: "https://lambda.example.com/",
         region: "us-east-1",
         accessKeyId: "AKIA",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
     expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when known_edge_ids is not an array", async () => {
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: "edge0,edge1", // string, not array
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("known_edge_ids must be an array");
+  });
+
+  it("returns 400 when known_edge_ids is missing entirely", async () => {
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        // known_edge_ids intentionally omitted
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("known_edge_ids must be an array");
   });
 
   it("returns 404 when microgrid does not exist", async () => {
@@ -204,6 +235,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -219,6 +251,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -236,6 +269,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -255,6 +289,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -276,6 +311,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -301,6 +337,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0"],
         confirmed_name: MG_NAME,
       }),
       { params: Promise.resolve({ id: MG_ID }) }
@@ -320,6 +357,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [],
         confirmed_name: "WrongName",
       }),
       { params: Promise.resolve({ id: MG_ID }) }
@@ -346,6 +384,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0", "edge1"],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -359,11 +398,9 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     });
   });
 
-  it("auth_failed path: returns 200 + status='auth_failed'", async () => {
+  it("auth_failed path (step 5 edge validation): returns 200 + status='auth_failed'", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
-    registerFrom(mgUpdateHandler(null));
-    registerFrom(mgUpdateHandler(null)); // health update
 
     const { OpenEmsError } = await import("@/lib/openems");
     getEdgesStatusMock.mockRejectedValue(
@@ -378,6 +415,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
         region: "us-east-1",
         accessKeyId: "AKIAEXAMPLEKEYID12345",
         secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        known_edge_ids: ["edge0"],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -387,11 +425,9 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(json.message).toContain("rotated access key");
   });
 
-  it("unreachable path: returns 200 + status='unreachable'", async () => {
+  it("unreachable path (step 5 edge validation): returns 200 + status='unreachable'", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
-    registerFrom(mgUpdateHandler(null));
-    registerFrom(mgUpdateHandler(null));
 
     const { OpenEmsError } = await import("@/lib/openems");
     getEdgesStatusMock.mockRejectedValue(
@@ -403,6 +439,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0"],
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
@@ -412,12 +449,13 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(json.message).toContain("Could not reach");
   });
 
-  it("zero_edges path: returns 200 + status='zero_edges'", async () => {
+  it("zero_edges path: empty known_edge_ids → skip RPC, return zero_edges without calling getEdgesStatus", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
-    registerFrom(mgUpdateHandler(null));
-    registerFrom(mgUpdateHandler(null));
+    registerFrom(mgUpdateHandler(null)); // persist config
+    registerFrom(mgUpdateHandler(null)); // health update
 
+    // getEdgesStatus should NOT be called when known_edge_ids is empty
     getEdgesStatusMock.mockResolvedValue([]);
 
     const { PUT } = await import("../route");
@@ -425,12 +463,16 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       makePutRequest({
         type: "direct_url",
         backendUrl: "http://localhost:8075",
+        known_edge_ids: [], // empty list → skip RPC
       }),
       { params: Promise.resolve({ id: MG_ID }) }
     );
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe("zero_edges");
+    expect(json.message).toContain("No edges declared yet");
+    // Verify getEdgesStatus was NOT called (empty list skips the round-trip)
+    expect(getEdgesStatusMock).not.toHaveBeenCalled();
   });
 
   // AC-TEST-PRESERVE (#102): "Leave blank to keep the current secret"
@@ -460,6 +502,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
         backendUrl: "https://lambda.example.com/",
         region: "us-east-1",
         accessKeyId: "AKIAEXAMPLEKEYID12345",
+        known_edge_ids: ["edge0"],
         // NO secretAccessKey — preserve branch
       }),
       { params: Promise.resolve({ id: MG_ID }) }
@@ -492,6 +535,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
         backendUrl: "https://lambda.example.com/",
         region: "us-east-1",
         accessKeyId: "AKIAEXAMPLEKEYID12345",
+        known_edge_ids: [],
         // NO secretAccessKey
       }),
       { params: Promise.resolve({ id: MG_ID }) }
@@ -499,6 +543,116 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toContain("secretAccessKey");
+  });
+
+  // AC-TEST-EDGE-IDS (#112): edge-ID validation tests
+  it("edge-ID validation: one invalid ID → 400 with invalid_edges, row NOT updated", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([]));
+
+    // Backend returns edge0 but NOT edgeX
+    getEdgesStatusMock.mockResolvedValue([{ edgeId: "edge0", online: true }]);
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0", "edgeX"],
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("not found on the backend");
+    expect(json.invalid_edges).toEqual(["edgeX"]);
+    // No UPDATE should have been called — only mgSelect + billingPeriods
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
+
+  it("edge-ID validation: valid mix of online+offline → save succeeds", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([]));
+    registerFrom(mgUpdateHandler(null)); // persist
+    registerFrom(edgesSelectHandler([]));
+    registerFrom(mgUpdateHandler(null)); // health
+
+    // Both edge0 (online) and edge1 (offline) present in response
+    getEdgesStatusMock.mockResolvedValue([
+      { edgeId: "edge0", online: true },
+      { edgeId: "edge1", online: false },
+    ]);
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0", "edge1"],
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.status).toBe("success");
+    // Message mentions offline count
+    expect(json.message).toContain("offline");
+    expect(json.edges).toHaveLength(2);
+  });
+
+  it("edge-ID validation: all IDs invalid → 400, ems_type stays unchanged", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([]));
+
+    // Backend returns empty — all IDs unknown
+    getEdgesStatusMock.mockResolvedValue([]);
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edgeA", "edgeB"],
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.invalid_edges).toEqual(["edgeA", "edgeB"]);
+    // No DB write — only 2 from() calls (select + billingPeriods)
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
+
+  it("known_edge_ids_count appears in the success log payload (validates log hygiene)", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([]));
+    registerFrom(mgUpdateHandler(null));
+    registerFrom(edgesSelectHandler([]));
+    registerFrom(mgUpdateHandler(null));
+
+    getEdgesStatusMock.mockResolvedValue([
+      { edgeId: "edge0", online: true },
+    ]);
+
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const { PUT } = await import("../route");
+    await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        known_edge_ids: ["edge0"],
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+
+    const logCalls = infoSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    const saveLog = logCalls.find(
+      (l) => l.event === "openems.save_and_test"
+    );
+    expect(saveLog).toBeDefined();
+    expect(saveLog.known_edge_ids_count).toBe(1);
+    infoSpy.mockRestore();
   });
 });
 

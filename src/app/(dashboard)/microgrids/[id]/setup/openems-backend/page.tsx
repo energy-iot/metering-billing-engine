@@ -39,7 +39,7 @@ export default async function OpenemsBackendPage({
   const { data: mg, error: mgErr } = await supabase
     .from("microgrids")
     .select(
-      "id, name, ems_type, ems_backend_url, ems_aws_region, ems_aws_access_key_id, ems_last_discover_at, ems_last_discover_status, ems_last_discover_error, ems_last_discover_count"
+      "id, name, ems_type, ems_backend_url, ems_aws_region, ems_aws_access_key_id, ems_known_edge_ids, ems_last_discover_at, ems_last_discover_status, ems_last_discover_error, ems_last_discover_count"
     )
     .eq("id", id)
     .maybeSingle<{
@@ -49,6 +49,7 @@ export default async function OpenemsBackendPage({
       ems_backend_url: string | null;
       ems_aws_region: string | null;
       ems_aws_access_key_id: string | null;
+      ems_known_edge_ids: string[];
       ems_last_discover_at: string | null;
       ems_last_discover_status: string | null;
       ems_last_discover_error: string | null;
@@ -105,6 +106,7 @@ export default async function OpenemsBackendPage({
           ems_backend_url: mg.ems_backend_url,
           ems_aws_region: mg.ems_aws_region,
           ems_aws_access_key_id: mg.ems_aws_access_key_id,
+          ems_known_edge_ids: mg.ems_known_edge_ids ?? [],
           ems_last_discover_at: mg.ems_last_discover_at,
           ems_last_discover_status: mg.ems_last_discover_status,
           ems_last_discover_error: mg.ems_last_discover_error,

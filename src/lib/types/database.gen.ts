@@ -443,6 +443,7 @@ export type Database = {
           ems_aws_region: string | null
           ems_aws_secret_access_key_encrypted: string | null
           ems_backend_url: string | null
+          ems_known_edge_ids: string[]
           ems_last_discover_at: string | null
           ems_last_discover_count: number | null
           ems_last_discover_error: string | null
@@ -467,6 +468,7 @@ export type Database = {
           ems_aws_region?: string | null
           ems_aws_secret_access_key_encrypted?: string | null
           ems_backend_url?: string | null
+          ems_known_edge_ids?: string[]
           ems_last_discover_at?: string | null
           ems_last_discover_count?: number | null
           ems_last_discover_error?: string | null
@@ -491,6 +493,7 @@ export type Database = {
           ems_aws_region?: string | null
           ems_aws_secret_access_key_encrypted?: string | null
           ems_backend_url?: string | null
+          ems_known_edge_ids?: string[]
           ems_last_discover_at?: string | null
           ems_last_discover_count?: number | null
           ems_last_discover_error?: string | null
@@ -744,6 +747,7 @@ export type Database = {
         }
         Returns: string
       }
+      fn_edge_ids_all_nonempty: { Args: { ids: string[] }; Returns: boolean }
       fn_ems_decrypt_secret: { Args: { p_ciphertext: string }; Returns: string }
       fn_ems_encrypt_secret: { Args: { p_plaintext: string }; Returns: string }
       fn_entity_delete_community: { Args: { p_id: string }; Returns: number }

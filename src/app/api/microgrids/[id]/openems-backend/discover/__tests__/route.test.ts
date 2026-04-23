@@ -134,13 +134,25 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     expect(json.error).toContain("OpenEMS Backend not configured");
   });
 
-  it("success path computes alreadyLinked via prefetched Set", async () => {
+  it("success path: reads ems_known_edge_ids, passes to getEdgesStatus, computes alreadyLinked", async () => {
     getMicrogridEmsConfigMock.mockResolvedValue({
       type: "direct_url",
       url: "http://localhost:8075",
     });
 
-    // 1st from call: prefetch existing edges.
+    // 1st from call: read ems_known_edge_ids (#112 separate query).
+    registerFrom(() => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data: { ems_known_edge_ids: ["edge0", "edge1", "edge2"] },
+              error: null,
+            }),
+        }),
+      }),
+    }));
+    // 2nd from call: prefetch existing edges.
     registerFrom(() => ({
       select: () => ({
         eq: () =>
@@ -150,7 +162,7 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
           }),
       }),
     }));
-    // 2nd from call: health update.
+    // 3rd from call: health update.
     registerFrom(() => ({
       update: () => ({
         eq: () => Promise.resolve({ error: null }),
@@ -181,6 +193,46 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
       ).map((e) => [e.openems_edge_id, e.alreadyLinked])
     );
     expect(byId).toEqual({ edge0: true, edge1: false, edge2: true });
+
+    // Verify getEdgesStatus was called with the known IDs (NOT [])
+    expect(getEdgesStatusMock).toHaveBeenCalledWith(["edge0", "edge1", "edge2"]);
+  });
+
+  it("empty ems_known_edge_ids → zero_edges without calling getEdgesStatus", async () => {
+    getMicrogridEmsConfigMock.mockResolvedValue({
+      type: "direct_url",
+      url: "http://localhost:8075",
+    });
+
+    // 1st from call: read ems_known_edge_ids → empty array.
+    registerFrom(() => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data: { ems_known_edge_ids: [] },
+              error: null,
+            }),
+        }),
+      }),
+    }));
+    // 2nd from call: health update.
+    registerFrom(() => ({
+      update: () => ({
+        eq: () => Promise.resolve({ error: null }),
+      }),
+    }));
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ id: MG_ID }),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.status).toBe("zero_edges");
+    expect(json.message).toContain("No edges declared yet");
+    // getEdgesStatus must NOT be called
+    expect(getEdgesStatusMock).not.toHaveBeenCalled();
   });
 
   it("maps OPENEMS_UNREACHABLE to status='unreachable'", async () => {
@@ -188,7 +240,20 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
       type: "direct_url",
       url: "http://localhost:8075",
     });
-    // single health-update call only (no edges prefetched since we throw first).
+
+    // 1st from call: read ems_known_edge_ids.
+    registerFrom(() => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data: { ems_known_edge_ids: ["edge0"] },
+              error: null,
+            }),
+        }),
+      }),
+    }));
+    // 2nd from call: health-update call only (no edges prefetched since we throw first).
     registerFrom(() => ({
       update: () => ({
         eq: () => Promise.resolve({ error: null }),
