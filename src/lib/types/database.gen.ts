@@ -87,6 +87,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "billing_line_items_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "microgrid_shared_devices"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "billing_line_items_household_id_fkey"
             columns: ["household_id"]
             isOneToOne: false
@@ -293,6 +300,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "household_devices_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "microgrid_shared_devices"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "household_devices_household_id_fkey"
             columns: ["household_id"]
             isOneToOne: false
@@ -402,6 +416,13 @@ export type Database = {
             columns: ["device_id"]
             isOneToOne: false
             referencedRelation: "devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meter_readings_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "microgrid_shared_devices"
             referencedColumns: ["id"]
           },
         ]
@@ -562,7 +583,34 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      microgrid_shared_devices: {
+        Row: {
+          config: Json | null
+          created_at: string | null
+          device_type: Database["public"]["Enums"]["device_type"] | null
+          edge_id: string | null
+          id: string | null
+          microgrid_id: string | null
+          name: string | null
+          openems_component_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "devices_edge_id_fkey"
+            columns: ["edge_id"]
+            isOneToOne: false
+            referencedRelation: "edges"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "edges_microgrid_id_fkey"
+            columns: ["microgrid_id"]
+            isOneToOne: false
+            referencedRelation: "microgrids"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       is_super_admin: { Args: never; Returns: boolean }

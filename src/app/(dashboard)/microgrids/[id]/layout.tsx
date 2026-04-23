@@ -67,12 +67,12 @@ export default async function MicrogridLayout({
       kind: "Microgrid",
       label: microgrid.name,
       count: microgridCount,
-      href: `/microgrids/${id}/tenants`,
+      href: `/microgrids/${id}`,
       active: true,
       siblings: microgridCount > 1
         ? siblings
             ?.filter((s) => s.id !== id)
-            .map((s) => ({ label: s.name, href: `/microgrids/${s.id}/tenants` }))
+            .map((s) => ({ label: s.name, href: `/microgrids/${s.id}` }))
         : undefined,
     },
   ];
