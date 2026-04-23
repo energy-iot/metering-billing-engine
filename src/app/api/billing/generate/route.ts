@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import { calculateTieredCost } from "@/lib/billing/calculations";
 import type { BillingPeriod, RateSchedule } from "@/lib/types/domain";
 import type { DeviceConfig } from "@/lib/adapters/types";
@@ -77,7 +78,8 @@ export async function POST(request: NextRequest) {
   const rateSchedule = schedule as RateSchedule;
 
   // 3. Fetch households with their primary-consumption-meter device + parent edge
-  //    in a single relational query.
+  //    in a single relational query. Post-#101: openems_backend_url lives on the
+  //    microgrid, not the edge — so we don't select it per-device here.
   const { data: householdsRaw, error: householdsError } = await supabase
     .from("households")
     .select(`
@@ -89,8 +91,7 @@ export async function POST(request: NextRequest) {
           id,
           openems_component_id,
           edges!inner(
-            openems_edge_id,
-            openems_backend_url
+            openems_edge_id
           )
         )
       )
@@ -121,7 +122,6 @@ export async function POST(request: NextRequest) {
         openems_component_id: string | null;
         edges: {
           openems_edge_id: string | null;
-          openems_backend_url: string | null;
         };
       };
     }[];
@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
     const device = primaryHD.devices;
     const edge = device.edges;
 
-    if (!edge.openems_edge_id || !device.openems_component_id || !edge.openems_backend_url) {
+    if (!edge.openems_edge_id || !device.openems_component_id) {
       errors.push({
         householdId: h.id,
         householdName: h.display_name,
@@ -157,10 +157,8 @@ export async function POST(request: NextRequest) {
 
     deviceConfigs.push({
       id: device.id,
-      dataSourceType: "openems",
       edgeOpenemsId: edge.openems_edge_id,
       componentId: device.openems_component_id,
-      openems_backend_url: edge.openems_backend_url,
     });
     deviceToHouseholdMap.set(device.id, h.id);
   }
@@ -223,9 +221,36 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ lineItems: 0, errors });
   }
 
-  // 5. Call OpenEMS for readings
+  // 5. Call OpenEMS for readings. Resolve the microgrid-level config first
+  //    — the billing_period already names the microgrid.
+  let emsConfig;
   try {
-    const client = getOpenEmsClient();
+    emsConfig = await getMicrogridEmsConfig(
+      supabase,
+      billingPeriod.microgrid_id
+    );
+  } catch (err) {
+    if (err instanceof OpenEmsError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code },
+        { status: err.statusCode }
+      );
+    }
+    throw err;
+  }
+
+  if (!emsConfig) {
+    return NextResponse.json(
+      {
+        error:
+          "OpenEMS Backend not configured for this microgrid. Configure it on the OpenEMS Backend tab first.",
+      },
+      { status: 409 }
+    );
+  }
+
+  try {
+    const client = createOpenEmsClient(emsConfig);
     const readings = await client.getReadings(
       deviceConfigs,
       billingPeriod.start_date,

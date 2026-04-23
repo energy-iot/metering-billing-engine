@@ -14,6 +14,7 @@ export class OpenEmsError extends Error {
 // "OPENEMS_UNREACHABLE" (503) — fetch failed (network error, timeout)
 // "OPENEMS_AUTH_FAILED" (401) — 401 from B2B REST
 // "OPENEMS_RPC_ERROR" (502) — JSON-RPC error response
-// "OPENEMS_INVALID_CONFIG" (503) — missing env vars
-// "METER_NO_DATA_SOURCE" (400) — meter has no data_source_config
-// "METER_INVALID_DATA_SOURCE" (400) — data_source_config malformed
+// "OPENEMS_INVALID_CONFIG" (503) — missing or malformed config
+// "OPENEMS_NOT_CONFIGURED" (409) — microgrid has no ems_type set
+// "OPENEMS_FORBIDDEN" (403) — caller lacks access to decrypt secret
+// "DEVICE_INVALID_DATA_SOURCE" (400) — device config malformed

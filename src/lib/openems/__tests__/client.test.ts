@@ -26,7 +26,9 @@ function mockResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-// Helper to build a DeviceConfig fixture
+// Helper to build a DeviceConfig fixture.
+// Post-#101: DeviceConfig no longer carries dataSourceType / openems_backend_url
+// — the client is constructed with a microgrid-scoped URL.
 function makeDeviceConfig(
   id: string,
   edgeOpenemsId: string,
@@ -34,10 +36,8 @@ function makeDeviceConfig(
 ): DeviceConfig {
   return {
     id,
-    dataSourceType: "openems",
     edgeOpenemsId,
     componentId,
-    openems_backend_url: "http://localhost:8075",
   };
 }
 
@@ -365,10 +365,8 @@ describe("OpenEmsClient", () => {
       const devices: DeviceConfig[] = [
         {
           id: "device-uuid-1",
-          dataSourceType: "openems",
           edgeOpenemsId: "", // invalid — empty string
           componentId: "meter0",
-          openems_backend_url: "http://localhost:8075",
         },
       ];
 
@@ -385,10 +383,8 @@ describe("OpenEmsClient", () => {
       const devices: DeviceConfig[] = [
         {
           id: "device-uuid-1",
-          dataSourceType: "openems",
           edgeOpenemsId: "edge0",
           componentId: "", // invalid — empty string
-          openems_backend_url: "http://localhost:8075",
         },
       ];
 
