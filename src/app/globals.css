@@ -106,7 +106,7 @@
 }
 
 @import "tailwindcss";
-@plugin "tw-animate-css";
+@import "tw-animate-css";
 
 body {
   background: var(--background);
