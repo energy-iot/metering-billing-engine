@@ -5,6 +5,7 @@ import type { Device, Edge, Household, HouseholdDevice } from "@/lib/types/domai
 import { StatusChip } from "@/components/ui/status-chip";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { DiscoverDevices } from "@/components/DiscoverDevices";
 
 // Setup > Edges > [edgeId] — edge detail (D2 / #53).
 // Lists devices on this edge. For each device, shows the linked household
@@ -110,6 +111,16 @@ export default async function EdgeDetailPage({
           </p>
         )}
       </div>
+
+      {/* Discover devices — only available for OpenEMS-typed edges */}
+      {edge.data_source_type === "openems" && edge.openems_edge_id && (
+        <div className="rounded-lg border border-border bg-card p-6">
+          <DiscoverDevices
+            edgeDbId={edgeId}
+            openemsEdgeId={edge.openems_edge_id}
+          />
+        </div>
+      )}
 
       {(!devices || devices.length === 0) ? (
         <p className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
