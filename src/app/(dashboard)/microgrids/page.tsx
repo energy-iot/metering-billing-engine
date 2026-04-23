@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Microgrid } from "@/lib/types/domain";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 type MicrogridWithHouseholdCount = Microgrid & {
   household_count: number;
@@ -13,31 +15,30 @@ export default async function MicrogridsPage({
   const { community: communityId } = await searchParams;
   const supabase = await createClient();
 
-  // When a community filter is present, look up the community name for the heading.
-  let communityName: string | null = null;
-  let communityNotFound = false;
+  // Resolve breadcrumb levels in parallel with data fetch.
+  const [levelsResult, communityResult, microgridsResult] = await Promise.all([
+    getHierarchyLevels(supabase, {
+      kind: "microgrids",
+      communityId,
+    }),
+    communityId
+      ? supabase
+          .from("communities")
+          .select("name")
+          .eq("id", communityId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    (() => {
+      let query = supabase.from("microgrids").select("*");
+      if (communityId) query = query.eq("community_id", communityId);
+      return query.returns<Microgrid[]>();
+    })(),
+  ]);
 
-  if (communityId) {
-    const { data: community } = await supabase
-      .from("communities")
-      .select("name")
-      .eq("id", communityId)
-      .maybeSingle();
-
-    if (community) {
-      communityName = community.name;
-    } else {
-      communityNotFound = true;
-    }
-  }
-
-  // Build the microgrids query, optionally filtered by community.
-  let query = supabase.from("microgrids").select("*");
-  if (communityId) {
-    query = query.eq("community_id", communityId);
-  }
-
-  const { data: microgrids, error } = await query.returns<Microgrid[]>();
+  const levels = levelsResult;
+  const communityName = communityResult.data?.name ?? null;
+  const communityNotFound = communityId != null && !communityResult.data;
+  const { data: microgrids, error } = microgridsResult;
 
   const heading = communityName
     ? `${communityName} · Microgrids`
@@ -54,6 +55,7 @@ export default async function MicrogridsPage({
   if (communityNotFound) {
     return (
       <div>
+        <HierarchyNav levels={levels} className="mb-4" />
         <h1 className="mb-6 text-2xl font-semibold text-foreground">
           Microgrids
         </h1>
@@ -67,6 +69,7 @@ export default async function MicrogridsPage({
   if (!microgrids || microgrids.length === 0) {
     return (
       <div>
+        <HierarchyNav levels={levels} className="mb-4" />
         <h1 className="mb-6 text-2xl font-semibold text-foreground">
           {heading}
         </h1>
@@ -93,6 +96,7 @@ export default async function MicrogridsPage({
 
   return (
     <div>
+      <HierarchyNav levels={levels} className="mb-4" />
       <h1 className="mb-6 text-2xl font-semibold text-foreground">{heading}</h1>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {microgridsWithCounts.map((mg) => {

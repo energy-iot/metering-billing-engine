@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import type { BillingPeriod } from "@/lib/types/domain";
 import { BillingPeriodList } from "@/components/BillingPeriodList";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 export default async function BillingPage({
   params,
@@ -9,6 +11,11 @@ export default async function BillingPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "microgrid",
+    microgridId: id,
+  });
 
   // Step 1: Fetch periods
   const { data: periods, error } = await supabase
@@ -60,11 +67,14 @@ export default async function BillingPage({
   }
 
   return (
-    <BillingPeriodList
-      microgridId={id}
-      periods={periods ?? []}
-      summaries={summaries}
-      currency={microgridResult.data?.currency ?? "UGX"}
-    />
+    <>
+      <HierarchyNav levels={levels} className="mb-4" />
+      <BillingPeriodList
+        microgridId={id}
+        periods={periods ?? []}
+        summaries={summaries}
+        currency={microgridResult.data?.currency ?? "UGX"}
+      />
+    </>
   );
 }

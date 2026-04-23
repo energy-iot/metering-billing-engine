@@ -2,6 +2,8 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import type { Device } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 // Setup > Edges > Shared (D2 / #53).
 // Devices on this microgrid's edges that are NOT linked to any household.
@@ -23,6 +25,11 @@ export default async function SharedDevicesPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "microgrid",
+    microgridId: id,
+  });
 
   const { data: sharedDevices, error: devErr } = await supabase
     .from("microgrid_shared_devices")
@@ -53,6 +60,7 @@ export default async function SharedDevicesPage({
 
   return (
     <div className="space-y-4">
+      <HierarchyNav levels={levels} className="mb-2" />
       <div>
         <Link
           href={`/microgrids/${id}/setup/edges`}

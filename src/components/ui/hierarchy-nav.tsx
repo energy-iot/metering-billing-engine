@@ -23,7 +23,7 @@ import * as React from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "@/lib/utils";
 
-export type HierarchyKind = "Organization" | "Community" | "Microgrid" | "Edge";
+export type HierarchyKind = "Organization" | "Community" | "Microgrid" | "Edge" | "Household";
 
 export type HierarchyLevel = {
   kind: HierarchyKind;

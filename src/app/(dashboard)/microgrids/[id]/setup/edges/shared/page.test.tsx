@@ -13,6 +13,11 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ from: mockFrom }),
 }));
 
+// Stub getHierarchyLevels so page tests don't need a full Supabase mock chain.
+vi.mock("@/lib/hierarchy", () => ({
+  getHierarchyLevels: vi.fn().mockResolvedValue([]),
+}));
+
 import SharedDevicesPage from "./page";
 
 function buildEmptyQuery() {
