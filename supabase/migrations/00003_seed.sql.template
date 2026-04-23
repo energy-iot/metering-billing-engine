@@ -1,0 +1,206 @@
+-- 00003_seed.sql  (GENERATED — do not commit the populated file)
+-- Produced by:  envsubst < 00003_seed.sql.template > 00003_seed.sql
+--
+-- Required env vars (populated from .env.local by setup.sh):
+--   SEED_ADMIN_PASSWORD  — bcrypt hash for the super_admin seed user (admin@eiot.energy)
+--   SEED_AARON_PASSWORD  — bcrypt hash for the org_manager seed user (aaron@kisakye.ug)
+--
+-- NOTE: values that look like ${VAR} are envsubst placeholders; any $$ in PL/pgSQL is
+-- NOT touched by envsubst (envsubst only replaces ${NAME} and $NAME forms). If you add
+-- PL/pgSQL functions here, watch for $quoted$ tag collisions.
+--
+-- Seeds:
+--   1 NFE organization (Kampala, Uganda) with address
+--   1 Kisakye community with address
+--   1 microgrid ("Kisakye") with address + lat/lng
+--   1 OpenEMS edge ("Metering Pi")
+--   10 consumption_meter devices on that edge
+--   10 households (5x Block A + 5x Block B, no real PII)
+--   10 household_devices rows (role='primary_consumption_meter')
+--   1 rate_schedule (Aaron's real UGX tariffs — non-monotonic by design)
+--   2 auth users (super_admin admin@eiot.energy, org_manager aaron@kisakye.ug) + user_roles
+--   household_users is seeded EMPTY (pattern deferred pending API user pattern decision)
+
+-- ── Organization: NFE ───────────────────────────────────────────────────
+INSERT INTO organizations (
+  id, name,
+  address_line1, address_city, address_region, address_country
+) VALUES (
+  'a0000000-0000-0000-0000-000000000001',
+  'New Frontiers Energy (NFE)',
+  'Plot 42, Kampala Rd',
+  'Kampala',
+  'Central Region',
+  'Uganda'
+);
+
+-- ── Community: Kisakye ──────────────────────────────────────────────────
+INSERT INTO communities (
+  id, org_id, name,
+  address_city, address_region, address_country,
+  geography_notes
+) VALUES (
+  'c0000000-0000-0000-0000-000000000001',
+  'a0000000-0000-0000-0000-000000000001',
+  'Kisakye',
+  'Kisakye',
+  'Central Region',
+  'Uganda',
+  'Multi-block community; single transformer as of 2026'
+);
+
+-- ── Microgrid: Kisakye Microgrid ────────────────────────────────────────
+INSERT INTO microgrids (
+  id, community_id, name, currency,
+  address_city, address_region, address_country,
+  lat, lng
+) VALUES (
+  'b0000000-0000-0000-0000-000000000001',
+  'c0000000-0000-0000-0000-000000000001',
+  'Kisakye',
+  'UGX',
+  'Kisakye',
+  'Central Region',
+  'Uganda',
+  0.3476,
+  32.5825
+);
+
+-- ── Edge: Metering Pi (OpenEMS) ─────────────────────────────────────────
+INSERT INTO edges (
+  id, microgrid_id, name,
+  data_source_type, openems_backend_url, openems_edge_id,
+  role
+) VALUES (
+  'e0000000-0000-0000-0000-000000000001',
+  'b0000000-0000-0000-0000-000000000001',
+  'Metering Pi',
+  'openems',
+  'http://localhost:8075',
+  'edge0',
+  'metering'
+);
+
+-- ── Devices: 10 consumption_meters on Metering Pi ───────────────────────
+INSERT INTO devices (id, edge_id, name, device_type, openems_component_id) VALUES
+  ('d0000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-000000000001', 'Meter 01', 'consumption_meter', 'meter01'),
+  ('d0000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-000000000001', 'Meter 02', 'consumption_meter', 'meter02'),
+  ('d0000000-0000-0000-0000-000000000003', 'e0000000-0000-0000-0000-000000000001', 'Meter 03', 'consumption_meter', 'meter03'),
+  ('d0000000-0000-0000-0000-000000000004', 'e0000000-0000-0000-0000-000000000001', 'Meter 04', 'consumption_meter', 'meter04'),
+  ('d0000000-0000-0000-0000-000000000005', 'e0000000-0000-0000-0000-000000000001', 'Meter 05', 'consumption_meter', 'meter05'),
+  ('d0000000-0000-0000-0000-000000000006', 'e0000000-0000-0000-0000-000000000001', 'Meter 06', 'consumption_meter', 'meter06'),
+  ('d0000000-0000-0000-0000-000000000007', 'e0000000-0000-0000-0000-000000000001', 'Meter 07', 'consumption_meter', 'meter07'),
+  ('d0000000-0000-0000-0000-000000000008', 'e0000000-0000-0000-0000-000000000001', 'Meter 08', 'consumption_meter', 'meter08'),
+  ('d0000000-0000-0000-0000-000000000009', 'e0000000-0000-0000-0000-000000000001', 'Meter 09', 'consumption_meter', 'meter09'),
+  ('d0000000-0000-0000-0000-000000000010', 'e0000000-0000-0000-0000-000000000001', 'Meter 10', 'consumption_meter', 'meter10');
+
+-- ── Households: 5x Block A + 5x Block B (no real PII) ───────────────────
+INSERT INTO households (id, microgrid_id, display_name, unit_label) VALUES
+  ('f0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 'Block A, Unit 1', 'A-1'),
+  ('f0000000-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-000000000001', 'Block A, Unit 2', 'A-2'),
+  ('f0000000-0000-0000-0000-000000000003', 'b0000000-0000-0000-0000-000000000001', 'Block A, Unit 3', 'A-3'),
+  ('f0000000-0000-0000-0000-000000000004', 'b0000000-0000-0000-0000-000000000001', 'Block A, Unit 4', 'A-4'),
+  ('f0000000-0000-0000-0000-000000000005', 'b0000000-0000-0000-0000-000000000001', 'Block A, Unit 5', 'A-5'),
+  ('f0000000-0000-0000-0000-000000000006', 'b0000000-0000-0000-0000-000000000001', 'Block B, Unit 1', 'B-1'),
+  ('f0000000-0000-0000-0000-000000000007', 'b0000000-0000-0000-0000-000000000001', 'Block B, Unit 2', 'B-2'),
+  ('f0000000-0000-0000-0000-000000000008', 'b0000000-0000-0000-0000-000000000001', 'Block B, Unit 3', 'B-3'),
+  ('f0000000-0000-0000-0000-000000000009', 'b0000000-0000-0000-0000-000000000001', 'Block B, Unit 4', 'B-4'),
+  ('f0000000-0000-0000-0000-000000000010', 'b0000000-0000-0000-0000-000000000001', 'Block B, Unit 5', 'B-5');
+
+-- ── household_devices: 1:1 primary_consumption_meter per household ──────
+INSERT INTO household_devices (household_id, device_id, role) VALUES
+  ('f0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000002', 'd0000000-0000-0000-0000-000000000002', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000003', 'd0000000-0000-0000-0000-000000000003', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000004', 'd0000000-0000-0000-0000-000000000004', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000005', 'd0000000-0000-0000-0000-000000000005', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000006', 'd0000000-0000-0000-0000-000000000006', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000007', 'd0000000-0000-0000-0000-000000000007', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000008', 'd0000000-0000-0000-0000-000000000008', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000009', 'd0000000-0000-0000-0000-000000000009', 'primary_consumption_meter'),
+  ('f0000000-0000-0000-0000-000000000010', 'd0000000-0000-0000-0000-000000000010', 'primary_consumption_meter');
+
+-- ── Rate schedule ───────────────────────────────────────────────────────
+-- Aaron's real Kisakye tariffs as of 2026 — non-monotonic by design
+-- (tier 3 reflects subsidized middle band).
+INSERT INTO rate_schedules (microgrid_id, tiers, service_charge, tax_rate) VALUES
+  ('b0000000-0000-0000-0000-000000000001',
+   '[{"label": "1st Tier", "min_kwh": 1, "max_kwh": 15, "rate_per_kwh": 250.0}, {"label": "2nd Tier", "min_kwh": 16, "max_kwh": 80, "rate_per_kwh": 756.2}, {"label": "3rd Tier", "min_kwh": 81, "max_kwh": 150, "rate_per_kwh": 412.0}, {"label": "4th Tier", "min_kwh": 151, "max_kwh": null, "rate_per_kwh": 756.2}]',
+   5320, 0.18);
+
+-- ── Auth users: admin (super_admin) + aaron (org_manager) ───────────────
+-- Passwords are bcrypt hashes injected at envsubst time (never committed).
+-- Deterministic UUIDs so local tooling can reliably reference them.
+
+-- admin@eiot.energy
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password,
+  email_confirmed_at, last_sign_in_at,
+  raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at,
+  confirmation_token, email_change, email_change_token_new, recovery_token
+) VALUES (
+  '00000000-0000-0000-0000-000000000000',
+  'a1111111-1111-1111-1111-111111111111',
+  'authenticated', 'authenticated',
+  'admin@eiot.energy',
+  '${SEED_ADMIN_PASSWORD}',
+  now(), now(),
+  '{"provider":"email","providers":["email"]}', '{}',
+  now(), now(), '', '', '', ''
+);
+
+INSERT INTO auth.identities (
+  id, user_id, provider_id, identity_data, provider,
+  last_sign_in_at, created_at, updated_at
+) VALUES (
+  'a1111111-1111-1111-1111-111111111111',
+  'a1111111-1111-1111-1111-111111111111',
+  'a1111111-1111-1111-1111-111111111111',
+  jsonb_build_object('sub', 'a1111111-1111-1111-1111-111111111111', 'email', 'admin@eiot.energy'),
+  'email', now(), now(), now()
+);
+
+-- aaron@kisakye.ug
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password,
+  email_confirmed_at, last_sign_in_at,
+  raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at,
+  confirmation_token, email_change, email_change_token_new, recovery_token
+) VALUES (
+  '00000000-0000-0000-0000-000000000000',
+  'a2222222-2222-2222-2222-222222222222',
+  'authenticated', 'authenticated',
+  'aaron@kisakye.ug',
+  '${SEED_AARON_PASSWORD}',
+  now(), now(),
+  '{"provider":"email","providers":["email"]}', '{}',
+  now(), now(), '', '', '', ''
+);
+
+INSERT INTO auth.identities (
+  id, user_id, provider_id, identity_data, provider,
+  last_sign_in_at, created_at, updated_at
+) VALUES (
+  'a2222222-2222-2222-2222-222222222222',
+  'a2222222-2222-2222-2222-222222222222',
+  'a2222222-2222-2222-2222-222222222222',
+  jsonb_build_object('sub', 'a2222222-2222-2222-2222-222222222222', 'email', 'aaron@kisakye.ug'),
+  'email', now(), now(), now()
+);
+
+-- ── user_roles ──────────────────────────────────────────────────────────
+-- super_admin row: scope_id IS NULL (allowed by CHECK constraint; scope_type still required)
+INSERT INTO user_roles (user_id, role, scope_type, scope_id) VALUES
+  ('a1111111-1111-1111-1111-111111111111', 'super_admin', 'org', NULL);
+
+-- org_manager for Aaron, scoped to NFE. Note: ticket summary mentioned community_admin,
+-- but the entity-model MVP ships only super_admin + org_manager — community_admin is
+-- deferred. Aaron correctly sees his org's full hierarchy as org_manager.
+INSERT INTO user_roles (user_id, role, scope_type, scope_id) VALUES
+  ('a2222222-2222-2222-2222-222222222222', 'org_manager', 'org', 'a0000000-0000-0000-0000-000000000001');
+
+-- ── household_users: seeded EMPTY ───────────────────────────────────────
+-- Population pattern deferred until API user pattern A/B decision lands
+-- (see mbe-docs/docs/entity-model.md § "API user pattern").

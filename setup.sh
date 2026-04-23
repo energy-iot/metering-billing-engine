@@ -98,6 +98,9 @@ else
     fi
 
     check_command "supabase" "brew install supabase/tap/supabase"
+    # envsubst (from GNU gettext) is NOT installed by default on macOS — fail fast
+    # with a clear install hint so the migration-seed generation step doesn't surprise.
+    check_command "envsubst" "brew install gettext  (then: echo 'export PATH=\"/usr/local/opt/gettext/bin:\$PATH\"' >> ~/.zshrc)"
   fi
 fi
 
@@ -138,12 +141,52 @@ check_existing_env() {
   return 0
 }
 
+# ── Seed-migration generation (shared helper, used by local + docker modes) ──
+# Reads SEED_ADMIN_PASSWORD and SEED_AARON_PASSWORD from environment or .env.local
+# and runs envsubst to produce supabase/migrations/00003_seed.sql (gitignored).
+# Uses a bcrypt hash of 'admin123' as the default if vars are unset.
+generate_seed_migration() {
+  # Fail fast if envsubst is missing (docker mode doesn't check prereqs for envsubst yet).
+  if ! command -v envsubst >/dev/null 2>&1; then
+    err "envsubst is required to generate supabase/migrations/00003_seed.sql."
+    err "  Install: brew install gettext"
+    exit 1
+  fi
+  local seed_admin_password="${SEED_ADMIN_PASSWORD:-}"
+  local seed_aaron_password="${SEED_AARON_PASSWORD:-}"
+  if [ -f .env.local ]; then
+    if [ -z "$seed_admin_password" ]; then
+      seed_admin_password=$(grep -E '^SEED_ADMIN_PASSWORD=' .env.local | sed -E 's/^SEED_ADMIN_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/' || true)
+    fi
+    if [ -z "$seed_aaron_password" ]; then
+      seed_aaron_password=$(grep -E '^SEED_AARON_PASSWORD=' .env.local | sed -E 's/^SEED_AARON_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/' || true)
+    fi
+  fi
+  if [ -z "$seed_admin_password" ]; then
+    seed_admin_password='$2y$10$4bDaHdlixW.Y5evWx6qlu.trIo9vOAHTpLJrn2iObUG1rtdv9citG'
+    warn "SEED_ADMIN_PASSWORD unset; using default (admin123). Set in .env.local to override."
+  fi
+  if [ -z "$seed_aaron_password" ]; then
+    seed_aaron_password='$2y$10$4bDaHdlixW.Y5evWx6qlu.trIo9vOAHTpLJrn2iObUG1rtdv9citG'
+    warn "SEED_AARON_PASSWORD unset; using default (admin123). Set in .env.local to override."
+  fi
+  log "Generating supabase/migrations/00003_seed.sql from template..."
+  SEED_ADMIN_PASSWORD="$seed_admin_password" \
+  SEED_AARON_PASSWORD="$seed_aaron_password" \
+    envsubst '${SEED_ADMIN_PASSWORD} ${SEED_AARON_PASSWORD}' \
+    < supabase/migrations/00003_seed.sql.template \
+    > supabase/migrations/00003_seed.sql
+}
+
 # ── Docker mode ──────────────────────────────────────────────────────
 if [ "$MODE" = "docker" ]; then
   if [ "$FORCE" = true ]; then
     log "Force mode: tearing down existing containers and volumes..."
     docker compose down -v
   fi
+
+  # Generate the seed migration before docker compose mounts the migrations dir.
+  generate_seed_migration
 
   log "Building and starting Docker stack..."
   docker compose up --build -d
@@ -183,10 +226,13 @@ elif [ "$MODE" = "local" ]; then
   supabase start
 
   # Step 2: Apply migrations + seed
+  # --force is the upgrade path for the AB entity-model rewrite: the old schema
+  # (meters / tenants / system_admin) is incompatible with the new migrations, so
+  # `supabase db reset --yes` wipes and re-applies cleanly.
   if [ -f .env.local ] && [ "$FORCE" = false ]; then
-    # Re-run scenario — skip db reset to preserve data
     log "Supabase already configured. Skipping db reset (use --force to reset database)."
   else
+    generate_seed_migration
     log "Applying migrations and seed data..."
     supabase db reset --yes
   fi
