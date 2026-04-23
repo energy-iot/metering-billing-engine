@@ -39,7 +39,10 @@ import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Banner } from "@/components/ui/banner";
 import { BlastRadiusList } from "@/components/entity-deletion/BlastRadiusList";
-import type { DescendantCounts, EntityKind } from "@/lib/entity-descendants";
+import type {
+  DescendantCounts,
+  EntityKind,
+} from "@/lib/entity-descendants-types";
 
 // Parent redirect shape matches the preview response.
 type Parent =

@@ -1278,3 +1278,252 @@ describe("RLS: microgrid_recent_activity VIEW cross-org isolation (#73)", () => 
     expect(resB.error, `super_admin error on B: ${resB.error?.message}`).toBeNull();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// Entity deletion cascade + permission matrix (#89)
+//
+// Seeds a short-lived org hierarchy (`delorg*`), then exercises the four
+// cascade-safe DELETE RPCs (`fn_entity_delete_*`) through user-bound
+// clients. Each test MUST clean up after itself via the service client so
+// subsequent tests stay isolated.
+// ══════════════════════════════════════════════════════════════════════════
+
+// Stable fixture ids for the dedicated entity-delete scope. Do NOT reuse
+// FIXTURE.orgA/B — those are consumed by the long-lived suite fixtures and
+// must not be deleted mid-run.
+const DELETE_FIXTURE = {
+  org: "cccccccc-0089-4000-8000-000000000001",
+  community: "cccccccc-0089-4000-8001-000000000001",
+  microgrid: "cccccccc-0089-4000-8002-000000000001",
+  edge: "cccccccc-0089-4000-8003-000000000001",
+  device: "cccccccc-0089-4000-8004-000000000001",
+  household: "cccccccc-0089-4000-8005-000000000001",
+  billingPeriod: "cccccccc-0089-4000-8006-000000000001",
+  lineItem: "cccccccc-0089-4000-8007-000000000001",
+};
+
+async function seedEntityDeleteFixture(): Promise<void> {
+  const svc = await serviceClient();
+
+  // Ensure a clean slate even if a prior run didn't tear down.
+  await svc.from("organizations").delete().eq("id", DELETE_FIXTURE.org);
+
+  await svc.from("organizations").insert({
+    id: DELETE_FIXTURE.org,
+    name: "UX6 Delete Test Org",
+  });
+  await svc.from("communities").insert({
+    id: DELETE_FIXTURE.community,
+    org_id: DELETE_FIXTURE.org,
+    name: "UX6 Delete Community",
+  });
+  await svc.from("microgrids").insert({
+    id: DELETE_FIXTURE.microgrid,
+    community_id: DELETE_FIXTURE.community,
+    name: "UX6 Delete Microgrid",
+    currency: "UGX",
+  });
+  await svc.from("edges").insert({
+    id: DELETE_FIXTURE.edge,
+    microgrid_id: DELETE_FIXTURE.microgrid,
+    name: "UX6 Delete Edge",
+    data_source_type: "openems",
+    openems_backend_url: "http://localhost:8075",
+    openems_edge_id: "rls-delete-edge",
+  });
+  await svc.from("devices").insert({
+    id: DELETE_FIXTURE.device,
+    edge_id: DELETE_FIXTURE.edge,
+    name: "UX6 Delete Device",
+    device_type: "consumption_meter",
+    openems_component_id: "rls-delete-meter",
+  });
+  await svc.from("households").insert({
+    id: DELETE_FIXTURE.household,
+    microgrid_id: DELETE_FIXTURE.microgrid,
+    display_name: "UX6 Delete Household",
+  });
+  await svc.from("household_devices").insert({
+    household_id: DELETE_FIXTURE.household,
+    device_id: DELETE_FIXTURE.device,
+    role: "primary_consumption_meter",
+  });
+  await svc.from("billing_periods").insert({
+    id: DELETE_FIXTURE.billingPeriod,
+    microgrid_id: DELETE_FIXTURE.microgrid,
+    start_date: "2026-01-01",
+    end_date: "2026-01-31",
+    status: "draft",
+  });
+  await svc.from("billing_line_items").insert({
+    id: DELETE_FIXTURE.lineItem,
+    billing_period_id: DELETE_FIXTURE.billingPeriod,
+    household_id: DELETE_FIXTURE.household,
+    device_id: DELETE_FIXTURE.device,
+    usage_kwh: 10,
+    total_amount: 2500,
+  });
+}
+
+async function tearDownEntityDeleteFixture(): Promise<void> {
+  const svc = await serviceClient();
+  // Org-level cascade sweeps everything we seeded in one shot.
+  await svc.from("organizations").delete().eq("id", DELETE_FIXTURE.org);
+}
+
+describe("UX6 (#89) entity-deletion cascade + permission matrix", () => {
+  it("userC (no-role) cannot delete an organization — RPC returns 0 rows", async () => {
+    if (skipIfRequested()) return;
+    await seedEntityDeleteFixture();
+    try {
+      const { data, error } = await userC.client.rpc("fn_entity_delete_org", {
+        p_id: DELETE_FIXTURE.org,
+      });
+      // Either RLS returns 0 rows or the call errors — both are acceptable
+      // as "no delete happened." Verify the org still exists.
+      const rowsAffected = error ? 0 : (data as number | null) ?? 0;
+      expect(rowsAffected).toBe(0);
+
+      const svc = await serviceClient();
+      const { data: stillExists } = await svc
+        .from("organizations")
+        .select("id")
+        .eq("id", DELETE_FIXTURE.org)
+        .maybeSingle();
+      expect(stillExists).not.toBeNull();
+    } finally {
+      await tearDownEntityDeleteFixture();
+    }
+  });
+
+  it("userA (org_manager for Org A) cannot delete an organization outside their scope", async () => {
+    if (skipIfRequested()) return;
+    await seedEntityDeleteFixture();
+    try {
+      const { data, error } = await userA.client.rpc("fn_entity_delete_org", {
+        p_id: DELETE_FIXTURE.org,
+      });
+      const rowsAffected = error ? 0 : (data as number | null) ?? 0;
+      expect(rowsAffected).toBe(0);
+    } finally {
+      await tearDownEntityDeleteFixture();
+    }
+  });
+
+  it("userD (super_admin) deletes the org and the full cascade chain empties", async () => {
+    if (skipIfRequested()) return;
+    await seedEntityDeleteFixture();
+
+    // Extra: seed a user_roles row scoped to the org so AC-ROLES-2 is
+    // exercised (the row should vanish alongside the org cascade).
+    const svc = await serviceClient();
+    const { data: extraUserList } = await svc.auth.admin.listUsers({ perPage: 1000 });
+    const extraUser = extraUserList?.users.find(
+      (u) => u.email === testUserEmails[2]
+    );
+    const { data: scopedRoleRow } = await svc
+      .from("user_roles")
+      .insert({
+        user_id: extraUser!.id,
+        role: "org_manager",
+        scope_type: "org",
+        scope_id: DELETE_FIXTURE.org,
+      })
+      .select("id")
+      .single<{ id: string }>();
+
+    try {
+      const { data: rowsDeleted, error } = await userD.client.rpc(
+        "fn_entity_delete_org",
+        { p_id: DELETE_FIXTURE.org }
+      );
+      expect(error).toBeNull();
+      expect(rowsDeleted).toBe(1);
+
+      // Assert the entire cascade chain: every descendant table is empty
+      // for the deleted scope. RLS-less service client for a true view.
+      const tablesToCheck: { table: string; column: string; id: string }[] = [
+        { table: "organizations", column: "id", id: DELETE_FIXTURE.org },
+        { table: "communities", column: "id", id: DELETE_FIXTURE.community },
+        { table: "microgrids", column: "id", id: DELETE_FIXTURE.microgrid },
+        { table: "edges", column: "id", id: DELETE_FIXTURE.edge },
+        { table: "devices", column: "id", id: DELETE_FIXTURE.device },
+        { table: "households", column: "id", id: DELETE_FIXTURE.household },
+        {
+          table: "household_devices",
+          column: "household_id",
+          id: DELETE_FIXTURE.household,
+        },
+        {
+          table: "billing_periods",
+          column: "id",
+          id: DELETE_FIXTURE.billingPeriod,
+        },
+        {
+          table: "billing_line_items",
+          column: "id",
+          id: DELETE_FIXTURE.lineItem,
+        },
+      ];
+      for (const t of tablesToCheck) {
+        const { data } = await svc.from(t.table).select("id").eq(t.column, t.id);
+        expect(
+          (data ?? []).length,
+          `Expected ${t.table} to be empty after org cascade`
+        ).toBe(0);
+      }
+
+      // AC-ROLES-2: user_roles row scoped to the deleted org must also be gone.
+      const { data: remainingRoles } = await svc
+        .from("user_roles")
+        .select("id")
+        .eq("id", scopedRoleRow!.id);
+      expect((remainingRoles ?? []).length).toBe(0);
+    } finally {
+      await tearDownEntityDeleteFixture();
+    }
+  });
+
+  it("AC-ROLES-3: an org_manager can delete their own org without tripping the self-revoke guard", async () => {
+    if (skipIfRequested()) return;
+    await seedEntityDeleteFixture();
+
+    // Seed userB's access to cover our fixture org so the RPC's RLS gate
+    // passes. userB is already an org_manager scoped to orgB (NFE-B); we
+    // add an extra user_roles row scoped to DELETE_FIXTURE.org to match.
+    const svc = await serviceClient();
+    const { data: ownRole } = await svc
+      .from("user_roles")
+      .insert({
+        user_id: userB.userId,
+        role: "org_manager",
+        scope_type: "org",
+        scope_id: DELETE_FIXTURE.org,
+      })
+      .select("id")
+      .single<{ id: string }>();
+
+    try {
+      // Without the trigger bypass, the cascade would hit the self-revoke
+      // guard (OLD.user_id = auth.uid()) and error with 42501.
+      const { data: rowsDeleted, error } = await userB.client.rpc(
+        "fn_entity_delete_org",
+        { p_id: DELETE_FIXTURE.org }
+      );
+      expect(error, `Self-revoke guard triggered: ${error?.message}`).toBeNull();
+      expect(rowsDeleted).toBe(1);
+
+      // userB's scoped role row must also be gone.
+      const { data: remaining } = await svc
+        .from("user_roles")
+        .select("id")
+        .eq("id", ownRole!.id);
+      expect((remaining ?? []).length).toBe(0);
+    } finally {
+      // Cleanup: wipe the temporary role row if anything leaked, and the
+      // fixture org (may already be gone from the delete above).
+      await svc.from("user_roles").delete().eq("id", ownRole!.id);
+      await tearDownEntityDeleteFixture();
+    }
+  });
+});

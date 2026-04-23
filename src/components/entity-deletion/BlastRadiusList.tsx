@@ -26,8 +26,8 @@
  */
 
 import * as React from "react";
-import type { DescendantCounts } from "@/lib/entity-descendants";
-import { descendantCountsAreEmpty } from "@/lib/entity-descendants";
+import type { DescendantCounts } from "@/lib/entity-descendants-types";
+import { descendantCountsAreEmpty } from "@/lib/entity-descendants-types";
 
 // In-module NumberFormat cache; keyed by the resolved browser locale.
 // Matches the pattern used by src/components/format/currency.tsx for
