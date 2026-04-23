@@ -14,6 +14,8 @@ import { Chip, type ChipProps } from "./chip";
 type Kind =
   | "billingPeriod"
   | "edge"
+  | "edgeSource"
+  | "deviceType"
   | "household"
   | "meterType";
 
@@ -30,10 +32,38 @@ const MAPS: Record<Kind, StatusMap> = {
     offline:  { label: "Offline",  tone: "alert",   dot: true },
     stale:    { label: "Stale",    tone: "success", dot: true }, // pair with state="stale"
   },
+  // Edge data-source classification — mirrors `edge_data_source` enum in AB #50.
+  // Tones: brand for the default (openems); neutral for the non-OpenEMS hedge
+  // sources (modbus_direct, mqtt, rest_api). No dot — this is a type label,
+  // not a connectivity state.
+  edgeSource: {
+    openems:       { label: "OpenEMS",       tone: "brand" },
+    modbus_direct: { label: "Modbus direct", tone: "neutral" },
+    mqtt:          { label: "MQTT",          tone: "neutral" },
+    rest_api:      { label: "REST API",      tone: "neutral" },
+  },
   household: {
     active:   { label: "Active",   tone: "success", dot: true },
     inactive: { label: "Inactive", tone: "neutral", dot: true },
     disputed: { label: "Disputed", tone: "alert",   dot: true },
+  },
+  // Canonical device-type chip — mirrors `device_type` enum in AB #50.
+  // Tone rationale (per mock mgm-ia-v1.html § IA note line 1794):
+  //   consumption_meter → warn (billable — draws Aaron's attention)
+  //   grid_meter        → brand (the microgrid-level import/export feed)
+  //   pv_meter          → success (generation)
+  //   battery           → success (storage, charging tone)
+  //   inverter          → brand (power conversion equipment)
+  //   ev_charger        → brand (controllable load)
+  //   other             → neutral (catchall)
+  deviceType: {
+    consumption_meter: { label: "Consumption meter", tone: "warn" },
+    grid_meter:        { label: "Grid meter",        tone: "brand" },
+    pv_meter:          { label: "PV meter",          tone: "success" },
+    battery:           { label: "Battery",           tone: "success" },
+    inverter:          { label: "Inverter",          tone: "brand" },
+    ev_charger:        { label: "EV charger",        tone: "brand" },
+    other:             { label: "Other",             tone: "neutral" },
   },
   meterType: {
     // Lowercase keys (original)
