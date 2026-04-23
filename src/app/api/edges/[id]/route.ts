@@ -16,11 +16,11 @@ const UUID_RE =
 /**
  * PATCH /api/edges/[id]
  *
- * Post-#101: the body no longer accepts `data_source_type` or
- * `openems_backend_url` — those have been retired. Supported fields:
- *   - name (string)
- *   - openems_edge_id (string)
- *   - role (string | null)
+ * Post-#104: the body accepts only { name, role }. The following fields are
+ * explicitly rejected:
+ *   - `data_source_type`, `openems_backend_url` — retired in #101
+ *   - `openems_edge_id` — assigned by OpenEMS Discover and is not editable.
+ *     Remove the edge and rediscover to link a different OpenEMS edge.
  *
  * Authorization enforced by RLS on `edges`. Postgres `42501` → HTTP 403.
  */
@@ -45,17 +45,27 @@ export async function PATCH(
     return NextResponse.json({ error: "Request body must be an object" }, { status: 400 });
   }
 
-  const { name, openems_edge_id, role } = body as Record<string, unknown>;
+  const { name, role } = body as Record<string, unknown>;
 
-  // Reject legacy fields BEFORE the "no fields provided" check so clients
-  // passing ONLY legacy fields get the correct pointer message.
-  const legacyFields = ["data_source_type", "openems_backend_url"].filter(
+  // Reject retired/immutable fields BEFORE the "no fields provided" check so
+  // clients passing ONLY forbidden fields get the correct pointer message.
+  const forbiddenFields = ["data_source_type", "openems_backend_url", "openems_edge_id"].filter(
     (f) => (body as Record<string, unknown>)[f] !== undefined
   );
-  if (legacyFields.length > 0) {
+  if (forbiddenFields.length > 0) {
+    // Produce the most specific error message for the most actionable field.
+    if ((body as Record<string, unknown>)["openems_edge_id"] !== undefined) {
+      return NextResponse.json(
+        {
+          error:
+            "openems_edge_id is no longer editable via PATCH. Remove and rediscover the edge to link a different OpenEMS edge.",
+        },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       {
-        error: `Legacy fields are no longer accepted: ${legacyFields.join(", ")}. OpenEMS is the only supported type and backend URL lives on the microgrid (see PUT /api/microgrids/[id]/openems-backend).`,
+        error: `Legacy fields are no longer accepted: ${forbiddenFields.join(", ")}. OpenEMS is the only supported type and backend URL lives on the microgrid (see PUT /api/microgrids/[id]/openems-backend).`,
       },
       { status: 400 }
     );
@@ -63,22 +73,15 @@ export async function PATCH(
 
   // At least one supported field must be provided.
   const hasName = name !== undefined;
-  const hasEdgeId = openems_edge_id !== undefined;
   const hasRole = role !== undefined;
 
-  if (!hasName && !hasEdgeId && !hasRole) {
+  if (!hasName && !hasRole) {
     return NextResponse.json({ error: "No fields provided to update" }, { status: 400 });
   }
 
   // Validate fields if provided.
   if (hasName && (typeof name !== "string" || !name.trim())) {
     return NextResponse.json({ error: "name must be a non-empty string" }, { status: 422 });
-  }
-  if (hasEdgeId && (typeof openems_edge_id !== "string" || !openems_edge_id.trim())) {
-    return NextResponse.json(
-      { error: "openems_edge_id must be a non-empty string" },
-      { status: 422 }
-    );
   }
 
   const supabase = await createClient();
@@ -101,11 +104,11 @@ export async function PATCH(
   }
 
   // Build the update payload — only include fields that were provided.
+  // openems_edge_id is intentionally excluded: it is assigned by Discover and
+  // is immutable via this endpoint (rejected above as a forbidden field).
   const updateRow: Record<string, unknown> = {};
 
   if (hasName && typeof name === "string") updateRow.name = name.trim();
-  if (hasEdgeId && typeof openems_edge_id === "string")
-    updateRow.openems_edge_id = openems_edge_id.trim();
   if (hasRole) {
     updateRow.role =
       role === null || (typeof role === "string" && !role.trim())

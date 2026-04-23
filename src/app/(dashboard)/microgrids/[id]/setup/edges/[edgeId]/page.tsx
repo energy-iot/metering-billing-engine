@@ -108,8 +108,9 @@ export default async function EdgeDetailPage({
         <div className="mt-2 flex items-center gap-3">
           <h3 className="text-lg font-semibold text-foreground">{edge.name}</h3>
           <StatusChip kind="edgeSource" status="openems" />
-          {/* Client shell: Configure… button opens EdgeFormModal in edit mode */}
-          <EdgeDetailConfigureButton edge={edge} />
+          {/* Client shell: Configure… button opens EdgeFormModal in edit mode.
+              Gated on canManage per AC-PERM-1 (#104). */}
+          {canManage && <EdgeDetailConfigureButton edge={edge} />}
           {canManage && (
             <DeleteEntityButton entity="edge" id={edge.id} name={edge.name} />
           )}

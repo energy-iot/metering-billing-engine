@@ -120,7 +120,6 @@ export function EdgeRowActions({
       {/* Configure modal — rendered as a sibling so it is not affected by
           DropdownMenu portal lifecycle. */}
       <EdgeFormModal
-        mode="edit"
         edge={edge as Edge}
         open={configureOpen}
         onOpenChange={(next) => {
