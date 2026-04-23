@@ -1,17 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { Database } from "@/lib/types/database.gen";
+import type { EdgeDataSource } from "@/lib/types/domain";
+import { EDGE_DATA_SOURCE_VALUES } from "@/lib/types/domain";
 
-type EdgeDataSource = Database["public"]["Enums"]["edge_data_source"];
-
-// Derive valid enum values at runtime from the generated DB types.
-// The array literal in database.gen.ts mirrors the Postgres enum.
-const VALID_DATA_SOURCE_TYPES: readonly EdgeDataSource[] = [
-  "openems",
-  "modbus_direct",
-  "mqtt",
-  "rest_api",
-] as const;
+// Derive valid enum values at runtime from the generated DB constants.
+const VALID_DATA_SOURCE_TYPES = EDGE_DATA_SOURCE_VALUES;
 
 function isValidDataSource(v: unknown): v is EdgeDataSource {
   return VALID_DATA_SOURCE_TYPES.includes(v as EdgeDataSource);

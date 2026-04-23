@@ -8,6 +8,7 @@
  * Run `npm run db:types` after every schema change to regenerate database.gen.ts,
  * then update this file if any table/column/enum names changed.
  */
+import { Constants } from "./database.gen";
 import type { Database } from "./database.gen";
 
 // ── Tables ────────────────────────────────────────────────────────────────────
@@ -53,6 +54,11 @@ export type UserDirectoryRow =
 /** Row from the microgrid_recent_activity VIEW (migration 00011). */
 export type MicrogridRecentActivityRow =
   Database["public"]["Views"]["microgrid_recent_activity"]["Row"];
+
+// ── Enum runtime values ───────────────────────────────────────────────────────
+
+/** Runtime tuple of all valid edge_data_source enum values (Postgres enum order). */
+export const EDGE_DATA_SOURCE_VALUES = Constants.public.Enums.edge_data_source;
 
 // ── Enums (literal-union types) ───────────────────────────────────────────────
 

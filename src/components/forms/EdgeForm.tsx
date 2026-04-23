@@ -25,45 +25,38 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { RadioCard } from "@/components/ui/radio-card";
 import { Banner } from "@/components/ui/banner";
-import type { Database } from "@/lib/types/database.gen";
-import type { Edge } from "@/lib/types/domain";
+import type { Edge, EdgeDataSource } from "@/lib/types/domain";
+import { EDGE_DATA_SOURCE_VALUES } from "@/lib/types/domain";
 
 // ── Enum-derived options ──────────────────────────────────────────────────
-// Pull the union type from the generated DB types so there's no hardcoded string union.
-type EdgeDataSource = Database["public"]["Enums"]["edge_data_source"];
-
-// Runtime array — keeps the order and descriptions in one place.
-// The type annotation ensures no string outside the enum slips in.
-const DATA_SOURCE_OPTIONS: Array<{
-  value: EdgeDataSource;
-  title: string;
-  description: string;
-}> = [
-  {
-    value: "openems",
+// Labels/descriptions keyed by enum value. For any value not listed here,
+// the render loop falls back to a titleized form of the enum value.
+const DATA_SOURCE_LABELS: Record<string, { title: string; description: string }> = {
+  openems: {
     title: "OpenEMS",
     description:
       "Connect via the OpenEMS Backend WebSocket. Requires backend URL and edge ID.",
   },
-  {
-    value: "modbus_direct",
+  modbus_direct: {
     title: "Modbus Direct",
     description:
       "Poll meters directly over Modbus TCP/RTU. Useful for CHINT meters and similar.",
   },
-  {
-    value: "mqtt",
+  mqtt: {
     title: "MQTT",
-    description:
-      "Subscribe to meter telemetry published on an MQTT broker.",
+    description: "Subscribe to meter telemetry published on an MQTT broker.",
   },
-  {
-    value: "rest_api",
+  rest_api: {
     title: "REST API",
-    description:
-      "Pull readings from a custom HTTP/REST endpoint.",
+    description: "Pull readings from a custom HTTP/REST endpoint.",
   },
-];
+};
+
+/** Fallback title for enum values not present in DATA_SOURCE_LABELS. */
+function titleize(value: string): string {
+  const spaced = value.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -251,14 +244,19 @@ export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }:
           className="grid grid-cols-1 gap-2 sm:grid-cols-2"
           aria-label="Data source type"
         >
-          {DATA_SOURCE_OPTIONS.map((opt) => (
-            <RadioCard
-              key={opt.value}
-              value={opt.value}
-              title={opt.title}
-              description={opt.description}
-            />
-          ))}
+          {EDGE_DATA_SOURCE_VALUES.map((value) => {
+            const label = DATA_SOURCE_LABELS[value];
+            const title = label?.title ?? titleize(value);
+            const description = label?.description ?? "";
+            return (
+              <RadioCard
+                key={value}
+                value={value}
+                title={title}
+                description={description}
+              />
+            );
+          })}
         </RadioGroup>
       </div>
 

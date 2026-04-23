@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * EdgeForm component tests (UX4b / #77).
+ * EdgeForm component tests (UX4b / #77, #88).
  *
  * Covers:
  *   (a) OpenEMS fields show when data_source_type=openems (default)
@@ -9,6 +9,9 @@
  *   (d) Save calls POST /api/edges with the correct payload in create mode
  *   (e) Edit mode pre-fills all fields including role
  *   (f) URL validation error cases shown inline
+ *
+ * (g) Titleized fallback for unknown enum values is tested in
+ *     EdgeForm.enum-fallback.test.tsx to keep vi.mock hoisting isolated.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
