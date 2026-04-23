@@ -49,15 +49,21 @@ vi.mock("./edge-row-actions", () => ({
   EdgeRowActions: () => null,
 }));
 
-// Stub currentUserCanAccessMicrogrid — always returns true for smoke tests.
+// Stub currentUserCanAccessMicrogrid + currentUserIsSuperAdmin — always
+// returns true for smoke tests.
 vi.mock("@/lib/auth/access", async () => {
   const actual = await vi.importActual<typeof import("@/lib/auth/access")>(
     "@/lib/auth/access",
   );
-  return { ...actual, currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true) };
+  return {
+    ...actual,
+    currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
+    currentUserIsSuperAdmin: vi.fn().mockResolvedValue(true),
+  };
 });
 
 import SetupEdgesPage from "./page";
+import * as accessModule from "@/lib/auth/access";
 
 function buildEdgesQuery(data: unknown) {
   return {
@@ -71,21 +77,48 @@ function buildEdgesQuery(data: unknown) {
   };
 }
 
+// Microgrid row fetch (ems_type) — .select().eq().maybeSingle() chain.
+function buildMicrogridRowQuery(emsType: string | null) {
+  return {
+    select: () => ({
+      eq: () => ({
+        maybeSingle: () =>
+          Promise.resolve({ data: { ems_type: emsType }, error: null }),
+      }),
+    }),
+  };
+}
+
+function mockFromDispatcher({
+  edges,
+  emsType = "direct_url",
+}: {
+  edges: unknown;
+  emsType?: string | null;
+}) {
+  return (table: string) => {
+    if (table === "microgrids") return buildMicrogridRowQuery(emsType);
+    return buildEdgesQuery(edges);
+  };
+}
+
 describe("SetupEdgesPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("renders edges with source chip and live online status", async () => {
-    mockFrom.mockImplementation(() =>
-      buildEdgesQuery([
-        {
-          id: "edge-1",
-          name: "Metering Pi",
-          openems_edge_id: "edge0",
-          role: "metering",
-        },
-      ]),
+    mockFrom.mockImplementation(
+      mockFromDispatcher({
+        edges: [
+          {
+            id: "edge-1",
+            name: "Metering Pi",
+            openems_edge_id: "edge0",
+            role: "metering",
+          },
+        ],
+      }),
     );
     getEdgesStatusMock.mockResolvedValue([{ edgeId: "edge0", online: true }]);
 
@@ -102,7 +135,7 @@ describe("SetupEdgesPage", () => {
   });
 
   it("renders the empty state when no edges exist", async () => {
-    mockFrom.mockImplementation(() => buildEdgesQuery([]));
+    mockFrom.mockImplementation(mockFromDispatcher({ edges: [] }));
     getEdgesStatusMock.mockResolvedValue([]);
 
     const jsx = await SetupEdgesPage({
@@ -114,15 +147,17 @@ describe("SetupEdgesPage", () => {
   });
 
   it("falls back to Unknown status when OpenEMS is unreachable", async () => {
-    mockFrom.mockImplementation(() =>
-      buildEdgesQuery([
-        {
-          id: "edge-1",
-          name: "Metering Pi",
-          openems_edge_id: "edge0",
-          role: null,
-        },
-      ]),
+    mockFrom.mockImplementation(
+      mockFromDispatcher({
+        edges: [
+          {
+            id: "edge-1",
+            name: "Metering Pi",
+            openems_edge_id: "edge0",
+            role: null,
+          },
+        ],
+      }),
     );
     getEdgesStatusMock.mockRejectedValue(new Error("network down"));
 
@@ -133,5 +168,59 @@ describe("SetupEdgesPage", () => {
 
     expect(html).toContain("Live edge status unavailable");
     expect(html).toContain("Unknown");
+  });
+
+  // ── Gate banner / button gating (#103) ──────────────────────────────────
+
+  it("shows the super_admin gate banner with a Go-to-Backend link when ems_type IS NULL", async () => {
+    mockFrom.mockImplementation(
+      mockFromDispatcher({ edges: [], emsType: null }),
+    );
+    getEdgesStatusMock.mockResolvedValue([]);
+
+    const jsx = await SetupEdgesPage({
+      params: Promise.resolve({ id: "mg-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    expect(html).toContain("OpenEMS backend not configured");
+    expect(html).toContain("Configure the OpenEMS backend");
+    expect(html).toContain("Go to OpenEMS Backend");
+    expect(html).toContain("/microgrids/mg-1/setup/openems-backend");
+  });
+
+  it("shows the org_manager gate banner (no link) when ems_type IS NULL and user is not super_admin", async () => {
+    vi.mocked(accessModule.currentUserIsSuperAdmin).mockResolvedValueOnce(
+      false,
+    );
+    mockFrom.mockImplementation(
+      mockFromDispatcher({ edges: [], emsType: null }),
+    );
+    getEdgesStatusMock.mockResolvedValue([]);
+
+    const jsx = await SetupEdgesPage({
+      params: Promise.resolve({ id: "mg-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    expect(html).toContain("OpenEMS backend not configured");
+    expect(html).toContain("Ask a super admin");
+    // org_manager banner should NOT carry the actionable link.
+    expect(html).not.toContain("Go to OpenEMS Backend");
+  });
+
+  it("omits the gate banner when ems_type is configured", async () => {
+    mockFrom.mockImplementation(
+      mockFromDispatcher({ edges: [], emsType: "direct_url" }),
+    );
+    getEdgesStatusMock.mockResolvedValue([]);
+
+    const jsx = await SetupEdgesPage({
+      params: Promise.resolve({ id: "mg-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    expect(html).not.toContain("OpenEMS backend not configured");
+    expect(html).not.toContain("Ask a super admin");
   });
 });
