@@ -38,6 +38,12 @@ export type BillingLineItem = Omit<
 > & { tier_breakdown: TierBreakdown[] };
 export type UserRoleRecord = Database["public"]["Tables"]["user_roles"]["Row"];
 
+// ── Views ─────────────────────────────────────────────────────────────────────
+
+/** Row from the microgrid_recent_activity VIEW (migration 00011). */
+export type MicrogridRecentActivityRow =
+  Database["public"]["Views"]["microgrid_recent_activity"]["Row"];
+
 // ── Enums (literal-union types) ───────────────────────────────────────────────
 
 export type UserRole = Database["public"]["Enums"]["user_role"];

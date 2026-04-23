@@ -301,4 +301,63 @@ export class OpenEmsClient implements DeviceDataAdapter {
     await Promise.all(edgeQueries);
     return results;
   }
+
+  /**
+   * Query per-day energy totals for a single edge across a date range.
+   *
+   * Uses the OpenEMS `queryHistoricTimeseriesEnergyPerPeriod` method, which
+   * returns per-day energy consumption (Wh) for each channel.
+   *
+   * Returns a map of { date (YYYY-MM-DD) → totalKwh } summed across all channels.
+   * Days with no data for any channel are omitted from the result.
+   */
+  async queryDailyEnergy(
+    edgeId: string,
+    channels: string[],
+    fromDate: string,
+    toDate: string,
+    timezone: string = "UTC"
+  ): Promise<Record<string, number>> {
+    const result = await this.rpc<{
+      payload: JsonRpcResponse<{
+        timestamps: number[];
+        data: Record<string, (number | null)[]>;
+      }>;
+    }>("edgeRpc", {
+      edgeId,
+      payload: {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "queryHistoricTimeseriesEnergyPerPeriod",
+        params: {
+          fromDate,
+          toDate,
+          channels,
+          timezone,
+          resolution: { value: 1, unit: "Days" },
+        },
+      },
+    });
+
+    const { timestamps, data } = result.payload.result;
+    const byDate: Record<string, number> = {};
+
+    for (let i = 0; i < timestamps.length; i++) {
+      const dateStr = new Date(timestamps[i]).toISOString().slice(0, 10);
+      let dayTotal = 0;
+      let hasData = false;
+      for (const channelValues of Object.values(data)) {
+        const wh = channelValues[i];
+        if (wh !== null && wh !== undefined) {
+          dayTotal += wh;
+          hasData = true;
+        }
+      }
+      if (hasData) {
+        byDate[dateStr] = (byDate[dateStr] ?? 0) + dayTotal / 1000; // Wh → kWh
+      }
+    }
+
+    return byDate;
+  }
 }

@@ -1190,7 +1190,7 @@ describe("RLS: fn_create_household_with_meter cross-org denied (#74)", () => {
       );
 
       // RLS should permit this. If it failed for a non-RLS reason we want
-      // to surface the message instead of a bare false assertion.
+      // to surface the message instead of a bare fix assertion.
       const isRlsError =
         error?.code === "42501" ||
         (error?.message ?? "").includes("row-level security");
@@ -1203,5 +1203,78 @@ describe("RLS: fn_create_household_with_meter cross-org denied (#74)", () => {
     } finally {
       await svc.from("devices").delete().eq("id", tmpDeviceId);
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// RLS: microgrid_recent_activity VIEW cross-org isolation (#73)
+//
+// The VIEW uses `security_invoker = true`, so the calling user's RLS
+// context applies to the underlying tables. An org_manager for Org A
+// must not be able to read activity rows belonging to Org B's microgrid.
+//
+// Test strategy:
+//   - User A (org_manager for Org A) queries the VIEW filtered to
+//     microgridB (belonging to Org B) → expects zero rows.
+//   - User A queries the VIEW filtered to microgridA (own org) → may get
+//     rows (non-zero is acceptable; we only assert no error AND zero for B).
+//   - User D (super_admin) can read both.
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("RLS: microgrid_recent_activity VIEW cross-org isolation (#73)", () => {
+  it("User A (org_manager for Org A) cannot read activity for Microgrid B", async () => {
+    if (skipIfRequested()) return;
+
+    const { data, error } = await userA.client
+      .from("microgrid_recent_activity")
+      .select("microgrid_id, kind, description")
+      .eq("microgrid_id", FIXTURE.microgridB);
+
+    // RLS via security_invoker: the underlying billing_periods, households, devices
+    // tables all enforce org-scoped access. Zero rows (or error) expected.
+    const count = error ? 0 : (data ?? []).length;
+    expect(
+      count,
+      `Expected 0 activity rows for cross-org microgridB but got ${count} (error=${error?.message})`
+    ).toBe(0);
+  });
+
+  it("User A can read activity for Microgrid A (own org)", async () => {
+    if (skipIfRequested()) return;
+
+    // This should not error — may return 0 rows if no events, but should not be denied.
+    const { error } = await userA.client
+      .from("microgrid_recent_activity")
+      .select("microgrid_id, kind")
+      .eq("microgrid_id", FIXTURE.microgridA);
+
+    // No RLS-block error expected for own org.
+    const isRlsError =
+      error?.code === "42501" ||
+      (error?.message ?? "").includes("row-level security");
+    expect(
+      isRlsError,
+      `Unexpected RLS block on own microgrid: ${error?.message}`
+    ).toBe(false);
+  });
+
+  it("User D (super_admin) can read activity for both microgrids", async () => {
+    if (skipIfRequested()) return;
+
+    // super_admin bypasses all RLS — should be able to query both.
+    const [resA, resB] = await Promise.all([
+      userD.client
+        .from("microgrid_recent_activity")
+        .select("microgrid_id")
+        .eq("microgrid_id", FIXTURE.microgridA),
+      userD.client
+        .from("microgrid_recent_activity")
+        .select("microgrid_id")
+        .eq("microgrid_id", FIXTURE.microgridB),
+    ]);
+
+    // No errors expected for super_admin.
+    expect(resA.error, `super_admin error on A: ${resA.error?.message}`).toBeNull();
+    expect(resB.error, `super_admin error on B: ${resB.error?.message}`).toBeNull();
   });
 });

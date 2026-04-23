@@ -583,6 +583,15 @@ export type Database = {
       }
     }
     Views: {
+      microgrid_recent_activity: {
+        Row: {
+          description: string | null
+          kind: string | null
+          microgrid_id: string | null
+          timestamp: string | null
+        }
+        Relationships: []
+      }
       microgrid_shared_devices: {
         Row: {
           config: Json | null
