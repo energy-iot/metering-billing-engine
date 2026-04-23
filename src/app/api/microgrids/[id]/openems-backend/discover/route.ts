@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { currentUserIsSuperAdmin } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 
@@ -34,6 +35,17 @@ export async function POST(
   }
 
   const supabase = await createClient();
+
+  // Discover mutates ems_last_discover_* health fields and reads the decrypted
+  // secret (fn_get_ems_secret is SECURITY DEFINER, super_admin / service_role
+  // only). Gate here so org_managers cannot trigger a write or observe backend
+  // connectivity status indirectly through error messages.
+  if (!(await currentUserIsSuperAdmin(supabase))) {
+    return NextResponse.json(
+      { error: "Only super admins can run OpenEMS backend discovery." },
+      { status: 403 }
+    );
+  }
 
   let emsConfig;
   try {

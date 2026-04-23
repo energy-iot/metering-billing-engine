@@ -31,6 +31,12 @@ vi.mock("@/lib/openems/config", () => ({
   getMicrogridEmsConfig: getMicrogridEmsConfigMock,
 }));
 
+let isSuperAdminReturn = true;
+
+vi.mock("@/lib/auth/access", () => ({
+  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
+}));
+
 const mockFrom = vi.fn();
 const mockGetUser = vi.fn().mockResolvedValue({ data: { user: { id: "user-1" } } });
 
@@ -61,6 +67,7 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     vi.clearAllMocks();
     handlers = [];
     index = 0;
+    isSuperAdminReturn = true;
     mockFrom.mockImplementation((table: string) => {
       const h = handlers[index++];
       if (!h) throw new Error(`unexpected from(${table}) #${index}`);
@@ -74,6 +81,18 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
       params: Promise.resolve({ id: "not-a-uuid" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("returns 403 when caller is not super_admin (Nit #1 security gate)", async () => {
+    isSuperAdminReturn = false;
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ id: MG_ID }),
+    });
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe("Only super admins can run OpenEMS backend discovery.");
   });
 
   it("returns 404 when microgrid is RLS-hidden or missing", async () => {

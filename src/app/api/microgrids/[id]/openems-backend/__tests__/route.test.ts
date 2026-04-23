@@ -45,6 +45,7 @@ const MG_NAME = "Kisakye";
 let mgRow: { id: string; name: string } | null = { id: MG_ID, name: MG_NAME };
 let periods: { id: string; status: "draft" | "closed" }[] = [];
 let canAccessMicrogridReturn = true;
+let isSuperAdminReturn = true;
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
@@ -69,6 +70,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/lib/auth/access", () => ({
   currentUserCanAccessMicrogrid: async () => canAccessMicrogridReturn,
+  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
 }));
 
 // Sequenced from() handlers — each test sets up the order of calls.
@@ -144,6 +146,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     fromCallIndex = 0;
     fromHandlers.length = 0;
     canAccessMicrogridReturn = true;
+    isSuperAdminReturn = true;
     mgRow = { id: MG_ID, name: MG_NAME };
     periods = [];
 
@@ -220,6 +223,25 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       { params: Promise.resolve({ id: MG_ID }) }
     );
     expect(res.status).toBe(403);
+  });
+
+  it("returns 403 with super_admin message when org_manager calls PUT (Nit #1 security gate)", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    // org_manager can access the microgrid but is not super_admin
+    canAccessMicrogridReturn = true;
+    isSuperAdminReturn = false;
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe("Only super admins can update OpenEMS backend config.");
   });
 
   it("Branch (a): draft exists → 409 with no write", async () => {

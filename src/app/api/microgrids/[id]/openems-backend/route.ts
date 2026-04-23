@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid, currentUserIsSuperAdmin } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
@@ -162,6 +162,12 @@ export async function PUT(
   if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
     return NextResponse.json(
       { error: "You do not have permission to configure this microgrid." },
+      { status: 403 }
+    );
+  }
+  if (!(await currentUserIsSuperAdmin(supabase))) {
+    return NextResponse.json(
+      { error: "Only super admins can update OpenEMS backend config." },
       { status: 403 }
     );
   }

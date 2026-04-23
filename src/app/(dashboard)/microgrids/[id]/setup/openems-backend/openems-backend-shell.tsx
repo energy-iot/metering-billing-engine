@@ -717,24 +717,22 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
 
       {form}
 
-      {closedPeriodsCount >= 0 && (
-        <ConfirmDialog
-          open={typedConfirmOpen}
-          onOpenChange={(next) => {
-            setTypedConfirmOpen(next);
-            if (!next) setPendingPayload(null);
-          }}
-          tone="neutral"
-          title="Confirm backend change"
-          description={`This microgrid has ${closedPeriodsCount} closed billing period${closedPeriodsCount === 1 ? "" : "s"}. Changing the OpenEMS backend may affect historical invoice verification if edge IDs differ after rediscovery.`}
-          confirmLabel="Save & test"
-          requireTypedConfirmation={{
-            label: "Type the microgrid name to confirm",
-            expected: microgrid.name,
-          }}
-          onConfirm={handleTypedConfirm}
-        />
-      )}
+      <ConfirmDialog
+        open={typedConfirmOpen}
+        onOpenChange={(next) => {
+          setTypedConfirmOpen(next);
+          if (!next) setPendingPayload(null);
+        }}
+        tone="neutral"
+        title="Confirm backend change"
+        description={`This microgrid has ${closedPeriodsCount} closed billing period${closedPeriodsCount === 1 ? "" : "s"}. Changing the OpenEMS backend may affect historical invoice verification if edge IDs differ after rediscovery.`}
+        confirmLabel="Save & test"
+        requireTypedConfirmation={{
+          label: "Type the microgrid name to confirm",
+          expected: microgrid.name,
+        }}
+        onConfirm={handleTypedConfirm}
+      />
     </div>
   );
 }

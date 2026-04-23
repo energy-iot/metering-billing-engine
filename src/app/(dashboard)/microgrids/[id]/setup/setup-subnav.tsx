@@ -17,10 +17,10 @@ import type { OpenemsBackendHealth } from "./openems-backend/health";
 //     at the content region id.
 //   - ArrowLeft / ArrowRight cycle between tabs and move focus + navigate.
 //   - Home / End jump to first / last tab.
-//   - The OpenEMS Backend tab chip is rendered INSIDE the single <a> element
-//     (not a separate focusable surface) so we never nest interactive
-//     descendants. Radix Tooltip on the chip takes tabindex=0 on an inner
-//     span — that's fine because the anchor swallows clicks anyway.
+//   - The OpenEMS Backend tab chip is rendered INSIDE the single <a> element.
+//     Radix Tooltip wraps the chip and adds a focusable span (tabindex=0)
+//     inside the anchor. Screen readers follow the anchor as the primary
+//     control; the tooltip surfaces status copy on hover/focus.
 
 type SubTab = { label: string; segment: string };
 
