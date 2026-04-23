@@ -10,6 +10,20 @@ import { Currency } from "@/components/format/currency";
 import { Kwh } from "@/components/format/kwh";
 import { LocalDate } from "@/components/format/local-date";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PeriodPicker, type PeriodOption } from "@/components/ui/period-picker";
+
+function toPeriodOption(
+  period: BillingPeriod,
+  summaries: Record<string, { totalKwh: number; totalAmount: number } | undefined>,
+): PeriodOption {
+  return {
+    id: period.id,
+    startDate: period.start_date,
+    endDate: period.end_date,
+    status: period.status,
+    totalAmount: summaries[period.id]?.totalAmount ?? 0,
+  };
+}
 
 function getDefaultDates() {
   const now = new Date();
@@ -32,7 +46,7 @@ export function BillingPeriodList({
 }: {
   microgridId: string;
   periods: BillingPeriod[];
-  summaries: Record<string, { totalKwh: number; totalAmount: number }>;
+  summaries: Record<string, { totalKwh: number; totalAmount: number } | undefined>;
   currency: string;
 }) {
   const router = useRouter();
@@ -124,12 +138,14 @@ export function BillingPeriodList({
 
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-foreground">Billing Periods</h2>
-        <button
-          onClick={() => setShowCreateForm(!showCreateForm)}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
-        >
-          {showCreateForm ? "Cancel" : "New Period"}
-        </button>
+        {/* PeriodPicker replaces the standalone "New Period" button.
+            currentId is undefined — the index page has no "current" period to highlight. */}
+        <PeriodPicker
+          periods={periods.map((p) => toPeriodOption(p, summaries))}
+          currentId={undefined}
+          onSelect={(option) => router.push(`/microgrids/${microgridId}/billing/${option.id}`)}
+          onNewPeriod={() => setShowCreateForm(true)}
+        />
       </div>
 
       {error && (
@@ -216,14 +232,14 @@ export function BillingPeriodList({
                   </td>
                   <td className="py-3 pr-4 text-right text-foreground">
                     {summaries[period.id] ? (
-                      <Kwh value={summaries[period.id].totalKwh} bareNumber />
+                      <Kwh value={summaries[period.id]!.totalKwh} bareNumber />
                     ) : (
                       "0"
                     )}
                   </td>
                   <td className="py-3 pr-4 text-right text-foreground">
                     {summaries[period.id] ? (
-                      <Currency value={summaries[period.id].totalAmount} bareNumber />
+                      <Currency value={summaries[period.id]!.totalAmount} bareNumber />
                     ) : (
                       "N/A"
                     )}
