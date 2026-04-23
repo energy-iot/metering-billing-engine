@@ -27,12 +27,19 @@ vi.mock("@/lib/openems", async () => {
   );
   return {
     ...actual,
-    getOpenEmsClient: () => ({
+    createOpenEmsClient: () => ({
       getEdgesStatus: getEdgesStatusMock,
       queryDailyEnergy: queryDailyEnergyMock,
     }),
   };
 });
+
+// Always return a valid ems config so the page builds a client.
+vi.mock("@/lib/openems/config", () => ({
+  getMicrogridEmsConfig: vi
+    .fn()
+    .mockResolvedValue({ type: "direct_url", url: "http://localhost:8075" }),
+}));
 
 vi.mock("@/lib/hierarchy", () => ({
   getHierarchyLevels: vi.fn().mockResolvedValue([]),
@@ -117,22 +124,13 @@ function makeFrom(
 const OPENEMS_EDGE_ONLINE = {
   id: "edge-1",
   name: "Metering Pi",
-  data_source_type: "openems",
   openems_edge_id: "edge0",
 };
 
 const OPENEMS_EDGE_OFFLINE = {
   id: "edge-2",
   name: "Backup Pi",
-  data_source_type: "openems",
   openems_edge_id: "edge1",
-};
-
-const NON_OPENEMS_EDGE = {
-  id: "edge-3",
-  name: "Modbus Reader",
-  data_source_type: "modbus_direct",
-  openems_edge_id: null,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -169,7 +167,6 @@ describe("MicrogridDashboardPage", () => {
     const EDGE_3 = {
       id: "edge-4",
       name: "Third Pi",
-      data_source_type: "openems",
       openems_edge_id: "edge2",
     };
     mockFrom.mockImplementation(
@@ -237,24 +234,9 @@ describe("MicrogridDashboardPage", () => {
     expect(html).toContain("/microgrids/mg-1/setup/edges");
   });
 
-  it("renders non-OpenEMS edge with unknown status chip and 'No status source' tooltip", async () => {
-    mockFrom.mockImplementation(makeFrom([NON_OPENEMS_EDGE]));
-    // getEdgesStatus should NOT be called when there are no openems edges
-    getEdgesStatusMock.mockResolvedValue([]);
-
-    const jsx = await MicrogridDashboardPage({
-      params: Promise.resolve({ id: "mg-1" }),
-    });
-    const html = renderToStaticMarkup(jsx as React.ReactElement);
-
-    // Edge name appears in strip
-    expect(html).toContain("Modbus Reader");
-    // No status source tooltip
-    expect(html).toContain("No status source");
-    // No offline or unreachable banner (non-OpenEMS doesn't trigger it)
-    expect(html).not.toContain("Edge offline");
-    expect(html).not.toContain("Edge unreachable");
-  });
+  // (Removed: "non-OpenEMS edge shows unknown status" test — post-#101
+  // OpenEMS is the only supported edge type, so that scenario no longer
+  // exists in the schema.)
 
   it("preserves the draft billing period quick-action link", async () => {
     mockFrom.mockImplementation((table: string) => {

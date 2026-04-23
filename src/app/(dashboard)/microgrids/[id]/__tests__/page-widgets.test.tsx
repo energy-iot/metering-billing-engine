@@ -31,12 +31,18 @@ vi.mock("@/lib/openems", async () => {
   );
   return {
     ...actual,
-    getOpenEmsClient: () => ({
+    createOpenEmsClient: () => ({
       getEdgesStatus: getEdgesStatusMock,
       queryDailyEnergy: queryDailyEnergyMock,
     }),
   };
 });
+
+vi.mock("@/lib/openems/config", () => ({
+  getMicrogridEmsConfig: vi
+    .fn()
+    .mockResolvedValue({ type: "direct_url", url: "http://localhost:8075" }),
+}));
 
 vi.mock("@/lib/hierarchy", () => ({
   getHierarchyLevels: vi.fn().mockResolvedValue([]),
@@ -116,7 +122,6 @@ function buildQuery(data: unknown) {
 const OPENEMS_EDGE = {
   id: "edge-1",
   name: "Metering Pi",
-  data_source_type: "openems",
   openems_edge_id: "edge0",
   devices: [{ id: "dev-1", openems_component_id: "meter0" }],
 };

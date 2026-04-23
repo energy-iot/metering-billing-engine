@@ -107,22 +107,20 @@ export default async function EdgeDetailPage({
         </Link>
         <div className="mt-2 flex items-center gap-3">
           <h3 className="text-lg font-semibold text-foreground">{edge.name}</h3>
-          <StatusChip kind="edgeSource" status={edge.data_source_type} />
+          <StatusChip kind="edgeSource" status="openems" />
           {/* Client shell: Configure… button opens EdgeFormModal in edit mode */}
           <EdgeDetailConfigureButton edge={edge} />
           {canManage && (
             <DeleteEntityButton entity="edge" id={edge.id} name={edge.name} />
           )}
         </div>
-        {edge.data_source_type === "openems" && (
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
-            {edge.openems_backend_url ?? "—"} · {edge.openems_edge_id ?? "—"}
-          </p>
-        )}
+        <p className="mt-1 font-mono text-xs text-muted-foreground">
+          {edge.openems_edge_id ?? "—"}
+        </p>
       </div>
 
-      {/* Discover devices — only available for OpenEMS-typed edges */}
-      {edge.data_source_type === "openems" && edge.openems_edge_id && (
+      {/* Discover devices — available for every edge (OpenEMS is the only type post-#101) */}
+      {edge.openems_edge_id && (
         <div className="rounded-lg border border-border bg-card p-6">
           <DiscoverDevices
             edgeDbId={edgeId}

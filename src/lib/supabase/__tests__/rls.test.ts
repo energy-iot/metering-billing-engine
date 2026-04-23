@@ -139,16 +139,12 @@ beforeAll(async () => {
       id: FIXTURE.edgeA,
       microgrid_id: FIXTURE.microgridA,
       name: "Edge A",
-      data_source_type: "openems",
-      openems_backend_url: "http://localhost:8075",
       openems_edge_id: "rls-test-edge-a",
     },
     {
       id: FIXTURE.edgeB,
       microgrid_id: FIXTURE.microgridB,
       name: "Edge B",
-      data_source_type: "openems",
-      openems_backend_url: "http://localhost:8075",
       openems_edge_id: "rls-test-edge-b",
     },
   ]);
@@ -551,8 +547,6 @@ describe("RLS: edges", () => {
     await expectWriteDenied(userA.client, "edges", {
       microgrid_id: FIXTURE.microgridB,
       name: "Unauthorized Edge",
-      data_source_type: "openems",
-      openems_backend_url: "http://localhost:8075",
       openems_edge_id: "rls-unauth-edge",
     });
   });
@@ -1088,8 +1082,6 @@ describe("RLS: /api/edges cross-org POST denied (#77)", () => {
     await expectWriteDenied(userA.client, "edges", {
       microgrid_id: FIXTURE.microgridB,
       name: "Cross-org-edge-api-test",
-      data_source_type: "openems",
-      openems_backend_url: "http://localhost:8075",
       openems_edge_id: "rls-test-api-edge",
     });
   });
@@ -1102,7 +1094,7 @@ describe("RLS: /api/edges cross-org POST denied (#77)", () => {
       .insert({
         microgrid_id: FIXTURE.microgridA,
         name: "rls-api-test-own-edge",
-        data_source_type: "modbus_direct",
+        openems_edge_id: "rls-api-test-own-edge-id",
       })
       .select("id");
 
@@ -1327,8 +1319,6 @@ async function seedEntityDeleteFixture(): Promise<void> {
     id: DELETE_FIXTURE.edge,
     microgrid_id: DELETE_FIXTURE.microgrid,
     name: "UX6 Delete Edge",
-    data_source_type: "openems",
-    openems_backend_url: "http://localhost:8075",
     openems_edge_id: "rls-delete-edge",
   });
   await svc.from("devices").insert({
@@ -1525,5 +1515,200 @@ describe("UX6 (#89) entity-deletion cascade + permission matrix", () => {
       await svc.from("user_roles").delete().eq("id", ownRole!.id);
       await tearDownEntityDeleteFixture();
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// RLS: OpenEMS Backend per-microgrid config (#101)
+// Exercises AC-TEST-1 (schema constraints), AC-TEST-3 (encryption
+// round-trip), and AC-TEST-4 (fn_get_ems_secret truth table).
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("RLS: OpenEMS Backend (#101)", () => {
+  it("AC-TEST-1: rejects cloud_aws with NULL region", async () => {
+    if (skipIfRequested()) return;
+    const svc = await serviceClient();
+    const { error } = await svc
+      .from("microgrids")
+      .update({
+        ems_type: "cloud_aws",
+        ems_backend_url: "https://example.com/",
+        ems_aws_region: null,
+        ems_aws_access_key_id: "AKIA",
+        ems_aws_secret_access_key_encrypted: null,
+      })
+      .eq("id", FIXTURE.microgridA);
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toMatch(
+      /microgrids_ems_aws_fields_required|check constraint/i
+    );
+  });
+
+  it("AC-TEST-1: rejects ems_type non-NULL with empty backend URL", async () => {
+    if (skipIfRequested()) return;
+    const svc = await serviceClient();
+    const { error } = await svc
+      .from("microgrids")
+      .update({
+        ems_type: "direct_url",
+        ems_backend_url: "",
+      })
+      .eq("id", FIXTURE.microgridA);
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toMatch(
+      /microgrids_ems_backend_url_required|check constraint/i
+    );
+  });
+
+  it("AC-TEST-1: rejects bogus ems_last_discover_status", async () => {
+    if (skipIfRequested()) return;
+    const svc = await serviceClient();
+    const { error } = await svc
+      .from("microgrids")
+      .update({ ems_last_discover_status: "bogus" })
+      .eq("id", FIXTURE.microgridA);
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toMatch(
+      /microgrids_ems_last_discover_status_valid|check constraint/i
+    );
+  });
+
+  it("AC-TEST-3: fn_ems_encrypt_secret round-trips via fn_ems_decrypt_secret", async () => {
+    if (skipIfRequested()) return;
+    const svc = await serviceClient();
+
+    // Encrypt
+    const { data: encrypted, error: encErr } = await svc.rpc(
+      "fn_ems_encrypt_secret",
+      { p_plaintext: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }
+    );
+    expect(encErr).toBeNull();
+    expect(encrypted).toBeTruthy();
+
+    // Decrypt
+    const { data: decrypted, error: decErr } = await svc.rpc(
+      "fn_ems_decrypt_secret",
+      { p_ciphertext: encrypted }
+    );
+    expect(decErr).toBeNull();
+    expect(decrypted).toBe("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+  });
+
+  describe("AC-TEST-4: fn_get_ems_secret truth table", () => {
+    // Set up a microgrid with a cloud_aws config under Org A so userA is
+    // the "owner org_manager" and userB is "different org_manager."
+    const SECRET_PLAINTEXT = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+    async function setupCloudAwsConfig() {
+      const svc = await serviceClient();
+      const { data: encrypted } = await svc.rpc("fn_ems_encrypt_secret", {
+        p_plaintext: SECRET_PLAINTEXT,
+      });
+      await svc
+        .from("microgrids")
+        .update({
+          ems_type: "cloud_aws",
+          ems_backend_url: "https://example.com/",
+          ems_aws_region: "us-east-1",
+          ems_aws_access_key_id: "AKIAEXAMPLE",
+          ems_aws_secret_access_key_encrypted: encrypted,
+        })
+        .eq("id", FIXTURE.microgridA);
+    }
+
+    async function clearCloudAwsConfig() {
+      const svc = await serviceClient();
+      await svc
+        .from("microgrids")
+        .update({
+          ems_type: null,
+          ems_backend_url: null,
+          ems_aws_region: null,
+          ems_aws_access_key_id: null,
+          ems_aws_secret_access_key_encrypted: null,
+        })
+        .eq("id", FIXTURE.microgridA);
+    }
+
+    it("super_admin gets plaintext when secret is set", async () => {
+      if (skipIfRequested()) return;
+      await setupCloudAwsConfig();
+      try {
+        const { data, error } = await userD.client.rpc("fn_get_ems_secret", {
+          _microgrid_id: FIXTURE.microgridA,
+        });
+        expect(error).toBeNull();
+        expect(data).toBe(SECRET_PLAINTEXT);
+      } finally {
+        await clearCloudAwsConfig();
+      }
+    });
+
+    it("super_admin gets NULL when secret is not set", async () => {
+      if (skipIfRequested()) return;
+      await clearCloudAwsConfig();
+      const { data, error } = await userD.client.rpc("fn_get_ems_secret", {
+        _microgrid_id: FIXTURE.microgridA,
+      });
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    });
+
+    it("org_manager (owner org) gets NULL — redacted", async () => {
+      if (skipIfRequested()) return;
+      await setupCloudAwsConfig();
+      try {
+        const { data, error } = await userA.client.rpc("fn_get_ems_secret", {
+          _microgrid_id: FIXTURE.microgridA,
+        });
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearCloudAwsConfig();
+      }
+    });
+
+    it("org_manager (different org) gets NULL — redacted by helper", async () => {
+      if (skipIfRequested()) return;
+      await setupCloudAwsConfig();
+      try {
+        const { data, error } = await userB.client.rpc("fn_get_ems_secret", {
+          _microgrid_id: FIXTURE.microgridA,
+        });
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearCloudAwsConfig();
+      }
+    });
+
+    it("service_role gets plaintext (server-side path)", async () => {
+      if (skipIfRequested()) return;
+      await setupCloudAwsConfig();
+      try {
+        const svc = await serviceClient();
+        const { data, error } = await svc.rpc("fn_get_ems_secret", {
+          _microgrid_id: FIXTURE.microgridA,
+        });
+        expect(error).toBeNull();
+        expect(data).toBe(SECRET_PLAINTEXT);
+      } finally {
+        await clearCloudAwsConfig();
+      }
+    });
+
+    it("userC (no role) gets NULL", async () => {
+      if (skipIfRequested()) return;
+      await setupCloudAwsConfig();
+      try {
+        const { data, error } = await userC.client.rpc("fn_get_ems_secret", {
+          _microgrid_id: FIXTURE.microgridA,
+        });
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearCloudAwsConfig();
+      }
+    });
   });
 });

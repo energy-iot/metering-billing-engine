@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import type { BillingPeriod, BillingLineItem, Edge } from "@/lib/types/domain";
-import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { getMicrogridEmsConfig } from "@/lib/openems/config";
+import type { OpenEmsClientConfig } from "@/lib/openems";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { Banner } from "@/components/ui/banner";
@@ -30,10 +32,9 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 // All data fetching is server-side. Client components receive serializable props.
 // Query budget (this ticket): ≤ 4 Supabase queries + 1 OpenEMS energy call (+ 1 from #72).
 
-type EdgeRow = Pick<Edge, "id" | "name" | "data_source_type" | "openems_edge_id">;
+type EdgeRow = Pick<Edge, "id" | "name" | "openems_edge_id">;
 
 type EdgeWithDevices = EdgeRow & {
-  openems_edge_id: string | null;
   devices?: { id: string; openems_component_id: string | null }[];
 };
 
@@ -51,13 +52,21 @@ type ActivityRow = {
 // ── Edge status helpers (preserved from #72) ───────────────────────────────
 
 async function fetchEdgeStatusMap(
+  emsConfig: OpenEmsClientConfig | null,
   openemsEdgeIds: string[],
 ): Promise<{ map: EdgeStatusMap; unreachable: boolean; error: string | null }> {
   if (openemsEdgeIds.length === 0) {
     return { map: {}, unreachable: false, error: null };
   }
+  if (!emsConfig) {
+    return {
+      map: null,
+      unreachable: true,
+      error: "OpenEMS Backend not configured for this microgrid.",
+    };
+  }
   try {
-    const client = getOpenEmsClient();
+    const client = createOpenEmsClient(emsConfig);
     const statuses = await client.getEdgesStatus(openemsEdgeIds);
     const map: Record<string, boolean> = {};
     for (const s of statuses) map[s.edgeId] = s.online;
@@ -74,14 +83,16 @@ async function fetchEdgeStatusMap(
 // ── Daily energy from OpenEMS (30-day window for calendar) ─────────────────
 
 async function fetchDailyEnergyByDate(
+  emsConfig: OpenEmsClientConfig | null,
   openemsEdges: { openems_edge_id: string; devices: { openems_component_id: string | null }[] }[],
   fromDate: string,
   toDate: string,
 ): Promise<Record<string, number>> {
   if (openemsEdges.length === 0) return {};
+  if (!emsConfig) return {};
 
   try {
-    const client = getOpenEmsClient();
+    const client = createOpenEmsClient(emsConfig);
     const byDate: Record<string, number> = {};
 
     // Single call per edge (all channels for that edge), then aggregate across edges
@@ -134,7 +145,7 @@ export default async function MicrogridDashboardPage({
   // ── Query 1: Edges (+ devices for OpenEMS channels) ─────────────────────
   const { data: edgesRaw } = await supabase
     .from("edges")
-    .select("id, name, data_source_type, openems_edge_id, devices(id, openems_component_id)")
+    .select("id, name, openems_edge_id, devices(id, openems_component_id)")
     .eq("microgrid_id", id)
     .returns<(EdgeRow & { devices: { id: string; openems_component_id: string | null }[] })[]>();
 
@@ -227,19 +238,29 @@ export default async function MicrogridDashboardPage({
   const levels = await getHierarchyLevels(supabase, { kind: "microgrid", microgridId: id });
 
   // ── Resolve edge health (from #72) ────────────────────────────────────────
+  // Post-#101: every edge is OpenEMS (the only supported type).
   const allEdges: EdgeHealthEntry[] = allEdgesRaw.map((e) => ({
     id: e.id,
     name: e.name,
-    data_source_type: e.data_source_type,
-    openems_edge_id: e.openems_edge_id ?? null,
+    openems_edge_id: e.openems_edge_id,
   }));
 
   const openemsEdgeIds = allEdges
-    .filter((e) => e.data_source_type === "openems" && e.openems_edge_id)
+    .filter((e) => !!e.openems_edge_id)
     .map((e) => e.openems_edge_id as string);
 
+  // Resolve microgrid-level OpenEMS config. Silent-null on error so the page
+  // still renders (strips fall back to "unknown" health chips + "unreachable"
+  // banner when openemsEdgeIds are present).
+  let emsConfig: OpenEmsClientConfig | null = null;
+  try {
+    emsConfig = await getMicrogridEmsConfig(supabase, id);
+  } catch {
+    emsConfig = null;
+  }
+
   const { map: edgeStatusMap, unreachable, error: statusError } =
-    await fetchEdgeStatusMap(openemsEdgeIds);
+    await fetchEdgeStatusMap(emsConfig, openemsEdgeIds);
 
   // ── Daily energy for calendar ────────────────────────────────────────────
   const today = new Date();
@@ -257,13 +278,14 @@ export default async function MicrogridDashboardPage({
   }
 
   const openemsEdgesWithDevices = allEdgesRaw
-    .filter((e) => e.data_source_type === "openems" && e.openems_edge_id)
+    .filter((e) => !!e.openems_edge_id)
     .map((e) => ({
       openems_edge_id: e.openems_edge_id as string,
       devices: (e as EdgeWithDevices).devices ?? [],
     }));
 
   const energyByDate = await fetchDailyEnergyByDate(
+    emsConfig,
     openemsEdgesWithDevices,
     fromDateStr,
     toDateStr
@@ -340,8 +362,8 @@ export default async function MicrogridDashboardPage({
   }
 
   // ── Banner logic (from #72, preserved) ───────────────────────────────────
+  // Post-#101: every edge is OpenEMS; no data_source_type filter needed.
   const offlineEdges = allEdges.filter((edge) => {
-    if (edge.data_source_type !== "openems") return false;
     const status = resolveEdgeStatus(edge, edgeStatusMap);
     return status === "offline" || (unreachable && status === "unknown");
   });

@@ -6,13 +6,9 @@
 // the edge name with a status-coloured dot and is a link to the edge's Setup
 // detail page.
 //
-// OpenEMS-typed edges get `online` / `offline` status from the resolved
-// edgeStatusMap. `unknown` is used when:
-//   - the edge is non-OpenEMS (data_source_type !== 'openems')
+// Post-#101: OpenEMS is the only edge type. `unknown` is used when:
+//   - the edge has no openems_edge_id (shouldn't happen — now NOT NULL)
 //   - OpenEMS was unreachable (edgeStatusMap is null)
-//
-// Non-OpenEMS edges render with a title="No status source" tooltip and
-// do NOT contribute to the offline alert banner.
 
 import Link from "next/link";
 import { Chip } from "@/components/ui/chip";
@@ -21,8 +17,7 @@ import type { ChipProps } from "@/components/ui/chip";
 export type EdgeHealthEntry = {
   id: string;
   name: string;
-  data_source_type: string;
-  openems_edge_id: string | null;
+  openems_edge_id: string;
 };
 
 /** edgeStatusMap: openems_edge_id → online. null means OpenEMS was unreachable. */
@@ -35,7 +30,6 @@ export function resolveEdgeStatus(
   edge: EdgeHealthEntry,
   edgeStatusMap: EdgeStatusMap,
 ): EdgeHealthStatus {
-  if (edge.data_source_type !== "openems") return "unknown";
   if (edgeStatusMap === null) return "unknown";
   if (!edge.openems_edge_id) return "unknown";
   const online = edgeStatusMap[edge.openems_edge_id];
@@ -53,7 +47,7 @@ const STATUS_TONE: Record<EdgeHealthStatus, ChipProps["tone"]> = {
 interface EdgeHealthStripProps {
   microgridId: string;
   edges: EdgeHealthEntry[];
-  /** null → OpenEMS unreachable (all OpenEMS edges resolve to unknown) */
+  /** null → OpenEMS unreachable (all edges resolve to unknown) */
   edgeStatusMap: EdgeStatusMap;
 }
 
@@ -66,13 +60,11 @@ export function EdgeHealthStrip({
     <div className="flex flex-wrap gap-2">
       {edges.map((edge) => {
         const href = `/microgrids/${microgridId}/setup/edges/${edge.id}/`;
-        const isOpenEms = edge.data_source_type === "openems";
         const status = resolveEdgeStatus(edge, edgeStatusMap);
-        const tooltip = !isOpenEms ? "No status source" : undefined;
         const tone = STATUS_TONE[status];
 
         return (
-          <Link key={edge.id} href={href} title={tooltip}>
+          <Link key={edge.id} href={href}>
             <Chip
               tone={tone}
               dot

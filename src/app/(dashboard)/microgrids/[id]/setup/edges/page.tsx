@@ -3,7 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import type { Edge } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
 import { Chip } from "@/components/ui/chip";
-import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { getMicrogridEmsConfig } from "@/lib/openems/config";
+import type { OpenEmsClientConfig } from "@/lib/openems";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EdgesCRUDShell } from "./edges-crud-shell";
@@ -14,18 +16,25 @@ import { EdgeRowActions } from "./edge-row-actions";
 // Setup > Edges (D2 / #53, #77).
 // Lists every edge attached to this microgrid. Rows link to edge detail.
 // "+ Add edge" and "Configure…" buttons are in the client shell component.
+//
+// Post-#101: data_source_type / openems_backend_url dropped from the row.
+// OpenEMS is the only source; backend config lives on the microgrid.
 
-type EdgeRow = Pick<
-  Edge,
-  "id" | "name" | "data_source_type" | "openems_edge_id" | "openems_backend_url" | "role"
->;
+type EdgeRow = Pick<Edge, "id" | "name" | "openems_edge_id" | "role">;
 
 async function fetchEdgeOnlineMap(
+  emsConfig: OpenEmsClientConfig | null,
   openemsEdgeIds: string[],
 ): Promise<{ map: Record<string, boolean>; error: string | null }> {
   if (openemsEdgeIds.length === 0) return { map: {}, error: null };
+  if (!emsConfig) {
+    return {
+      map: {},
+      error: "OpenEMS Backend not configured for this microgrid.",
+    };
+  }
   try {
-    const client = getOpenEmsClient();
+    const client = createOpenEmsClient(emsConfig);
     const statuses = await client.getEdgesStatus(openemsEdgeIds);
     const map: Record<string, boolean> = {};
     for (const s of statuses) map[s.edgeId] = s.online;
@@ -61,7 +70,7 @@ export default async function SetupEdgesPage({
 
   const { data: edges, error } = await supabase
     .from("edges")
-    .select("id, name, data_source_type, openems_edge_id, openems_backend_url, role")
+    .select("id, name, openems_edge_id, role")
     .eq("microgrid_id", id)
     .order("name")
     .returns<EdgeRow[]>();
@@ -75,11 +84,18 @@ export default async function SetupEdgesPage({
   }
 
   const openemsEdgeIds = (edges ?? [])
-    .filter((e) => e.data_source_type === "openems" && e.openems_edge_id)
+    .filter((e) => !!e.openems_edge_id)
     .map((e) => e.openems_edge_id as string);
 
+  let emsConfig: OpenEmsClientConfig | null = null;
+  try {
+    emsConfig = await getMicrogridEmsConfig(supabase, id);
+  } catch {
+    emsConfig = null;
+  }
+
   const { map: onlineMap, error: onlineError } =
-    await fetchEdgeOnlineMap(openemsEdgeIds);
+    await fetchEdgeOnlineMap(emsConfig, openemsEdgeIds);
 
   return (
     <div className="space-y-4">
@@ -144,11 +160,10 @@ export default async function SetupEdgesPage({
             </thead>
             <tbody>
               {edges.map((edge) => {
-                const isOpenEms = edge.data_source_type === "openems";
                 const onlineEntry = edge.openems_edge_id
                   ? onlineMap[edge.openems_edge_id]
                   : undefined;
-                const hasStatus = isOpenEms && !onlineError && onlineEntry !== undefined;
+                const hasStatus = !onlineError && onlineEntry !== undefined;
                 return (
                   <tr
                     key={edge.id}
@@ -170,7 +185,7 @@ export default async function SetupEdgesPage({
                     <td className="px-4 py-3">
                       <StatusChip
                         kind="edgeSource"
-                        status={edge.data_source_type}
+                        status="openems"
                       />
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">

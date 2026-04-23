@@ -35,15 +35,7 @@ import { EdgeFormModal } from "@/components/forms/EdgeForm";
 import type { Edge } from "@/lib/types/domain";
 
 interface EdgeRowActionsProps {
-  edge: Pick<
-    Edge,
-    | "id"
-    | "name"
-    | "data_source_type"
-    | "openems_edge_id"
-    | "openems_backend_url"
-    | "role"
-  >;
+  edge: Pick<Edge, "id" | "name" | "openems_edge_id" | "role">;
   /** reserved for future Rediscover/Reassign menu items in the Discover workstream */
   microgridId: string;
   canManage: boolean;

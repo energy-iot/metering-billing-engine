@@ -83,9 +83,7 @@ import { EdgeRowActions } from "../edge-row-actions";
 const testEdge = {
   id: "edge-abc",
   name: "Metering Pi",
-  data_source_type: "openems" as const,
   openems_edge_id: "edge0",
-  openems_backend_url: "http://openems",
   role: "metering",
 };
 
