@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { Edge } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
 import { Chip } from "@/components/ui/chip";
+import { Banner } from "@/components/ui/banner";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import type { OpenEmsClientConfig } from "@/lib/openems";
@@ -10,7 +11,10 @@ import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EdgesCRUDShell } from "./edges-crud-shell";
 import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
-import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import {
+  currentUserCanAccessMicrogrid,
+  currentUserIsSuperAdmin,
+} from "@/lib/auth/access";
 import { EdgeRowActions } from "./edge-row-actions";
 
 // Setup > Edges (D2 / #53, #77).
@@ -62,11 +66,20 @@ export default async function SetupEdgesPage({
   const supabase = await createClient();
 
   const canManage = await currentUserCanAccessMicrogrid(supabase, id);
+  const isSuperAdmin = await currentUserIsSuperAdmin(supabase);
 
   const levels = await getHierarchyLevels(supabase, {
     kind: "edges-listing",
     microgridId: id,
   });
+
+  // Fetch ems_type for the gate banner + Add-button gating (#103).
+  const { data: mgRow } = await supabase
+    .from("microgrids")
+    .select("ems_type")
+    .eq("id", id)
+    .maybeSingle<{ ems_type: string | null }>();
+  const emsType: string | null = mgRow?.ems_type ?? null;
 
   const { data: edges, error } = await supabase
     .from("edges")
@@ -117,10 +130,40 @@ export default async function SetupEdgesPage({
           >
             View shared devices →
           </Link>
-          {/* Client shell handles the + Add Edge modal trigger */}
-          <EdgesCRUDShell microgridId={id} mode="add-button" />
+          {/* Client shell handles the + Add Edge modal trigger. Gated on
+              ems_type !== null && isSuperAdmin — see #103 AC-GATE-BUTTON. */}
+          <EdgesCRUDShell
+            microgridId={id}
+            mode="add-button"
+            emsType={emsType}
+            isSuperAdmin={isSuperAdmin}
+          />
         </div>
       </div>
+
+      {/* Gate banner when the OpenEMS Backend is not configured yet (#103). */}
+      {emsType === null &&
+        (isSuperAdmin ? (
+          <Banner
+            tone="warn"
+            title="OpenEMS backend not configured"
+            action={
+              <Link
+                href={`/microgrids/${id}/setup/openems-backend`}
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Go to OpenEMS Backend →
+              </Link>
+            }
+          >
+            Configure the OpenEMS backend for this microgrid before adding
+            edges.
+          </Banner>
+        ) : (
+          <Banner tone="warn" title="OpenEMS backend not configured">
+            Ask a super admin to configure the OpenEMS backend to add edges.
+          </Banner>
+        ))}
 
       {onlineError && (
         <div
