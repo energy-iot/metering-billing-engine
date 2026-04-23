@@ -34,6 +34,11 @@ vi.mock("@/lib/hierarchy", () => ({
   getHierarchyLevels: vi.fn().mockResolvedValue([]),
 }));
 
+// Stub the client shell — uses useRouter which isn't available in server-component tests.
+vi.mock("./edges-crud-shell", () => ({
+  EdgesCRUDShell: () => null,
+}));
+
 import SetupEdgesPage from "./page";
 
 function buildEdgesQuery(data: unknown) {

@@ -6,13 +6,13 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { DiscoverDevices } from "@/components/DiscoverDevices";
+import { EdgeDetailConfigureButton } from "./edge-detail-configure-button";
 
-// Setup > Edges > [edgeId] — edge detail (D2 / #53).
+// Setup > Edges > [edgeId] — edge detail (D2 / #53, #77).
 // Lists devices on this edge. For each device, shows the linked household
 // (via household_devices) if any.
 //
-// Scope boundary: linked household is plain text here. D3 (#54) upgrades
-// it to a Link → household detail page.
+// #77 adds: "Configure…" button in the header (via client shell component).
 
 type DeviceRow = Pick<
   Device,
@@ -104,6 +104,8 @@ export default async function EdgeDetailPage({
         <div className="mt-2 flex items-center gap-3">
           <h3 className="text-lg font-semibold text-foreground">{edge.name}</h3>
           <StatusChip kind="edgeSource" status={edge.data_source_type} />
+          {/* Client shell: Configure… button opens EdgeFormModal in edit mode */}
+          <EdgeDetailConfigureButton edge={edge} />
         </div>
         {edge.data_source_type === "openems" && (
           <p className="mt-1 font-mono text-xs text-muted-foreground">

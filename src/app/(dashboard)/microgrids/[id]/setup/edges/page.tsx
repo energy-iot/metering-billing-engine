@@ -6,9 +6,11 @@ import { Chip } from "@/components/ui/chip";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { EdgesCRUDShell } from "./edges-crud-shell";
 
-// Setup > Edges (D2 / #53).
+// Setup > Edges (D2 / #53, #77).
 // Lists every edge attached to this microgrid. Rows link to edge detail.
+// "+ Add edge" and "Configure…" buttons are in the client shell component.
 
 type EdgeRow = Pick<
   Edge,
@@ -83,12 +85,16 @@ export default async function SetupEdgesPage({
             {edges?.length ?? 0} edge{(edges?.length ?? 0) === 1 ? "" : "s"}
           </h3>
         </div>
-        <Link
-          href={`/microgrids/${id}/setup/edges/shared`}
-          className="text-sm font-medium text-primary hover:underline"
-        >
-          View shared devices →
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/microgrids/${id}/setup/edges/shared`}
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            View shared devices →
+          </Link>
+          {/* Client shell handles the + Add Edge modal trigger */}
+          <EdgesCRUDShell microgridId={id} mode="add-button" />
+        </div>
       </div>
 
       {onlineError && (
@@ -121,6 +127,9 @@ export default async function SetupEdgesPage({
                 </th>
                 <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Status
+                </th>
+                <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
@@ -169,6 +178,14 @@ export default async function SetupEdgesPage({
                           Unknown
                         </Chip>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {/* Client shell handles per-row Configure… button */}
+                      <EdgesCRUDShell
+                        microgridId={id}
+                        mode="configure-button"
+                        edge={edge as Edge}
+                      />
                     </td>
                   </tr>
                 );
