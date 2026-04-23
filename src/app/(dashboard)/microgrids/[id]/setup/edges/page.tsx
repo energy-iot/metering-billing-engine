@@ -4,6 +4,8 @@ import type { Edge } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
 import { Chip } from "@/components/ui/chip";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 // Setup > Edges (D2 / #53).
 // Lists every edge attached to this microgrid. Rows link to edge detail.
@@ -42,6 +44,11 @@ export default async function SetupEdgesPage({
   const { id } = await params;
   const supabase = await createClient();
 
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "edges-listing",
+    microgridId: id,
+  });
+
   const { data: edges, error } = await supabase
     .from("edges")
     .select("id, name, data_source_type, openems_edge_id, openems_backend_url, role")
@@ -66,6 +73,7 @@ export default async function SetupEdgesPage({
 
   return (
     <div className="space-y-4">
+      <HierarchyNav levels={levels} className="mb-2" />
       <div className="flex items-end justify-between gap-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Device, Edge, Household, HouseholdDevice } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 // Setup > Edges > [edgeId] — edge detail (D2 / #53).
 // Lists devices on this edge. For each device, shows the linked household
@@ -25,6 +27,12 @@ export default async function EdgeDetailPage({
 }) {
   const { id, edgeId } = await params;
   const supabase = await createClient();
+
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "edge",
+    microgridId: id,
+    edgeId,
+  });
 
   // Fetch the edge (scoped to this microgrid via `.eq("microgrid_id")`).
   const { data: edge, error: edgeError } = await supabase
@@ -84,6 +92,7 @@ export default async function EdgeDetailPage({
 
   return (
     <div className="space-y-4">
+      <HierarchyNav levels={levels} className="mb-2" />
       <div>
         <Link
           href={`/microgrids/${id}/setup/edges`}

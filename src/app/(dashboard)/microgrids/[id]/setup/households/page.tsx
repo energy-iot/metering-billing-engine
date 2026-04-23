@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Device, Household } from "@/lib/types/domain";
 import { HouseholdsSection } from "./households-section";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 // Setup > Households (D2 / #53).
 // Lists households for this microgrid and exposes an "Add household" modal
@@ -15,6 +17,11 @@ export default async function SetupHouseholdsPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "households-listing",
+    microgridId: id,
+  });
 
   const [
     { data: households, error: householdsError },
@@ -64,11 +71,14 @@ export default async function SetupHouseholdsPage({
   }
 
   return (
-    <HouseholdsSection
-      microgridId={id}
-      households={households ?? []}
-      devices={devices ?? []}
-      primaryDeviceAssignments={primaryDeviceAssignments}
-    />
+    <>
+      <HierarchyNav levels={levels} className="mb-4" />
+      <HouseholdsSection
+        microgridId={id}
+        households={households ?? []}
+        devices={devices ?? []}
+        primaryDeviceAssignments={primaryDeviceAssignments}
+      />
+    </>
   );
 }

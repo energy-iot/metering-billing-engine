@@ -162,7 +162,7 @@ describe("getHierarchyLevels — siblings branch", () => {
     households: [HH_1],
   });
 
-  it("org count > 1 → siblings populated for Organization level", async () => {
+  it("org count > 1 → siblings populated for Organization level; excludes self", async () => {
     const levels = await getHierarchyLevels(supabase, {
       kind: "microgrid",
       microgridId: "mg-1",
@@ -171,10 +171,13 @@ describe("getHierarchyLevels — siblings branch", () => {
     expect(orgLevel).toBeDefined();
     expect(orgLevel!.count).toBe(2);
     expect(orgLevel!.siblings).toBeDefined();
-    expect(orgLevel!.siblings!.length).toBe(2);
+    // Self-exclusion: only the OTHER org should appear, not the current one.
+    expect(orgLevel!.siblings!.length).toBe(1);
+    // Sibling href must use /?org=<id> format.
+    expect(orgLevel!.siblings![0].href).toBe("/?org=org-b");
   });
 
-  it("community count > 1 → siblings populated for Community level", async () => {
+  it("community count > 1 → siblings populated for Community level; excludes self", async () => {
     const levels = await getHierarchyLevels(supabase, {
       kind: "microgrid",
       microgridId: "mg-1",
@@ -183,6 +186,11 @@ describe("getHierarchyLevels — siblings branch", () => {
     expect(commLevel).toBeDefined();
     expect(commLevel!.count).toBe(2);
     expect(commLevel!.siblings).toBeDefined();
+    // Self-exclusion: only the OTHER community should appear.
+    expect(commLevel!.siblings!.length).toBe(1);
+    const siblingHrefs = commLevel!.siblings!.map((s) => s.href);
+    expect(siblingHrefs.some((h) => h.includes("comm-k2"))).toBe(true);
+    expect(siblingHrefs.some((h) => h.includes("comm-k") && !h.includes("comm-k2"))).toBe(false);
   });
 
   it("microgrid count > 1 → siblings populated for Microgrid level; excludes self", async () => {
@@ -325,5 +333,81 @@ describe("getHierarchyLevels — href contracts", () => {
     });
     const hhLevel = levels.find((l) => l.kind === "Household");
     expect(hhLevel!.href).toBe("/microgrids/mg-1/setup/households/hh-1");
+  });
+
+  it("Organization sibling hrefs use /?org=<id> format", async () => {
+    const multiOrgSupabase = makeMockSupabase({
+      organizations: [ORG_A, { id: "org-b", name: "Second Org" }],
+      communities: [COMMUNITY_K],
+      microgrids: [MICROGRID_1],
+      edges: [],
+      households: [],
+    });
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrid",
+      microgridId: "mg-1",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.siblings).toBeDefined();
+    const siblingHref = orgLevel!.siblings![0].href;
+    expect(siblingHref).toBe("/?org=org-b");
+  });
+});
+
+// ── Listing scopes ─────────────────────────────────────────────────────────────
+
+describe("getHierarchyLevels — listing scopes", () => {
+  const supabase = makeMockSupabase({
+    organizations: [ORG_A],
+    communities: [COMMUNITY_K],
+    microgrids: [MICROGRID_1],
+    edges: [EDGE_1],
+    households: [HH_1],
+  });
+
+  it("edges-listing scope → 4-level [Org, Community, Microgrid, Edge] with 'Edges' label active", async () => {
+    const levels = await getHierarchyLevels(supabase, {
+      kind: "edges-listing",
+      microgridId: "mg-1",
+    });
+    expect(levels).toHaveLength(4);
+    expect(levels[3].kind).toBe("Edge");
+    expect(levels[3].label).toBe("Edges");
+    expect(levels[3].active).toBe(true);
+    expect(levels[3].count).toBe(1); // 1 edge in fixture
+    expect(levels[3].href).toBe("/microgrids/mg-1/setup/edges");
+    // No siblings — it's a synthetic aggregate level
+    expect(levels[3].siblings).toBeUndefined();
+  });
+
+  it("households-listing scope → 4-level [Org, Community, Microgrid, Household] with 'Households' label active", async () => {
+    const levels = await getHierarchyLevels(supabase, {
+      kind: "households-listing",
+      microgridId: "mg-1",
+    });
+    expect(levels).toHaveLength(4);
+    expect(levels[3].kind).toBe("Household");
+    expect(levels[3].label).toBe("Households");
+    expect(levels[3].active).toBe(true);
+    expect(levels[3].count).toBe(1); // 1 household in fixture
+    expect(levels[3].href).toBe("/microgrids/mg-1/setup/households");
+    expect(levels[3].siblings).toBeUndefined();
+  });
+
+  it("edges-listing with 0 edges → synthetic segment has count=0", async () => {
+    const emptyEdgesSupabase = makeMockSupabase({
+      organizations: [ORG_A],
+      communities: [COMMUNITY_K],
+      microgrids: [MICROGRID_1],
+      edges: [],
+      households: [],
+    });
+    const levels = await getHierarchyLevels(emptyEdgesSupabase, {
+      kind: "edges-listing",
+      microgridId: "mg-1",
+    });
+    expect(levels[3].count).toBe(0);
+    expect(levels[3].label).toBe("Edges");
+    expect(levels[3].active).toBe(true);
   });
 });

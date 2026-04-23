@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import type { BillingPeriod, Edge } from "@/lib/types/domain";
 import { Chip } from "@/components/ui/chip";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 // Microgrid Dashboard landing (D2 / #53).
 //
@@ -56,7 +58,7 @@ export default async function MicrogridDashboardPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: edges }, { data: periods }] = await Promise.all([
+  const [{ data: edges }, { data: periods }, levels] = await Promise.all([
     supabase
       .from("edges")
       .select("id, name, data_source_type, openems_edge_id")
@@ -70,6 +72,7 @@ export default async function MicrogridDashboardPage({
       .order("start_date", { ascending: false })
       .limit(1)
       .returns<BillingPeriod[]>(),
+    getHierarchyLevels(supabase, { kind: "microgrid", microgridId: id }),
   ]);
 
   const openemsEdgeIds = (edges ?? [])
@@ -102,6 +105,7 @@ export default async function MicrogridDashboardPage({
 
   return (
     <div className="space-y-4">
+      <HierarchyNav levels={levels} className="mb-2" />
       <section
         aria-label="Edge health"
         className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"

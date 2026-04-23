@@ -29,6 +29,11 @@ vi.mock("@/lib/openems", async () => {
   };
 });
 
+// Stub getHierarchyLevels so page tests don't need a full Supabase mock chain.
+vi.mock("@/lib/hierarchy", () => ({
+  getHierarchyLevels: vi.fn().mockResolvedValue([]),
+}));
+
 import SetupEdgesPage from "./page";
 
 function buildEdgesQuery(data: unknown) {

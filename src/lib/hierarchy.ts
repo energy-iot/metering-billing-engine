@@ -20,7 +20,9 @@ export type HierarchyScope =
   | { kind: "microgrids"; communityId?: string }
   | { kind: "microgrid"; microgridId: string }
   | { kind: "edge"; microgridId: string; edgeId: string }
-  | { kind: "household"; microgridId: string; householdId: string };
+  | { kind: "edges-listing"; microgridId: string }
+  | { kind: "household"; microgridId: string; householdId: string }
+  | { kind: "households-listing"; microgridId: string };
 
 type SiblingRow = { id: string; name: string | null };
 
@@ -61,7 +63,9 @@ async function fetchOrgLevel(
     active: false,
     siblings:
       orgList.length > 1
-        ? orgList.map((o) => ({ label: o.name ?? o.id, href: "/" }))
+        ? orgList
+            .filter((o) => o.id !== current?.id)
+            .map((o) => ({ label: o.name ?? o.id, href: `/?org=${o.id}` }))
         : undefined,
   };
 }
@@ -99,10 +103,12 @@ async function fetchCommunityLevel(
     active,
     siblings:
       count > 1
-        ? siblingList.map((c) => ({
-            label: c.name ?? c.id,
-            href: `/microgrids?community=${c.id}`,
-          }))
+        ? siblingList
+            .filter((c) => c.id !== community.id)
+            .map((c) => ({
+              label: c.name ?? c.id,
+              href: `/microgrids?community=${c.id}`,
+            }))
         : undefined,
   };
 }
@@ -256,11 +262,13 @@ async function fetchHouseholdLevel(
  * getHierarchyLevels — return a `HierarchyLevel[]` array for HierarchyNav.
  *
  * Scope determines how deep the breadcrumb reaches:
- *   - 'communities'  → [Organization] active
- *   - 'microgrids'   → [Organization, Community (if communityId)] active
- *   - 'microgrid'    → [Organization, Community, Microgrid] active
- *   - 'edge'         → [Organization, Community, Microgrid, Edge] active
- *   - 'household'    → [Organization, Community, Microgrid, Household] active
+ *   - 'communities'       → [Organization] active
+ *   - 'microgrids'        → [Organization, Community (if communityId)] active
+ *   - 'microgrid'         → [Organization, Community, Microgrid] active
+ *   - 'edge'              → [Organization, Community, Microgrid, Edge] active
+ *   - 'edges-listing'     → [Organization, Community, Microgrid, Edges(synthetic)] active
+ *   - 'household'         → [Organization, Community, Microgrid, Household] active
+ *   - 'households-listing'→ [Organization, Community, Microgrid, Households(synthetic)] active
  *
  * Counts are RLS-scoped (Supabase honors the user's session automatically).
  * Siblings are populated only when `count > 1`.
@@ -352,6 +360,86 @@ export async function getHierarchyLevels(
       if (communityLevel) levels.push(communityLevel);
       levels.push(microgridLevel);
       if (edgeLevel) levels.push(edgeLevel);
+
+      return levels;
+    }
+
+    case "edges-listing": {
+      // 4-level: Org → Community → Microgrid → Edges (synthetic aggregate segment).
+      const { level: microgridLevel, communityId, orgId } =
+        await fetchMicrogridLevel(supabase, scope.microgridId, false);
+
+      if (!microgridLevel || !communityId) {
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      const [orgLevel, communityLevel] = await Promise.all([
+        fetchOrgLevel(supabase, orgId ?? undefined),
+        fetchCommunityLevel(supabase, communityId, false),
+      ]);
+
+      // Count edges for the synthetic "Edges" segment.
+      const { data: edgeRows } = await supabase
+        .from("edges")
+        .select("id")
+        .eq("microgrid_id", scope.microgridId)
+        .returns<{ id: string }[]>();
+      const edgeCount = (edgeRows ?? []).length;
+
+      const edgesListingLevel: HierarchyLevel = {
+        kind: "Edge",
+        label: "Edges",
+        count: edgeCount,
+        href: `/microgrids/${scope.microgridId}/setup/edges`,
+        active: true,
+      };
+
+      const levels: HierarchyLevel[] = [orgLevel];
+      if (orgLevel.count === 0) return levels;
+      if (communityLevel) levels.push(communityLevel);
+      levels.push(microgridLevel);
+      levels.push(edgesListingLevel);
+
+      return levels;
+    }
+
+    case "households-listing": {
+      // 4-level: Org → Community → Microgrid → Households (synthetic aggregate segment).
+      const { level: microgridLevel, communityId, orgId } =
+        await fetchMicrogridLevel(supabase, scope.microgridId, false);
+
+      if (!microgridLevel || !communityId) {
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      const [orgLevel, communityLevel] = await Promise.all([
+        fetchOrgLevel(supabase, orgId ?? undefined),
+        fetchCommunityLevel(supabase, communityId, false),
+      ]);
+
+      // Count households for the synthetic "Households" segment.
+      const { data: hhRows } = await supabase
+        .from("households")
+        .select("id")
+        .eq("microgrid_id", scope.microgridId)
+        .returns<{ id: string }[]>();
+      const hhCount = (hhRows ?? []).length;
+
+      const householdsListingLevel: HierarchyLevel = {
+        kind: "Household",
+        label: "Households",
+        count: hhCount,
+        href: `/microgrids/${scope.microgridId}/setup/households`,
+        active: true,
+      };
+
+      const levels: HierarchyLevel[] = [orgLevel];
+      if (orgLevel.count === 0) return levels;
+      if (communityLevel) levels.push(communityLevel);
+      levels.push(microgridLevel);
+      levels.push(householdsListingLevel);
 
       return levels;
     }

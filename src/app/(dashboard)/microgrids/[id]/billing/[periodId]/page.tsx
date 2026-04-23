@@ -8,6 +8,8 @@ import type {
   RateSchedule,
 } from "@/lib/types/domain";
 import { BillingTable } from "@/components/BillingTable";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 export default async function BillingPeriodDetailPage({
   params,
@@ -16,6 +18,11 @@ export default async function BillingPeriodDetailPage({
 }) {
   const { id, periodId } = await params;
   const supabase = await createClient();
+
+  const levels = await getHierarchyLevels(supabase, {
+    kind: "microgrid",
+    microgridId: id,
+  });
 
   const [
     { data: period, error: periodError },
@@ -95,13 +102,16 @@ export default async function BillingPeriodDetailPage({
   }
 
   return (
-    <BillingTable
-      microgridId={id}
-      period={period}
-      lineItems={lineItems ?? []}
-      households={households ?? []}
-      tiers={(schedule?.tiers ?? []) as { label: string; min_kwh: number; max_kwh: number | null; rate_per_kwh: number }[]}
-      currency={microgrid.currency}
-    />
+    <>
+      <HierarchyNav levels={levels} className="mb-4" />
+      <BillingTable
+        microgridId={id}
+        period={period}
+        lineItems={lineItems ?? []}
+        households={households ?? []}
+        tiers={(schedule?.tiers ?? []) as { label: string; min_kwh: number; max_kwh: number | null; rate_per_kwh: number }[]}
+        currency={microgrid.currency}
+      />
+    </>
   );
 }

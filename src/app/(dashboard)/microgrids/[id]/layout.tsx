@@ -2,9 +2,11 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Microgrid } from "@/lib/types/domain";
 import { TabNav } from "./tab-nav";
-import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { LocaleProvider } from "@/components/format/locale-context";
-import { getHierarchyLevels } from "@/lib/hierarchy";
+
+// HierarchyNav is NOT placed here — leaf pages own their breadcrumb.
+// Each leaf page calls getHierarchyLevels() with the correct scope depth
+// so that exactly ONE breadcrumb appears per route.
 
 export default async function MicrogridLayout({
   children,
@@ -28,11 +30,6 @@ export default async function MicrogridLayout({
 
   const microgrid = data as Microgrid;
 
-  const levels = await getHierarchyLevels(supabase, {
-    kind: "microgrid",
-    microgridId: id,
-  });
-
   // Build location label from structured columns (location TEXT was dropped in AB)
   const locationParts = [microgrid.address_city, microgrid.address_country].filter(Boolean);
   const locationLabel = locationParts.length > 0 ? locationParts.join(", ") : null;
@@ -41,8 +38,7 @@ export default async function MicrogridLayout({
     <LocaleProvider currency={microgrid.currency}>
       <div>
         <div className="mb-6">
-          <HierarchyNav levels={levels} />
-          <h1 className="mt-3 text-2xl font-semibold text-foreground">
+          <h1 className="text-2xl font-semibold text-foreground">
             {microgrid.name}
           </h1>
           {locationLabel && (
