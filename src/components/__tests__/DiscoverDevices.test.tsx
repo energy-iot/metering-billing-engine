@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
- * DiscoverDevices component tests (F #57).
+ * DiscoverDevices component tests (F #57, #68).
  *
  * Covers:
  *   (a) suggested device_type renders in the dropdown
  *   (b) dropdown override propagates to the save payload
  *   (c) Save calls POST /api/devices with the correct payload shape
  *   (d) 'Already added' chip renders as disabled for a component matching an existing device row
+ *   (e) null-channel rows render muted with help text and are excluded from Save payload (#68)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -23,14 +24,15 @@ vi.mock("next/navigation", () => ({
 function makeDevice(
   componentId: string,
   suggestedDeviceType: DiscoveredDevice["suggestedDeviceType"] = "consumption_meter",
-  alreadyAdded = false
+  alreadyAdded = false,
+  openemsChannelAddress: string | null = `${componentId}/ActiveConsumptionEnergy`
 ): DiscoveredDevice {
   return {
     componentId,
     factoryId: `io.openems.edge.meter.${componentId}`,
     alias: `Meter ${componentId}`,
     nature: "io.openems.edge.meter.api.ElectricityMeter",
-    openemsChannelAddress: `${componentId}/ActiveConsumptionEnergy`,
+    openemsChannelAddress,
     suggestedDeviceType,
     alreadyAdded,
   };
@@ -286,6 +288,85 @@ describe("DiscoverDevices", () => {
       // The already-added row should have opacity-60 class
       const disabledRow = container.querySelector(".opacity-60");
       expect(disabledRow).not.toBeNull();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // (e) null-channel rows — muted rendering + excluded from Save (#68)
+  // ──────────────────────────────────────────────────────────────────────────
+  describe("(e) null-channel rows (battery, inverter, grid_meter, pv_meter)", () => {
+    it("renders muted row with help text when openemsChannelAddress is null", async () => {
+      const devices = [makeDevice("ess0", "battery", false, null)];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/No auto-billing channel for this device type/i)
+        ).toBeDefined();
+      });
+    });
+
+    it("excludes null-channel device from the POST /api/devices payload on bulk save", async () => {
+      // One null-channel device (battery) + one billable device (consumption_meter)
+      const devices = [
+        makeDevice("ess0", "battery", false, null),
+        makeDevice("meter0", "consumption_meter", false, "meter0/ActiveConsumptionEnergy"),
+      ];
+
+      // First call: discover
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      // Second call: save
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ saved: [{ id: "new-uuid" }] }),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => screen.getByText("Save devices"));
+      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const [url, init] = fetchMock.mock.calls[1];
+        expect(url).toBe("/api/devices");
+
+        const body = JSON.parse(init?.body as string);
+        // Only meter0 (consumption_meter) should be in the payload — ess0 has no channel
+        expect(body.devices).toHaveLength(1);
+        expect(body.devices[0].componentId).toBe("meter0");
+      });
+    });
+
+    it("does not show Save button when all new rows have null channel", async () => {
+      const devices = [makeDevice("ess0", "battery", false, null)];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/No auto-billing channel for this device type/i)
+        ).toBeDefined();
+        expect(screen.queryByRole("button", { name: /save devices/i })).toBeNull();
+      });
     });
   });
 
