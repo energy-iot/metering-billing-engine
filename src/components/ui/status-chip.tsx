@@ -9,7 +9,9 @@
 // renders the right tone + label + dot + aria-label.
 
 import * as React from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { Chip, type ChipProps } from "./chip";
+import { cn } from "@/lib/utils";
 
 type Kind =
   | "billingPeriod"
@@ -18,7 +20,8 @@ type Kind =
   | "deviceType"
   | "household"
   | "householdDeviceRole"
-  | "meterType";
+  | "meterType"
+  | "openemsBackendHealth";
 
 type StatusMap = Record<string, { label: string; tone: ChipProps["tone"]; dot?: boolean }>;
 
@@ -95,28 +98,51 @@ const MAPS: Record<Kind, StatusMap> = {
     PRODUCTION:  { label: "Production",  tone: "success" },
     UNKNOWN:     { label: "Unknown",     tone: "neutral" },
   },
+  // OpenEMS Backend per-microgrid health (#102).
+  //   healthy       — recent (< 24h) successful Discover.
+  //   stale         — last Discover ≥ 24h ago; user should run "Test again".
+  //   failing       — last Discover ended in auth_failed / unreachable /
+  //                   zero_edges / unknown_error.
+  //   not_configured — ems_type IS NULL; no Discover has run. NO dot (chip
+  //                   shouldn't imply any state, just absence).
+  openemsBackendHealth: {
+    healthy:        { label: "Healthy",       tone: "success", dot: true  },
+    stale:          { label: "Stale",         tone: "warn",    dot: true  },
+    failing:        { label: "Failing",       tone: "alert",   dot: true  },
+    not_configured: { label: "Not connected", tone: "neutral" /* no dot */ },
+  },
 };
 
 export interface StatusChipProps extends Omit<ChipProps, "tone" | "children" | "dot"> {
   kind: Kind;
   status: string;
+  /**
+   * Optional tooltip content. When supplied, the chip is wrapped in a
+   * Radix Tooltip (hover + keyboard focus). Added in #102 for the OpenEMS
+   * Backend health chip (tab-label chip) where the long explanation
+   * wouldn't fit inline. The summary-card health chip reads the info from
+   * its surrounding text so callers don't need to duplicate the copy.
+   */
+  tooltip?: React.ReactNode;
 }
 
-export function StatusChip({ kind, status, ...props }: StatusChipProps) {
+export function StatusChip({ kind, status, tooltip, ...props }: StatusChipProps) {
   const map = MAPS[kind];
   const entry = map[status];
-  if (!entry) {
+
+  const chip = !entry ? (
     // Unknown status — fail loudly in dev, fall back to neutral chip.
-    if (process.env.NODE_ENV !== "production") {
-      console.warn(`StatusChip: unknown status "${status}" for kind "${kind}".`);
-    }
-    return (
-      <Chip tone="neutral" aria-label={`${kind}: ${status}`} {...props}>
-        {status}
-      </Chip>
-    );
-  }
-  return (
+    (() => {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`StatusChip: unknown status "${status}" for kind "${kind}".`);
+      }
+      return (
+        <Chip tone="neutral" aria-label={`${kind}: ${status}`} {...props}>
+          {status}
+        </Chip>
+      );
+    })()
+  ) : (
     <Chip
       tone={entry.tone}
       dot={entry.dot}
@@ -125,5 +151,38 @@ export function StatusChip({ kind, status, ...props }: StatusChipProps) {
     >
       {entry.label}
     </Chip>
+  );
+
+  if (!tooltip) return chip;
+
+  // Wrap in Radix Tooltip. Caller is responsible for providing a
+  // TooltipProvider at or near the app root; we inline one here as a
+  // defensive default so single-use sites (the tab chip) don't need to
+  // refactor the layout tree. Radix Providers nest safely.
+  return (
+    <Tooltip.Provider delayDuration={200}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          {/* Wrap in a focusable span so keyboard users get the tooltip.
+              tabIndex=0 makes the chip focusable without turning it into
+              a button (preserves non-interactive semantics). */}
+          <span tabIndex={0} className="inline-flex cursor-default rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {chip}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            sideOffset={6}
+            className={cn(
+              "z-50 max-w-xs rounded-md bg-foreground px-3 py-2 text-[12px] leading-snug text-background shadow-elev-2",
+              "data-[state=delayed-open]:animate-in data-[state=closed]:animate-out"
+            )}
+          >
+            {tooltip}
+            <Tooltip.Arrow className="fill-foreground" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
   );
 }
