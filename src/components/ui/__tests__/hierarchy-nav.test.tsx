@@ -27,7 +27,7 @@ const communityLevel: HierarchyLevel = {
   kind: "Community",
   label: "Kisakye",
   count: 1,
-  href: "/microgrids?community=comm-k",
+  href: "/communities/comm-k",
   active: false,
 };
 

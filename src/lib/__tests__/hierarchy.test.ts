@@ -190,7 +190,8 @@ describe("getHierarchyLevels — siblings branch", () => {
     expect(commLevel!.siblings!.length).toBe(1);
     const siblingHrefs = commLevel!.siblings!.map((s) => s.href);
     expect(siblingHrefs.some((h) => h.includes("comm-k2"))).toBe(true);
-    expect(siblingHrefs.some((h) => h.includes("comm-k") && !h.includes("comm-k2"))).toBe(false);
+    // Sibling hrefs now point to /communities/<id>
+    expect(siblingHrefs.every((h) => h.startsWith("/communities/"))).toBe(true);
   });
 
   it("microgrid count > 1 → siblings populated for Microgrid level; excludes self", async () => {
@@ -279,6 +280,29 @@ describe("getHierarchyLevels — scope variants", () => {
     expect(levels[3].kind).toBe("Household");
     expect(levels[3].active).toBe(true);
   });
+
+  it("community scope → 2-level [Org, Community(active=true)]", async () => {
+    const levels = await getHierarchyLevels(supabase, {
+      kind: "community",
+      communityId: "comm-k",
+    });
+    expect(levels).toHaveLength(2);
+    expect(levels[0].kind).toBe("Organization");
+    expect(levels[0].active).toBe(false);
+    expect(levels[1].kind).toBe("Community");
+    expect(levels[1].label).toBe("Kisakye");
+    expect(levels[1].active).toBe(true);
+    expect(levels[1].href).toBe("/communities/comm-k");
+  });
+
+  it("community scope: unknown communityId → [Organization] fallback", async () => {
+    const levels = await getHierarchyLevels(supabase, {
+      kind: "community",
+      communityId: "no-such-community",
+    });
+    expect(levels).toHaveLength(1);
+    expect(levels[0].kind).toBe("Organization");
+  });
 });
 
 // ── href contracts ─────────────────────────────────────────────────────────────
@@ -297,13 +321,13 @@ describe("getHierarchyLevels — href contracts", () => {
     expect(levels[0].href).toBe("/");
   });
 
-  it("Community href points to /microgrids?community=<id>", async () => {
+  it("Community href points to /communities/<id>", async () => {
     const levels = await getHierarchyLevels(supabase, {
       kind: "microgrid",
       microgridId: "mg-1",
     });
     const commLevel = levels.find((l) => l.kind === "Community");
-    expect(commLevel!.href).toBe("/microgrids?community=comm-k");
+    expect(commLevel!.href).toBe("/communities/comm-k");
   });
 
   it("Microgrid href points to /microgrids/<id>", async () => {
@@ -333,6 +357,15 @@ describe("getHierarchyLevels — href contracts", () => {
     });
     const hhLevel = levels.find((l) => l.kind === "Household");
     expect(hhLevel!.href).toBe("/microgrids/mg-1/setup/households/hh-1");
+  });
+
+  it("Community href in 'community' scope points to /communities/<id> (active leaf)", async () => {
+    const levels = await getHierarchyLevels(supabase, {
+      kind: "community",
+      communityId: "comm-k",
+    });
+    const commLevel = levels.find((l) => l.kind === "Community");
+    expect(commLevel!.href).toBe("/communities/comm-k");
   });
 
   it("Organization sibling hrefs use /?org=<id> format", async () => {

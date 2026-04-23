@@ -17,6 +17,7 @@ import type { HierarchyLevel } from "@/components/ui/hierarchy-nav";
 
 export type HierarchyScope =
   | { kind: "communities" }
+  | { kind: "community"; communityId: string }
   | { kind: "microgrids"; communityId?: string }
   | { kind: "microgrid"; microgridId: string }
   | { kind: "edge"; microgridId: string; edgeId: string }
@@ -99,7 +100,7 @@ async function fetchCommunityLevel(
     kind: "Community",
     label: community.name,
     count,
-    href: `/microgrids?community=${community.id}`,
+    href: `/communities/${community.id}`,
     active,
     siblings:
       count > 1
@@ -107,7 +108,7 @@ async function fetchCommunityLevel(
             .filter((c) => c.id !== community.id)
             .map((c) => ({
               label: c.name ?? c.id,
-              href: `/microgrids?community=${c.id}`,
+              href: `/communities/${c.id}`,
             }))
         : undefined,
   };
@@ -263,6 +264,7 @@ async function fetchHouseholdLevel(
  *
  * Scope determines how deep the breadcrumb reaches:
  *   - 'communities'       → [Organization] active
+ *   - 'community'         → [Organization, Community(active=true)]
  *   - 'microgrids'        → [Organization, Community (if communityId)] active
  *   - 'microgrid'         → [Organization, Community, Microgrid] active
  *   - 'edge'              → [Organization, Community, Microgrid, Edge] active
@@ -282,6 +284,26 @@ export async function getHierarchyLevels(
     case "communities": {
       const orgLevel = await fetchOrgLevel(supabase);
       return [orgLevel];
+    }
+
+    case "community": {
+      // 2-level: Org → Community(active=true).
+      const communityLevel = await fetchCommunityLevel(supabase, scope.communityId, true);
+      if (!communityLevel) {
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      // Resolve org_id from the community row to anchor the org level.
+      const { data: communityRow } = await supabase
+        .from("communities")
+        .select("org_id")
+        .eq("id", scope.communityId)
+        .single<{ org_id: string }>();
+
+      const orgLevel = await fetchOrgLevel(supabase, communityRow?.org_id);
+      if (orgLevel.count === 0) return [orgLevel];
+      return [orgLevel, communityLevel];
     }
 
     case "microgrids": {
