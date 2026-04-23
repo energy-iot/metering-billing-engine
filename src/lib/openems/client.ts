@@ -1,16 +1,25 @@
-import type { MeterConfig, MeterDataAdapter, MeterReading } from "@/lib/adapters/types";
+import type { DeviceConfig, DeviceDataAdapter, DeviceReading } from "@/lib/adapters/types";
 import { OpenEmsError } from "./errors";
 import type { OpenEmsAuth } from "./auth";
 import type {
   ChannelValue,
+  DeviceEnergyResult,
   EdgeConfig,
   EdgeStatus,
   JsonRpcResponse,
-  MeterEnergyResult,
-  OpenEmsDataSourceConfig,
 } from "./types";
 
-export class OpenEmsClient implements MeterDataAdapter {
+/**
+ * Channel address convention for OpenEMS consumption meters:
+ *   `${componentId}/ActiveConsumptionEnergy`
+ * This suffix is OpenEMS-specific. Non-consumption channels (battery SoC, PV
+ * production) would resolve their channel name from device_type in the adapter.
+ */
+function consumptionChannelAddress(componentId: string): string {
+  return `${componentId}/ActiveConsumptionEnergy`;
+}
+
+export class OpenEmsClient implements DeviceDataAdapter {
   constructor(
     private readonly baseUrl: string,
     private readonly auth: OpenEmsAuth
@@ -159,7 +168,7 @@ export class OpenEmsClient implements MeterDataAdapter {
   }
 
   /**
-   * Implement MeterDataAdapter.getStatus.
+   * Implement DeviceDataAdapter.getStatus.
    */
   async getStatus(
     edgeIds: string[]
@@ -173,42 +182,44 @@ export class OpenEmsClient implements MeterDataAdapter {
   }
 
   /**
-   * Implement MeterDataAdapter.getReadings.
-   * Groups meters by edgeId, batches channel queries per edge,
+   * Implement DeviceDataAdapter.getReadings.
+   * Groups devices by edgeOpenemsId, batches channel queries per edge,
    * and converts Wh to kWh.
+   *
+   * Channel address: `${componentId}/ActiveConsumptionEnergy` (OpenEMS convention).
    */
   async getReadings(
-    meters: MeterConfig[],
+    devices: DeviceConfig[],
     startDate: string,
     endDate: string
-  ): Promise<MeterReading[]> {
-    // Validate and group meters by edgeId
+  ): Promise<DeviceReading[]> {
+    // Validate and group devices by OpenEMS edge ID
     const edgeGroups = new Map<
       string,
-      { meterId: string; channelAddress: string }[]
+      { deviceId: string; channelAddress: string }[]
     >();
 
-    for (const meter of meters) {
-      const config = meter.dataSourceConfig as OpenEmsDataSourceConfig;
-      if (!config.edgeId || !config.channelAddress) {
+    for (const device of devices) {
+      if (!device.edgeOpenemsId || !device.componentId) {
         throw new OpenEmsError(
-          `Meter ${meter.id} has invalid data_source_config: missing edgeId or channelAddress`,
-          "METER_INVALID_DATA_SOURCE",
+          `Device ${device.id} has invalid config: missing edgeOpenemsId or componentId`,
+          "DEVICE_INVALID_DATA_SOURCE",
           400,
-          { meterId: meter.id, config }
+          { deviceId: device.id }
         );
       }
 
-      const group = edgeGroups.get(config.edgeId) ?? [];
-      group.push({ meterId: meter.id, channelAddress: config.channelAddress });
-      edgeGroups.set(config.edgeId, group);
+      const channelAddress = consumptionChannelAddress(device.componentId);
+      const group = edgeGroups.get(device.edgeOpenemsId) ?? [];
+      group.push({ deviceId: device.id, channelAddress });
+      edgeGroups.set(device.edgeOpenemsId, group);
     }
 
     // Query each edge in parallel
-    const results: MeterReading[] = [];
+    const results: DeviceReading[] = [];
     const edgeQueries = Array.from(edgeGroups.entries()).map(
-      async ([edgeId, meterInfos]) => {
-        const channels = meterInfos.map((m) => m.channelAddress);
+      async ([edgeId, deviceInfos]) => {
+        const channels = deviceInfos.map((d) => d.channelAddress);
         const data = await this.queryHistoricEnergy(
           edgeId,
           channels,
@@ -216,10 +227,10 @@ export class OpenEmsClient implements MeterDataAdapter {
           endDate
         );
 
-        for (const meterInfo of meterInfos) {
-          const whValue = data[meterInfo.channelAddress] ?? null;
+        for (const deviceInfo of deviceInfos) {
+          const whValue = data[deviceInfo.channelAddress] ?? null;
           results.push({
-            meterId: meterInfo.meterId,
+            deviceId: deviceInfo.deviceId,
             usageKwh: whValue !== null ? whValue / 1000 : null,
             startDate,
             endDate,
@@ -234,36 +245,39 @@ export class OpenEmsClient implements MeterDataAdapter {
 
   /**
    * Query historic energy and return detailed results with both Wh and kWh.
+   * (Formerly getMeterEnergy — renamed to getDeviceEnergy.)
+   *
+   * Channel address: `${componentId}/ActiveConsumptionEnergy` (OpenEMS convention).
    */
-  async getMeterEnergy(
-    meters: MeterConfig[],
+  async getDeviceEnergy(
+    devices: DeviceConfig[],
     startDate: string,
     endDate: string
-  ): Promise<MeterEnergyResult[]> {
+  ): Promise<DeviceEnergyResult[]> {
     const edgeGroups = new Map<
       string,
-      { meterId: string; channelAddress: string }[]
+      { deviceId: string; channelAddress: string }[]
     >();
 
-    for (const meter of meters) {
-      const config = meter.dataSourceConfig as OpenEmsDataSourceConfig;
-      if (!config.edgeId || !config.channelAddress) {
+    for (const device of devices) {
+      if (!device.edgeOpenemsId || !device.componentId) {
         throw new OpenEmsError(
-          `Meter ${meter.id} has invalid data_source_config`,
-          "METER_INVALID_DATA_SOURCE",
+          `Device ${device.id} has invalid config: missing edgeOpenemsId or componentId`,
+          "DEVICE_INVALID_DATA_SOURCE",
           400
         );
       }
 
-      const group = edgeGroups.get(config.edgeId) ?? [];
-      group.push({ meterId: meter.id, channelAddress: config.channelAddress });
-      edgeGroups.set(config.edgeId, group);
+      const channelAddress = consumptionChannelAddress(device.componentId);
+      const group = edgeGroups.get(device.edgeOpenemsId) ?? [];
+      group.push({ deviceId: device.id, channelAddress });
+      edgeGroups.set(device.edgeOpenemsId, group);
     }
 
-    const results: MeterEnergyResult[] = [];
+    const results: DeviceEnergyResult[] = [];
     const edgeQueries = Array.from(edgeGroups.entries()).map(
-      async ([edgeId, meterInfos]) => {
-        const channels = meterInfos.map((m) => m.channelAddress);
+      async ([edgeId, deviceInfos]) => {
+        const channels = deviceInfos.map((d) => d.channelAddress);
         const data = await this.queryHistoricEnergy(
           edgeId,
           channels,
@@ -271,12 +285,12 @@ export class OpenEmsClient implements MeterDataAdapter {
           endDate
         );
 
-        for (const meterInfo of meterInfos) {
-          const whValue = data[meterInfo.channelAddress] ?? null;
+        for (const deviceInfo of deviceInfos) {
+          const whValue = data[deviceInfo.channelAddress] ?? null;
           results.push({
-            meterId: meterInfo.meterId,
+            deviceId: deviceInfo.deviceId,
             edgeId,
-            channelAddress: meterInfo.channelAddress,
+            channelAddress: deviceInfo.channelAddress,
             energyWh: whValue,
             energyKwh: whValue !== null ? whValue / 1000 : null,
           });

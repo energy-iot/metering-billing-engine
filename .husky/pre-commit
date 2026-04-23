@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Husky pre-commit hook
+# Fails if database.gen.ts is out of sync with the local Supabase schema.
+# Fix by running: npm run db:types
+npm run db:types:check

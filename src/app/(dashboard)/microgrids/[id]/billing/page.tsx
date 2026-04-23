@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import type { BillingPeriod } from "@/lib/types/database";
+import type { BillingPeriod } from "@/lib/types/domain";
 import { BillingPeriodList } from "@/components/BillingPeriodList";
 
 export default async function BillingPage({

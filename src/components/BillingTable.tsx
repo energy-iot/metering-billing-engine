@@ -17,22 +17,22 @@ import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/c
 import type {
   BillingLineItem,
   BillingPeriod,
-  Tenant,
+  Household,
   TierConfig,
-} from "@/lib/types/database";
+} from "@/lib/types/domain";
 
 export function BillingTable({
   microgridId,
   period,
   lineItems,
-  tenants,
+  households,
   tiers,
   currency,
 }: {
   microgridId: string;
   period: BillingPeriod;
   lineItems: BillingLineItem[];
-  tenants: Tenant[];
+  households: Household[];
   tiers: TierConfig[];
   currency: string;
 }) {
@@ -45,7 +45,7 @@ export function BillingTable({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generateErrors, setGenerateErrors] = useState<
-    { tenantName: string; error: string }[]
+    { householdName: string; error: string }[]
   >([]);
 
   // Dialog state
@@ -54,10 +54,10 @@ export function BillingTable({
 
   const isDraft = period.status === "draft";
 
-  // Build tenantId -> lineItem map
+  // Build householdId -> lineItem map
   const lineItemMap = new Map<string, BillingLineItem>();
   for (const item of lineItems) {
-    lineItemMap.set(item.tenant_id, item);
+    lineItemMap.set(item.household_id, item);
   }
 
   // Grand totals
@@ -70,9 +70,10 @@ export function BillingTable({
     grandTotalKwh += item.usage_kwh;
     grandTotal += item.total_amount;
 
-    for (let i = 0; i < item.tier_breakdown.length && i < tiers.length; i++) {
-      grandTierKwh[i] += item.tier_breakdown[i].kwh;
-      grandTierAmount[i] += item.tier_breakdown[i].amount;
+    const breakdown = item.tier_breakdown as { label: string; kwh: number; amount: number }[];
+    for (let i = 0; i < breakdown.length && i < tiers.length; i++) {
+      grandTierKwh[i] += breakdown[i].kwh;
+      grandTierAmount[i] += breakdown[i].amount;
     }
   }
 
@@ -98,8 +99,8 @@ export function BillingTable({
 
       if (data.errors && data.errors.length > 0) {
         setGenerateErrors(
-          data.errors.map((e: { tenantName: string; error: string }) => ({
-            tenantName: e.tenantName,
+          data.errors.map((e: { householdName: string; error: string }) => ({
+            householdName: e.householdName,
             error: e.error,
           }))
         );
@@ -157,7 +158,7 @@ export function BillingTable({
   // Build summary rows for ClosePeriodDialog
   const closePeriodSummaryRows: ClosePeriodSummaryRow[] = [
     {
-      label: "Tenants",
+      label: "Households",
       value: String(lineItems.length),
     },
     {
@@ -177,54 +178,60 @@ export function BillingTable({
   const amountFormat = (v: number | string | null) =>
     formatCurrency(v == null ? null : Number(v), locale, localeCurrency, { bareNumber: true });
 
-  const columns: ColumnDef<Tenant>[] = [
+  const columns: ColumnDef<Household>[] = [
     {
       kind: "row-header",
-      header: "Tenant",
-      accessor: (t) => t.name,
+      header: "Household",
+      accessor: (h) => h.display_name,
     },
     {
       kind: "value",
       header: "Begin (kWh)",
-      accessor: (t) => lineItemMap.get(t.id)?.start_kwh ?? null,
+      accessor: (h) => lineItemMap.get(h.id)?.start_kwh ?? null,
       format: (v) => (v == null ? "—" : kwhFormat(v)),
     },
     {
       kind: "value",
       header: "End (kWh)",
-      accessor: (t) => lineItemMap.get(t.id)?.end_kwh ?? null,
+      accessor: (h) => lineItemMap.get(h.id)?.end_kwh ?? null,
       format: (v) => (v == null ? "—" : kwhFormat(v)),
     },
     {
       kind: "value",
       header: "Usage (kWh)",
-      accessor: (t) => lineItemMap.get(t.id)?.usage_kwh ?? null,
+      accessor: (h) => lineItemMap.get(h.id)?.usage_kwh ?? null,
       format: (v) => (v == null ? "—" : kwhFormat(v)),
     },
-    ...tiers.flatMap((tier, i): ColumnDef<Tenant>[] => [
+    ...tiers.flatMap((tier, i): ColumnDef<Household>[] => [
       {
         kind: "value",
         header: `${tier.label} kWh`,
-        accessor: (t) => lineItemMap.get(t.id)?.tier_breakdown[i]?.kwh ?? null,
+        accessor: (h) => {
+          const bd = lineItemMap.get(h.id)?.tier_breakdown as { label: string; kwh: number; amount: number }[] | undefined;
+          return bd?.[i]?.kwh ?? null;
+        },
         format: (v) => (v == null ? "—" : kwhFormat(v)),
       },
       {
         kind: "value",
         header: `${tier.label} (${currency})`,
-        accessor: (t) => lineItemMap.get(t.id)?.tier_breakdown[i]?.amount ?? null,
+        accessor: (h) => {
+          const bd = lineItemMap.get(h.id)?.tier_breakdown as { label: string; kwh: number; amount: number }[] | undefined;
+          return bd?.[i]?.amount ?? null;
+        },
         format: (v) => (v == null ? "—" : amountFormat(v)),
       },
     ]),
     {
       kind: "value",
       header: `Total (${currency})`,
-      accessor: (t) => lineItemMap.get(t.id)?.total_amount ?? null,
+      accessor: (h) => lineItemMap.get(h.id)?.total_amount ?? null,
       format: (v) => (v == null ? "—" : amountFormat(v)),
     },
   ];
 
-  // Tenants with line items for the CopyTable (only tenants that have data)
-  const tenantsWithItems = tenants.filter((t) => lineItemMap.has(t.id));
+  // Households with line items for the CopyTable (only households that have data)
+  const householdsWithItems = households.filter((h) => lineItemMap.has(h.id));
 
   return (
     <div className="space-y-4">
@@ -314,12 +321,12 @@ export function BillingTable({
       {generateErrors.length > 0 && (
         <div className="rounded-md bg-warning-muted p-3 text-sm text-warning-fg">
           <p className="font-medium">
-            Some tenants could not be billed:
+            Some households could not be billed:
           </p>
           <ul className="mt-1 list-inside list-disc">
             {generateErrors.map((e, i) => (
               <li key={i}>
-                {e.tenantName}: {e.error}
+                {e.householdName}: {e.error}
               </li>
             ))}
           </ul>
@@ -328,18 +335,18 @@ export function BillingTable({
 
       {/* Billing Table */}
       <div className="rounded-lg border border-border bg-card p-6">
-        {lineItems.length === 0 && tenants.length > 0 ? (
+        {lineItems.length === 0 && households.length > 0 ? (
           <p className="text-sm text-muted-foreground">
             No billing data yet.{" "}
             {isDraft
               ? 'Click "Generate" to fetch meter readings and calculate costs.'
               : ""}
           </p>
-        ) : tenants.length === 0 ? (
+        ) : households.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No tenants configured for this microgrid.
+            No households configured for this microgrid.
           </p>
-        ) : tenantsWithItems.length === 0 ? (
+        ) : householdsWithItems.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No billing data yet.{" "}
             {isDraft
@@ -349,9 +356,9 @@ export function BillingTable({
         ) : (
           <div className="space-y-4">
             <CopyTable
-              rows={tenantsWithItems}
+              rows={householdsWithItems}
               columns={columns}
-              caption={`Billing table for period ${periodLabel} — ${tenantsWithItems.length} tenant${tenantsWithItems.length !== 1 ? "s" : ""}`}
+              caption={`Billing table for period ${periodLabel} — ${householdsWithItems.length} household${householdsWithItems.length !== 1 ? "s" : ""}`}
               ariaLabel={`Billing data for ${periodLabel}`}
             />
 

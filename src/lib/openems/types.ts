@@ -1,8 +1,15 @@
-/** Config stored in meters.data_source_config for openems type */
-export type OpenEmsDataSourceConfig = {
-  edgeId: string; // e.g. "edge0"
-  channelAddress: string; // e.g. "meter0/ActiveConsumptionEnergy"
-};
+/**
+ * OpenEMS-specific types for the JSON-RPC B2B API.
+ *
+ * Note: OpenEmsDataSourceConfig has been removed. Device connection coordinates
+ * (edge ID + component ID) are now first-class columns on the `edges` and `devices`
+ * tables and flow through DeviceConfig in src/lib/adapters/types.ts.
+ *
+ * Channel address convention for energy reads:
+ *   `${componentId}/ActiveConsumptionEnergy`
+ * This suffix is OpenEMS-specific; non-consumption channels (battery SoC, PV
+ * production) resolve their channel name from device_type in the adapter.
+ */
 
 /** JSON-RPC request envelope */
 export type JsonRpcRequest = {
@@ -41,8 +48,8 @@ export type EnergyReading = {
   energyKwh: number | null;
 };
 
-export type MeterEnergyResult = {
-  meterId: string;
+export type DeviceEnergyResult = {
+  deviceId: string;
   edgeId: string;
   channelAddress: string;
   energyWh: number | null;
@@ -71,20 +78,17 @@ export type EdgeFactory = {
   natureIds: string[];
 };
 
-/** Meter type classification */
-export type MeterType = "GRID" | "PRODUCTION" | "CONSUMPTION" | "UNKNOWN";
-
-/** A discovered meter from OpenEMS */
-export type DiscoveredMeter = {
+/** A discovered device from OpenEMS (formerly DiscoveredMeter) */
+export type DiscoveredDevice = {
   componentId: string;
   alias: string;
-  meterType: MeterType;
-  channelAddress: string;
+  deviceType: string; // OpenEMS factory-derived classification (GRID, PRODUCTION, CONSUMPTION, UNKNOWN)
+  channelAddress: string; // e.g. "meter0/ActiveConsumptionEnergy"
 };
 
 /** Discovery result per edge */
 export type EdgeDiscoveryResult = {
   edgeId: string;
   online: boolean;
-  meters: DiscoveredMeter[];
+  devices: DiscoveredDevice[];
 };

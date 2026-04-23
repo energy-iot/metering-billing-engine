@@ -1,8 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Microgrid } from "@/lib/types/database";
+import type { Microgrid } from "@/lib/types/domain";
 
-type MicrogridWithTenantCount = Microgrid & {
-  tenant_count: number;
+type MicrogridWithHouseholdCount = Microgrid & {
+  household_count: number;
 };
 
 export default async function MicrogridsPage() {
@@ -35,16 +35,16 @@ export default async function MicrogridsPage() {
     );
   }
 
-  const microgridsWithCounts: MicrogridWithTenantCount[] = [];
+  const microgridsWithCounts: MicrogridWithHouseholdCount[] = [];
   for (const mg of microgrids) {
     const { count } = await supabase
-      .from("tenants")
+      .from("households")
       .select("*", { count: "exact", head: true })
       .eq("microgrid_id", mg.id);
 
     microgridsWithCounts.push({
       ...mg,
-      tenant_count: count ?? 0,
+      household_count: count ?? 0,
     });
   }
 
@@ -52,24 +52,29 @@ export default async function MicrogridsPage() {
     <div>
       <h1 className="mb-6 text-2xl font-semibold text-foreground">Microgrids</h1>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {microgridsWithCounts.map((mg) => (
-          <a
-            key={mg.id}
-            href={`/microgrids/${mg.id}`}
-            className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted"
-          >
-            <h2 className="font-medium text-foreground">{mg.name}</h2>
-            {mg.location && (
-              <p className="mt-1 text-sm text-muted-foreground">{mg.location}</p>
-            )}
-            <div className="mt-3 flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">
-                {mg.tenant_count} tenant{mg.tenant_count !== 1 ? "s" : ""}
-              </span>
-              <span className="text-muted-foreground">{mg.currency}</span>
-            </div>
-          </a>
-        ))}
+        {microgridsWithCounts.map((mg) => {
+          const locationParts = [mg.address_city, mg.address_country].filter(Boolean);
+          const locationLabel = locationParts.length > 0 ? locationParts.join(", ") : null;
+
+          return (
+            <a
+              key={mg.id}
+              href={`/microgrids/${mg.id}`}
+              className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted"
+            >
+              <h2 className="font-medium text-foreground">{mg.name}</h2>
+              {locationLabel && (
+                <p className="mt-1 text-sm text-muted-foreground">{locationLabel}</p>
+              )}
+              <div className="mt-3 flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  {mg.household_count} household{mg.household_count !== 1 ? "s" : ""}
+                </span>
+                <span className="text-muted-foreground">{mg.currency}</span>
+              </div>
+            </a>
+          );
+        })}
       </div>
     </div>
   );

@@ -1,26 +1,35 @@
 /**
- * Generic meter data adapter interface.
+ * Generic device data adapter interface.
  * OpenEMS is adapter #1. Future adapters (CSV, Modbus, etc.) implement this same interface.
+ *
+ * Renamed from MeterDataAdapter → DeviceDataAdapter (PM decision #8):
+ * the OpenEMS coordinates (edge ID + component ID) are now first-class fields on
+ * the `edges` and `devices` tables rather than JSONB blobs, so the adapter
+ * config shape reflects the entity model directly.
  */
-export interface MeterReading {
-  meterId: string;
+import type { EdgeDataSource } from "@/lib/types/domain";
+
+export interface DeviceReading {
+  deviceId: string;
   usageKwh: number | null; // null = no data available
   startDate: string;
   endDate: string;
 }
 
-export interface MeterConfig {
-  id: string; // Supabase meter UUID
-  dataSourceType: string; // e.g. "openems"
-  dataSourceConfig: Record<string, unknown>;
+export interface DeviceConfig {
+  id: string; // Supabase device UUID
+  dataSourceType: EdgeDataSource; // e.g. "openems"
+  edgeOpenemsId: string; // openems_edge_id column on the parent edge
+  componentId: string; // openems_component_id column on the device
+  openems_backend_url: string; // openems_backend_url column on the parent edge
 }
 
-export interface MeterDataAdapter {
+export interface DeviceDataAdapter {
   getReadings(
-    meters: MeterConfig[],
+    devices: DeviceConfig[],
     startDate: string,
     endDate: string
-  ): Promise<MeterReading[]>;
+  ): Promise<DeviceReading[]>;
   getStatus?(
     edgeIds: string[]
   ): Promise<Record<string, { online: boolean }>>;

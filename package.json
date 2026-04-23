@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:types": "npx supabase gen types typescript --local 2>/dev/null | grep -v '^Connecting to' | grep -v '^A new version' | grep -v '^We recommend' > src/lib/types/database.gen.ts",
+    "db:types:linked": "npx supabase gen types typescript --linked 2>/dev/null | grep -v '^Connecting to' | grep -v '^A new version' | grep -v '^We recommend' > src/lib/types/database.gen.ts",
+    "db:types:check": "npx supabase gen types typescript --local 2>/dev/null | grep -v '^Connecting to' | grep -v '^A new version' | grep -v '^We recommend' > /tmp/database.gen.check.ts && diff /tmp/database.gen.check.ts src/lib/types/database.gen.ts || (echo 'database.gen.ts is out of date — run npm run db:types' && exit 1)",
+    "prepare": "husky"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -33,6 +37,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "husky": "^9.1.7",
     "jose": "^6.2.2",
     "jsdom": "^29.0.2",
     "tailwindcss": "^4",

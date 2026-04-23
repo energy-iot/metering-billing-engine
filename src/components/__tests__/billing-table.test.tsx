@@ -1,7 +1,7 @@
 // BillingTable integration test (jsdom, component environment)
 //
 // Strategy:
-//   - Mount BillingTable with a minimal fixture (one period, two tiers, three tenants,
+//   - Mount BillingTable with a minimal fixture (one period, two tiers, three households,
 //     three line items) wrapped in <LocaleProvider locale="en-UG" currency="UGX">.
 //   - Assert rendered markup only; does NOT fire mutation handlers (Close / Delete /
 //     Generate) — those handlers instantiate a Supabase client and router, both mocked.
@@ -17,9 +17,9 @@ import { LocaleProvider } from "../format/locale-context";
 import type {
   BillingLineItem,
   BillingPeriod,
-  Tenant,
+  Household,
   TierConfig,
-} from "@/lib/types/database";
+} from "@/lib/types/domain";
 
 // Mock next/navigation (BillingTable calls useRouter inside)
 vi.mock("next/navigation", () => ({
@@ -59,18 +59,48 @@ const period: BillingPeriod = {
   closed_at: null,
 };
 
-const tenants: Tenant[] = [
-  { id: "t-1", microgrid_id: "mg-1", name: "Alice", phone: null, email: null, meter_id: "m-1", created_at: "2026-01-01T00:00:00Z" },
-  { id: "t-2", microgrid_id: "mg-1", name: "Bob", phone: null, email: null, meter_id: "m-2", created_at: "2026-01-01T00:00:00Z" },
-  { id: "t-3", microgrid_id: "mg-1", name: "Carol", phone: null, email: null, meter_id: "m-3", created_at: "2026-01-01T00:00:00Z" },
+const households: Household[] = [
+  {
+    id: "h-1",
+    microgrid_id: "mg-1",
+    display_name: "Alice",
+    primary_phone: null,
+    primary_email: null,
+    address_line1: null,
+    address_line2: null,
+    unit_label: null,
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "h-2",
+    microgrid_id: "mg-1",
+    display_name: "Bob",
+    primary_phone: null,
+    primary_email: null,
+    address_line1: null,
+    address_line2: null,
+    unit_label: null,
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "h-3",
+    microgrid_id: "mg-1",
+    display_name: "Carol",
+    primary_phone: null,
+    primary_email: null,
+    address_line1: null,
+    address_line2: null,
+    unit_label: null,
+    created_at: "2026-01-01T00:00:00Z",
+  },
 ];
 
 const lineItems: BillingLineItem[] = [
   {
     id: "li-1",
     billing_period_id: "period-1",
-    tenant_id: "t-1",
-    meter_id: "m-1",
+    household_id: "h-1",
+    device_id: "d-1",
     usage_kwh: 80,
     start_kwh: 200,
     end_kwh: 280,
@@ -84,8 +114,8 @@ const lineItems: BillingLineItem[] = [
   {
     id: "li-2",
     billing_period_id: "period-1",
-    tenant_id: "t-2",
-    meter_id: "m-2",
+    household_id: "h-2",
+    device_id: "d-2",
     usage_kwh: 45,
     start_kwh: 100,
     end_kwh: 145,
@@ -99,8 +129,8 @@ const lineItems: BillingLineItem[] = [
   {
     id: "li-3",
     billing_period_id: "period-1",
-    tenant_id: "t-3",
-    meter_id: "m-3",
+    household_id: "h-3",
+    device_id: "d-3",
     usage_kwh: 110,
     start_kwh: 50,
     end_kwh: 160,
@@ -129,7 +159,7 @@ describe("BillingTable", () => {
           microgridId="mg-1"
           period={period}
           lineItems={lineItems}
-          tenants={tenants}
+          households={households}
           tiers={tiers}
           currency="UGX"
         />
@@ -148,7 +178,7 @@ describe("BillingTable", () => {
           microgridId="mg-1"
           period={period}
           lineItems={lineItems}
-          tenants={tenants}
+          households={households}
           tiers={tiers}
           currency="UGX"
         />
@@ -169,7 +199,7 @@ describe("BillingTable", () => {
           microgridId="mg-1"
           period={period}
           lineItems={lineItems}
-          tenants={tenants}
+          households={households}
           tiers={tiers}
           currency="UGX"
         />

@@ -2,21 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { calculateTieredCost } from "@/lib/billing/calculations";
-import type {
-  BillingPeriod,
-  Meter,
-  RateSchedule,
-  Tenant,
-} from "@/lib/types/database";
-import type { MeterConfig } from "@/lib/adapters/types";
+import type { BillingPeriod, RateSchedule } from "@/lib/types/domain";
+import type { DeviceConfig } from "@/lib/adapters/types";
 
 type GenerateRequestBody = {
   billingPeriodId: string;
 };
 
 type GenerateError = {
-  tenantId: string;
-  tenantName: string;
+  householdId: string;
+  householdName: string;
   error: string;
 };
 
@@ -81,79 +76,105 @@ export async function POST(request: NextRequest) {
 
   const rateSchedule = schedule as RateSchedule;
 
-  // 3. Fetch tenants
-  const { data: tenants, error: tenantsError } = await supabase
-    .from("tenants")
-    .select("*")
+  // 3. Fetch households with their primary-consumption-meter device + parent edge
+  //    in a single relational query.
+  const { data: householdsRaw, error: householdsError } = await supabase
+    .from("households")
+    .select(`
+      id,
+      display_name,
+      household_devices!inner(
+        role,
+        devices!inner(
+          id,
+          openems_component_id,
+          edges!inner(
+            openems_edge_id,
+            openems_backend_url
+          )
+        )
+      )
+    `)
     .eq("microgrid_id", billingPeriod.microgrid_id)
-    .order("name");
+    .eq("household_devices.role", "primary_consumption_meter");
 
-  if (tenantsError) {
+  if (householdsError) {
     return NextResponse.json(
-      { error: `Error fetching tenants: ${tenantsError.message}` },
+      { error: `Error fetching households: ${householdsError.message}` },
       { status: 500 }
     );
   }
 
-  const tenantList = (tenants ?? []) as Tenant[];
-
-  // 4. Fetch meters
-  const { data: meters, error: metersError } = await supabase
-    .from("meters")
-    .select("*")
-    .eq("microgrid_id", billingPeriod.microgrid_id);
-
-  if (metersError) {
-    return NextResponse.json(
-      { error: `Error fetching meters: ${metersError.message}` },
-      { status: 500 }
-    );
-  }
-
-  const meterList = (meters ?? []) as Meter[];
-  const meterMap = new Map(meterList.map((m) => [m.id, m]));
-
-  // 5. Build MeterConfig array — skip tenants without meters
   const errors: GenerateError[] = [];
-  const meterConfigs: MeterConfig[] = [];
-  const tenantMeterMap = new Map<string, string>(); // meterId -> tenantId
+  const deviceConfigs: DeviceConfig[] = [];
 
-  for (const tenant of tenantList) {
-    if (!tenant.meter_id) {
+  // Map: deviceId → householdId (for line item assembly)
+  const deviceToHouseholdMap = new Map<string, string>();
+
+  type HouseholdRow = {
+    id: string;
+    display_name: string;
+    household_devices: {
+      role: string;
+      devices: {
+        id: string;
+        openems_component_id: string | null;
+        edges: {
+          openems_edge_id: string | null;
+          openems_backend_url: string | null;
+        };
+      };
+    }[];
+  };
+
+  for (const h of (householdsRaw ?? []) as unknown as HouseholdRow[]) {
+    // Should have exactly one primary_consumption_meter due to partial unique index,
+    // but iterate defensively.
+    const primaryHD = h.household_devices.find(
+      (hd) => hd.role === "primary_consumption_meter"
+    );
+
+    if (!primaryHD) {
       errors.push({
-        tenantId: tenant.id,
-        tenantName: tenant.name,
-        error: "No meter assigned",
+        householdId: h.id,
+        householdName: h.display_name,
+        error: "No primary_consumption_meter device assigned",
       });
       continue;
     }
 
-    const meter = meterMap.get(tenant.meter_id);
-    if (!meter) {
+    const device = primaryHD.devices;
+    const edge = device.edges;
+
+    if (!edge.openems_edge_id || !device.openems_component_id || !edge.openems_backend_url) {
       errors.push({
-        tenantId: tenant.id,
-        tenantName: tenant.name,
-        error: "Assigned meter not found",
+        householdId: h.id,
+        householdName: h.display_name,
+        error: "Device or parent edge is missing required OpenEMS config fields",
       });
       continue;
     }
 
-    meterConfigs.push({
-      id: meter.id,
-      dataSourceType: meter.data_source_type,
-      dataSourceConfig: meter.data_source_config,
+    deviceConfigs.push({
+      id: device.id,
+      dataSourceType: "openems",
+      edgeOpenemsId: edge.openems_edge_id,
+      componentId: device.openems_component_id,
+      openems_backend_url: edge.openems_backend_url,
     });
-    tenantMeterMap.set(meter.id, tenant.id);
+    deviceToHouseholdMap.set(device.id, h.id);
   }
 
-  // 5b. Collect meter IDs and look up prior-period end readings
-  const meterIdsForGeneration = tenantList
-    .filter((t) => t.meter_id && meterMap.has(t.meter_id))
-    .map((t) => t.meter_id!);
+  // Also build an id→display_name map for error reporting
+  const householdNames = new Map<string, string>(
+    ((householdsRaw ?? []) as unknown as HouseholdRow[]).map((h) => [h.id, h.display_name])
+  );
 
+  // 4. Look up prior-period end readings keyed on device_id
+  const deviceIdsForGeneration = Array.from(deviceToHouseholdMap.keys());
   const priorEndKwhMap = new Map<string, number>();
 
-  if (meterIdsForGeneration.length > 0) {
+  if (deviceIdsForGeneration.length > 0) {
     // Step A: Get prior period IDs (end_date <= current start_date)
     const { data: priorPeriods } = await supabase
       .from("billing_periods")
@@ -166,12 +187,12 @@ export async function POST(request: NextRequest) {
     if (priorPeriods && priorPeriods.length > 0) {
       const priorPeriodIds = priorPeriods.map((p) => p.id);
 
-      // Step B: Get line items from those periods with end_kwh set
+      // Step B: Get line items from those periods with end_kwh set, keyed by device_id
       const { data: priorItems } = await supabase
         .from("billing_line_items")
-        .select("meter_id, end_kwh, billing_period_id")
+        .select("device_id, end_kwh, billing_period_id")
         .in("billing_period_id", priorPeriodIds)
-        .in("meter_id", meterIdsForGeneration)
+        .in("device_id", deviceIdsForGeneration)
         .not("end_kwh", "is", null);
 
       if (priorItems) {
@@ -184,16 +205,16 @@ export async function POST(request: NextRequest) {
             (periodOrder.get(b.billing_period_id) ?? 999)
         );
         for (const item of priorItems) {
-          if (item.meter_id && !priorEndKwhMap.has(item.meter_id)) {
-            priorEndKwhMap.set(item.meter_id, Number(item.end_kwh));
+          if (item.device_id && !priorEndKwhMap.has(item.device_id)) {
+            priorEndKwhMap.set(item.device_id, Number(item.end_kwh));
           }
         }
       }
     }
   }
 
-  if (meterConfigs.length === 0 && tenantList.length > 0) {
-    // No meters to query, but we still delete old line items
+  if (deviceConfigs.length === 0) {
+    // No devices to query — delete old line items and return
     await supabase
       .from("billing_line_items")
       .delete()
@@ -202,26 +223,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ lineItems: 0, errors });
   }
 
-  // 6. Call OpenEMS for readings
+  // 5. Call OpenEMS for readings
   try {
     const client = getOpenEmsClient();
     const readings = await client.getReadings(
-      meterConfigs,
+      deviceConfigs,
       billingPeriod.start_date,
       billingPeriod.end_date
     );
 
-    // 7. Build meterId -> usageKwh map
+    // 6. Build deviceId → usageKwh map
     const usageMap = new Map<string, number | null>();
     for (const reading of readings) {
-      usageMap.set(reading.meterId, reading.usageKwh);
+      usageMap.set(reading.deviceId, reading.usageKwh);
     }
 
-    // 8. Calculate tier breakdown per tenant and build line items
+    // 7. Calculate tier breakdown per household and build line items
     const lineItemRows: {
       billing_period_id: string;
-      tenant_id: string;
-      meter_id: string;
+      household_id: string;
+      device_id: string;
       usage_kwh: number;
       start_kwh: number;
       end_kwh: number;
@@ -229,14 +250,12 @@ export async function POST(request: NextRequest) {
       total_amount: number;
     }[] = [];
 
-    for (const tenant of tenantList) {
-      if (!tenant.meter_id) continue; // already in errors
-
-      const usageKwh = usageMap.get(tenant.meter_id);
+    for (const [deviceId, householdId] of deviceToHouseholdMap) {
+      const usageKwh = usageMap.get(deviceId);
       if (usageKwh === null || usageKwh === undefined) {
         errors.push({
-          tenantId: tenant.id,
-          tenantName: tenant.name,
+          householdId,
+          householdName: householdNames.get(householdId) ?? householdId,
           error: "No meter reading data available",
         });
         continue;
@@ -244,18 +263,18 @@ export async function POST(request: NextRequest) {
 
       const calc = calculateTieredCost(
         usageKwh,
-        rateSchedule.tiers,
+        rateSchedule.tiers as { label: string; min_kwh: number; max_kwh: number | null; rate_per_kwh: number }[],
         rateSchedule.service_charge,
         rateSchedule.tax_rate
       );
 
-      const startKwh = priorEndKwhMap.get(tenant.meter_id!) ?? 0;
+      const startKwh = priorEndKwhMap.get(deviceId) ?? 0;
       const endKwh = startKwh + usageKwh;
 
       lineItemRows.push({
         billing_period_id: body.billingPeriodId,
-        tenant_id: tenant.id,
-        meter_id: tenant.meter_id,
+        household_id: householdId,
+        device_id: deviceId,
         usage_kwh: usageKwh,
         start_kwh: startKwh,
         end_kwh: endKwh,
@@ -264,13 +283,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 9. Delete existing line items
+    // 8. Delete existing line items
     await supabase
       .from("billing_line_items")
       .delete()
       .eq("billing_period_id", body.billingPeriodId);
 
-    // 10. Insert new line items
+    // 9. Insert new line items
     if (lineItemRows.length > 0) {
       const { error: insertError } = await supabase
         .from("billing_line_items")

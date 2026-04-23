@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
-import type { OpenEmsDataSourceConfig } from "@/lib/openems/types";
-import type { Meter } from "@/lib/types/database";
-import type { MeterEnergyResult } from "@/lib/openems/types";
+import type { DeviceEnergyResult } from "@/lib/openems/types";
+import type { DeviceConfig } from "@/lib/adapters/types";
 
 type EnergyRequestBody = {
-  meterIds: string[];
+  deviceIds: string[];
   fromDate: string;
   toDate: string;
 };
 
-type MeterError = {
-  meterId: string;
+type DeviceError = {
+  deviceId: string;
   error: string;
 };
 
@@ -27,9 +26,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!body.meterIds || !Array.isArray(body.meterIds) || body.meterIds.length === 0) {
+  if (!body.deviceIds || !Array.isArray(body.deviceIds) || body.deviceIds.length === 0) {
     return NextResponse.json(
-      { error: "meterIds must be a non-empty array" },
+      { error: "deviceIds must be a non-empty array" },
       { status: 400 }
     );
   }
@@ -41,12 +40,26 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Look up meters from Supabase (respects RLS via server client)
+  // Look up devices with their parent edges from Supabase (respects RLS via server client)
   const supabase = await createClient();
-  const { data: meters, error: dbError } = await supabase
-    .from("meters")
-    .select("*")
-    .in("id", body.meterIds);
+  const { data: devicesWithEdges, error: dbError } = await supabase
+    .from("devices")
+    .select(`
+      id,
+      name,
+      device_type,
+      openems_component_id,
+      config,
+      created_at,
+      edge_id,
+      edges!inner(
+        id,
+        data_source_type,
+        openems_edge_id,
+        openems_backend_url
+      )
+    `)
+    .in("id", body.deviceIds);
 
   if (dbError) {
     return NextResponse.json(
@@ -55,79 +68,57 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!meters || meters.length === 0) {
+  if (!devicesWithEdges || devicesWithEdges.length === 0) {
     return NextResponse.json(
-      { error: "No meters found for the provided IDs" },
+      { error: "No devices found for the provided IDs" },
       { status: 404 }
     );
   }
 
-  // Filter for openems-type meters and collect errors for non-openems ones
-  const openEmsMeters: Meter[] = [];
-  const errors: MeterError[] = [];
+  // Filter for openems-type devices and collect errors for unsupported ones
+  const openEmsDeviceConfigs: DeviceConfig[] = [];
+  const errors: DeviceError[] = [];
 
-  for (const meter of meters as Meter[]) {
-    if (meter.data_source_type !== "openems") {
+  for (const row of devicesWithEdges) {
+    const edge = (row as unknown as { edges: { data_source_type: string; openems_edge_id: string | null; openems_backend_url: string | null } }).edges;
+
+    if (edge.data_source_type !== "openems") {
       errors.push({
-        meterId: meter.id,
-        error: `Meter has unsupported data source type: ${meter.data_source_type}`,
+        deviceId: row.id,
+        error: `Device has unsupported data source type: ${edge.data_source_type}`,
       });
       continue;
     }
 
-    const config = meter.data_source_config as OpenEmsDataSourceConfig;
-    if (!config?.edgeId || !config?.channelAddress) {
+    if (!edge.openems_edge_id || !row.openems_component_id || !edge.openems_backend_url) {
       errors.push({
-        meterId: meter.id,
-        error: "Meter has invalid data_source_config: missing edgeId or channelAddress",
+        deviceId: row.id,
+        error: "Device is missing openems_component_id or parent edge is missing openems_edge_id / openems_backend_url",
       });
       continue;
     }
 
-    openEmsMeters.push(meter);
+    openEmsDeviceConfigs.push({
+      id: row.id,
+      dataSourceType: "openems",
+      edgeOpenemsId: edge.openems_edge_id,
+      componentId: row.openems_component_id,
+      openems_backend_url: edge.openems_backend_url,
+    });
   }
 
-  if (openEmsMeters.length === 0) {
+  if (openEmsDeviceConfigs.length === 0) {
     return NextResponse.json({ results: [], errors });
-  }
-
-  // Group by edgeId for batching
-  const edgeGroups = new Map<string, { meterId: string; channelAddress: string }[]>();
-  for (const meter of openEmsMeters) {
-    const config = meter.data_source_config as OpenEmsDataSourceConfig;
-    const group = edgeGroups.get(config.edgeId) ?? [];
-    group.push({ meterId: meter.id, channelAddress: config.channelAddress });
-    edgeGroups.set(config.edgeId, group);
   }
 
   try {
     const client = getOpenEmsClient();
-    const results: MeterEnergyResult[] = [];
-
-    const edgeQueries = Array.from(edgeGroups.entries()).map(
-      async ([edgeId, meterInfos]) => {
-        const channels = meterInfos.map((m) => m.channelAddress);
-        const data = await client.queryHistoricEnergy(
-          edgeId,
-          channels,
-          body.fromDate,
-          body.toDate
-        );
-
-        for (const meterInfo of meterInfos) {
-          const whValue = data[meterInfo.channelAddress] ?? null;
-          results.push({
-            meterId: meterInfo.meterId,
-            edgeId,
-            channelAddress: meterInfo.channelAddress,
-            energyWh: whValue,
-            energyKwh: whValue !== null ? whValue / 1000 : null,
-          });
-        }
-      }
+    const results: DeviceEnergyResult[] = await client.getDeviceEnergy(
+      openEmsDeviceConfigs,
+      body.fromDate,
+      body.toDate
     );
 
-    await Promise.all(edgeQueries);
     return NextResponse.json({ results, errors });
   } catch (err) {
     if (err instanceof OpenEmsError) {

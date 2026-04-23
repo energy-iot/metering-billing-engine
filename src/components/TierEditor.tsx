@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import type { RateSchedule, TierConfig } from "@/lib/types/database";
+import type { RateSchedule, TierConfig } from "@/lib/types/domain";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function TierEditor({

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import type { BillingPeriod } from "@/lib/types/database";
+import type { BillingPeriod } from "@/lib/types/domain";
 import { StatusChip } from "@/components/ui/status-chip";
 import { Currency } from "@/components/format/currency";
 import { Kwh } from "@/components/format/kwh";

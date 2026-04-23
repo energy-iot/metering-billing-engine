@@ -47,7 +47,18 @@ npm test -- rls.test.ts
 
 # Build (standalone for Docker)
 npm run build
+
+# Generate TypeScript types from local Supabase (requires supabase start)
+npm run db:types
+
+# Generate types from cloud-linked Supabase (alternative — use when local isn't running)
+npm run db:types:linked
+
+# Check that database.gen.ts is in sync with the schema (run by husky pre-commit)
+npm run db:types:check
 ```
+
+**Codegen workflow:** After any schema migration (`supabase/migrations/*.sql`), run `npm run db:types` to regenerate `src/lib/types/database.gen.ts`. A husky pre-commit hook (`npm run db:types:check`) blocks commits when the generated file is out of date. The `--linked` variant works against the cloud project if local Supabase isn't running: `supabase link` must have been run first.
 
 ### Running RLS Tests
 
@@ -81,12 +92,17 @@ src/
 │   └── api/
 │       ├── openems/         ← OpenEMS B2B proxy routes (server-side only)
 │       └── billing/         ← billing generation endpoint
-├── components/              ← React components (BillingTable, MeterManager, etc.)
+├── components/              ← React components (BillingTable, DeviceManager, HouseholdTable, etc.)
+│   └── format/              ← format primitives (Currency, Kwh, LocalDate, locale-context)
 ├── lib/
 │   ├── openems/             ← OpenEMS client, types, errors (adapter pattern)
+│   │   └── device-descriptions.ts  ← human-readable device-type labels
 │   ├── supabase/            ← Supabase client/server/middleware helpers
-│   ├── adapters/            ← MeterDataAdapter interface
-│   └── types/               ← database.ts (Supabase types)
+│   ├── adapters/            ← DeviceDataAdapter interface (was MeterDataAdapter)
+│   ├── roles.ts             ← centralised role constants (SUPER_ADMIN, ORG_MANAGER, SCOPE_ORG)
+│   └── types/
+│       ├── database.gen.ts  ← Supabase codegen output (do NOT edit manually)
+│       └── domain.ts        ← flat type aliases over database.gen.ts (import from here)
 └── middleware.ts            ← Supabase auth session refresh
 ```
 
@@ -95,7 +111,9 @@ src/
 - **Server-side only** for OpenEMS — all B2B calls go through `src/app/api/openems/*` routes
 - **No `NEXT_PUBLIC_`** on OpenEMS credentials — they're server-side env vars
 - **RLS everywhere** — new tables need Row Level Security policies
-- **Adapter pattern** — MBE doesn't import OpenEMS-specific types in billing logic. `MeterDataAdapter` interface in `src/lib/adapters/types.ts`
+- **Adapter pattern** — MBE doesn't import OpenEMS-specific types in billing logic. `DeviceDataAdapter` interface in `src/lib/adapters/types.ts` (renamed from `MeterDataAdapter` in C #51)
+- **Codegen types** — import entity types from `@/lib/types/domain`, never from `database.gen.ts` directly. Run `npm run db:types` after schema changes.
+- **Role constants** — import `SUPER_ADMIN`, `ORG_MANAGER`, `SCOPE_ORG` from `@/lib/roles` instead of spelling out string literals. Two MVP roles ship: `super_admin` and `org_manager`.
 - **DCO sign-off** on docker-openems commits (`git commit -s`)
 
 ### Entity model (post-AB #50)
