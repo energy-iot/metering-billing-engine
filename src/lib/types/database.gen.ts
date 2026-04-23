@@ -342,6 +342,13 @@ export type Database = {
             referencedRelation: "households"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "household_users_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
         ]
       }
       households: {
@@ -554,6 +561,41 @@ export type Database = {
           },
         ]
       }
+      user_profiles: {
+        Row: {
+          created_at: string
+          first_name: string | null
+          last_name: string | null
+          phone: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          first_name?: string | null
+          last_name?: string | null
+          phone?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          first_name?: string | null
+          last_name?: string | null
+          phone?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_profiles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -579,7 +621,15 @@ export type Database = {
           scope_type?: Database["public"]["Enums"]["role_scope_type"]
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
+        ]
       }
     }
     Views: {
@@ -620,8 +670,31 @@ export type Database = {
           },
         ]
       }
+      user_directory: {
+        Row: {
+          email: string | null
+          email_confirmed_at: string | null
+          first_name: string | null
+          last_name: string | null
+          last_sign_in_at: string | null
+          phone: string | null
+          role: Database["public"]["Enums"]["user_role"] | null
+          scope_id: string | null
+          scope_type: Database["public"]["Enums"]["role_scope_type"] | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      fn_change_user_role: {
+        Args: {
+          p_role: Database["public"]["Enums"]["user_role"]
+          p_scope_id?: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       fn_create_household_with_meter: {
         Args: {
           p_address_line1?: string
@@ -635,12 +708,27 @@ export type Database = {
         }
         Returns: string
       }
+      fn_finalize_user_invitation: {
+        Args: {
+          p_first_name: string
+          p_last_name: string
+          p_phone: string
+          p_role: Database["public"]["Enums"]["user_role"]
+          p_scope_id?: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       is_super_admin: { Args: never; Returns: boolean }
       user_can_access_microgrid: {
         Args: { _microgrid_id: string }
         Returns: boolean
       }
       user_can_access_org: { Args: { _org_id: string }; Returns: boolean }
+      user_can_see_user_profile: {
+        Args: { _target_user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       billing_period_status: "draft" | "closed"
