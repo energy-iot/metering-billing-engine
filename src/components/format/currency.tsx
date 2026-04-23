@@ -12,6 +12,10 @@
 //     formatter options; does NOT post-process the string. Use for URA
 //     paste workflows where the cell value is digits only.
 //   - className is composable via cn() so callers can override sizing/tone.
+//
+// String helper:
+//   - `formatCurrency(value, locale, currency, opts?)` — pure function,
+//     no React context. Reuses the same getNF() cache. Returns "—" for null.
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
@@ -26,6 +30,29 @@ function getNF(locale: string, opts: Intl.NumberFormatOptions): Intl.NumberForma
     cache.set(key, nf);
   }
   return nf;
+}
+
+/** Pure string formatter — no React context. Pass locale/currency from useLocale(). */
+export function formatCurrency(
+  value: number | null,
+  locale: string,
+  currency: string,
+  opts: {
+    bareNumber?: boolean;
+    maxFractionDigits?: number;
+    minFractionDigits?: number;
+  } = {},
+): string {
+  if (value == null) return "—";
+  let nfOpts: Intl.NumberFormatOptions;
+  if (opts.bareNumber) {
+    nfOpts = { style: "decimal", maximumFractionDigits: 0, minimumFractionDigits: 0 };
+  } else {
+    nfOpts = { style: "currency", currency };
+    if (opts.maxFractionDigits !== undefined) nfOpts.maximumFractionDigits = opts.maxFractionDigits;
+    if (opts.minFractionDigits !== undefined) nfOpts.minimumFractionDigits = opts.minFractionDigits;
+  }
+  return getNF(locale, nfOpts).format(value);
 }
 
 export interface CurrencyProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -56,18 +83,9 @@ export function Currency({
   const lc = locale ?? ctx.locale;
   const cc = currency ?? ctx.currency;
 
-  let opts: Intl.NumberFormatOptions;
-  if (bareNumber) {
-    opts = { style: "decimal", maximumFractionDigits: 0, minimumFractionDigits: 0 };
-  } else {
-    opts = { style: "currency", currency: cc };
-    if (maxFractionDigits !== undefined) opts.maximumFractionDigits = maxFractionDigits;
-    if (minFractionDigits !== undefined) opts.minimumFractionDigits = minFractionDigits;
-  }
-
   return (
     <span className={cn("font-mono tabular-nums", className)} {...props}>
-      {getNF(lc, opts).format(value)}
+      {formatCurrency(value, lc, cc, { bareNumber, maxFractionDigits, minFractionDigits })}
     </span>
   );
 }

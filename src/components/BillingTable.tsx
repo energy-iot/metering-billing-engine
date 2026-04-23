@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { CopyButton } from "@/components/CopyButton";
 import { Currency } from "@/components/format/currency";
+import { formatCurrency } from "@/components/format/currency";
 import { Kwh } from "@/components/format/kwh";
+import { formatKwh } from "@/components/format/kwh";
 import { LocalDate } from "@/components/format/local-date";
+import { useLocale } from "@/components/format/locale-context";
 import { StatusChip } from "@/components/ui/status-chip";
 import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -35,6 +38,7 @@ export function BillingTable({
 }) {
   const router = useRouter();
   const supabase = createClient();
+  const { locale, currency: localeCurrency } = useLocale();
 
   const [generating, setGenerating] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -169,9 +173,9 @@ export function BillingTable({
   // CopyTable columns built from tiers
   // Format helpers (plain string, for CopyTable column defs)
   const kwhFormat = (v: number | string | null) =>
-    v == null ? "—" : new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(Number(v));
+    formatKwh(v == null ? null : Number(v), locale, { bareNumber: true });
   const amountFormat = (v: number | string | null) =>
-    v == null ? "—" : new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(Number(v));
+    formatCurrency(v == null ? null : Number(v), locale, localeCurrency, { bareNumber: true });
 
   const columns: ColumnDef<Tenant>[] = [
     {
