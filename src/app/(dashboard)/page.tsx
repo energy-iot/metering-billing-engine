@@ -19,7 +19,7 @@ export default async function DashboardPage() {
 
   if (orgError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading organizations: {orgError.message}
       </div>
     );
@@ -28,10 +28,10 @@ export default async function DashboardPage() {
   if (!organizations || organizations.length === 0) {
     return (
       <div>
-        <h1 className="mb-6 text-2xl font-semibold text-gray-900">
+        <h1 className="mb-6 text-2xl font-semibold text-foreground">
           Dashboard
         </h1>
-        <div className="rounded-md border border-gray-200 bg-white p-8 text-center text-gray-500">
+        <div className="rounded-md border border-border bg-card p-8 text-center text-muted-foreground">
           No organizations found. You may need to run the database migrations
           and seed data, or your account may not have the required permissions.
         </div>
@@ -41,7 +41,7 @@ export default async function DashboardPage() {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-semibold text-gray-900">Dashboard</h1>
+      <h1 className="mb-6 text-2xl font-semibold text-foreground">Dashboard</h1>
       <div className="space-y-6">
         {organizations.map((org) => (
           <OrgCard key={org.id} org={org} />
@@ -77,26 +77,26 @@ async function OrgCard({ org }: { org: Organization }) {
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
-      <h2 className="mb-4 text-lg font-semibold text-gray-900">{org.name}</h2>
+    <div className="rounded-lg border border-border bg-card p-6">
+      <h2 className="mb-4 text-lg font-semibold text-foreground">{org.name}</h2>
       {microgridsWithCounts.length === 0 ? (
-        <p className="text-sm text-gray-500">No microgrids configured.</p>
+        <p className="text-sm text-muted-foreground">No microgrids configured.</p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {microgridsWithCounts.map((mg) => (
             <div
               key={mg.id}
-              className="rounded-md border border-gray-100 bg-gray-50 p-4"
+              className="rounded-md border border-border bg-muted p-4"
             >
-              <h3 className="font-medium text-gray-900">{mg.name}</h3>
+              <h3 className="font-medium text-foreground">{mg.name}</h3>
               {mg.location && (
-                <p className="mt-1 text-sm text-gray-500">{mg.location}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{mg.location}</p>
               )}
               <div className="mt-3 flex items-center justify-between text-sm">
-                <span className="text-gray-600">
+                <span className="text-muted-foreground">
                   {mg.tenant_count} tenant{mg.tenant_count !== 1 ? "s" : ""}
                 </span>
-                <span className="text-gray-400">{mg.currency}</span>
+                <span className="text-muted-foreground">{mg.currency}</span>
               </div>
             </div>
           ))}

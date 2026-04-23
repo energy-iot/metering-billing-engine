@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { BillingPeriod } from "@/lib/types/database";
+import { StatusChip } from "@/components/ui/status-chip";
+import { Currency } from "@/components/format/currency";
+import { Kwh } from "@/components/format/kwh";
+import { LocalDate } from "@/components/format/local-date";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 function getDefaultDates() {
   const now = new Date();
@@ -17,25 +22,6 @@ function getDefaultDates() {
     start: firstDay.toISOString().split("T")[0],
     end: lastDay.toISOString().split("T")[0],
   };
-}
-
-function formatDate(dateStr: string) {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatKwh(value: number): string {
-  return new Intl.NumberFormat("en", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function formatAmount(value: number): string {
-  return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
 }
 
 export function BillingPeriodList({
@@ -57,28 +43,25 @@ export function BillingPeriodList({
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
   const [creating, setCreating] = useState(false);
-  const [deletingPeriodId, setDeletingPeriodId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleDeletePeriod(period: BillingPeriod) {
-    const dateRange = period.start_date === period.end_date
-      ? formatDate(period.start_date)
-      : `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
-    const message =
-      period.status === "closed"
-        ? `Permanently delete this closed billing period (${dateRange}) and all its finalized bills? This cannot be undone.`
-        : `Delete this draft billing period (${dateRange}) and any generated bills? This cannot be undone.`;
-    if (!confirm(message)) return;
-    setError(null);
-    setDeletingPeriodId(period.id);
+  // ConfirmDialog state for delete
+  const [deletingPeriod, setDeletingPeriod] = useState<BillingPeriod | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  function openDeleteDialog(period: BillingPeriod) {
+    setDeletingPeriod(period);
+    setDeleteDialogOpen(true);
+  }
+
+  async function handleDeletePeriod() {
+    if (!deletingPeriod) return;
     const { error: deleteError } = await supabase
       .from("billing_periods")
       .delete()
-      .eq("id", period.id);
+      .eq("id", deletingPeriod.id);
     if (deleteError) {
-      setError(deleteError.message);
-      setDeletingPeriodId(null);
-      return;
+      throw new Error(deleteError.message);
     }
     router.refresh();
   }
@@ -121,19 +104,36 @@ export function BillingPeriodList({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6">
+    <div className="rounded-lg border border-border bg-card p-6">
+      {/* Delete Period ConfirmDialog */}
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="Delete period?"
+        description={
+          deletingPeriod
+            ? deletingPeriod.status === "closed"
+              ? "This permanently removes the closed billing period and all its finalized bills. This cannot be undone."
+              : "This removes the draft billing period and any generated bills. This cannot be undone."
+            : "This action cannot be undone."
+        }
+        confirmLabel="Delete"
+        tone="destructive"
+        onConfirm={handleDeletePeriod}
+      />
+
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Billing Periods</h2>
+        <h2 className="text-lg font-semibold text-foreground">Billing Periods</h2>
         <button
           onClick={() => setShowCreateForm(!showCreateForm)}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
         >
           {showCreateForm ? "Cancel" : "New Period"}
         </button>
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="mb-4 rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
         </div>
       )}
@@ -141,11 +141,11 @@ export function BillingPeriodList({
       {showCreateForm && (
         <form
           onSubmit={handleCreate}
-          className="mb-4 space-y-3 rounded-md border border-gray-200 bg-gray-50 p-4"
+          className="mb-4 space-y-3 rounded-md border border-border bg-muted p-4"
         >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-foreground">
                 Start Date
               </label>
               <input
@@ -153,11 +153,11 @@ export function BillingPeriodList({
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
                 required
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-foreground">
                 End Date
               </label>
               <input
@@ -165,14 +165,14 @@ export function BillingPeriodList({
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 required
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
               />
             </div>
           </div>
           <button
             type="submit"
             disabled={creating}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {creating ? "Creating..." : "Create Period"}
           </button>
@@ -180,65 +180,66 @@ export function BillingPeriodList({
       )}
 
       {periods.length === 0 ? (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted-foreground">
           No billing periods yet. Create a new period to get started.
         </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-gray-200">
-                <th className="pb-2 pr-4 font-medium text-gray-700">
+              <tr className="border-b border-border">
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">
                   Date Range
                 </th>
-                <th className="pb-2 pr-4 font-medium text-gray-700">Status</th>
-                <th className="pb-2 pr-4 text-right font-medium text-gray-700">Total kWh</th>
-                <th className="pb-2 pr-4 text-right font-medium text-gray-700">Total ({currency})</th>
-                <th className="pb-2 font-medium text-gray-700">Actions</th>
+                <th className="pb-2 pr-4 font-medium text-muted-foreground">Status</th>
+                <th className="pb-2 pr-4 text-right font-medium text-muted-foreground">Total kWh</th>
+                <th className="pb-2 pr-4 text-right font-medium text-muted-foreground">Total ({currency})</th>
+                <th className="pb-2 font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
               {periods.map((period) => (
-                <tr key={period.id} className="border-b border-gray-100">
-                  <td className="py-3 pr-4 text-gray-900">
-                    {period.start_date === period.end_date
-                      ? formatDate(period.start_date)
-                      : <>{formatDate(period.start_date)} &ndash; {formatDate(period.end_date)}</>}
+                <tr key={period.id} className="border-b border-border">
+                  <td className="py-3 pr-4 text-foreground">
+                    {period.start_date === period.end_date ? (
+                      <LocalDate value={period.start_date + "T00:00:00"} />
+                    ) : (
+                      <>
+                        <LocalDate value={period.start_date + "T00:00:00"} />
+                        {" – "}
+                        <LocalDate value={period.end_date + "T00:00:00"} />
+                      </>
+                    )}
                   </td>
                   <td className="py-3 pr-4">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                        period.status === "closed"
-                          ? "bg-green-100 text-green-800"
-                          : "bg-yellow-100 text-yellow-800"
-                      }`}
-                    >
-                      {period.status}
-                    </span>
+                    <StatusChip kind="billingPeriod" status={period.status} />
                   </td>
-                  <td className="py-3 pr-4 text-right text-gray-900">
-                    {summaries[period.id]
-                      ? formatKwh(summaries[period.id].totalKwh)
-                      : "0"}
+                  <td className="py-3 pr-4 text-right text-foreground">
+                    {summaries[period.id] ? (
+                      <Kwh value={summaries[period.id].totalKwh} bareNumber />
+                    ) : (
+                      "0"
+                    )}
                   </td>
-                  <td className="py-3 pr-4 text-right text-gray-900">
-                    {summaries[period.id]
-                      ? formatAmount(summaries[period.id].totalAmount)
-                      : "N/A"}
+                  <td className="py-3 pr-4 text-right text-foreground">
+                    {summaries[period.id] ? (
+                      <Currency value={summaries[period.id].totalAmount} bareNumber />
+                    ) : (
+                      "N/A"
+                    )}
                   </td>
                   <td className="py-3">
                     <Link
                       href={`/microgrids/${microgridId}/billing/${period.id}`}
-                      className="rounded-md px-2 py-1 text-sm text-blue-600 hover:bg-blue-50"
+                      className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
                     >
                       View
                     </Link>
                     <button
-                      onClick={() => handleDeletePeriod(period)}
-                      disabled={deletingPeriodId === period.id}
-                      className="rounded-md px-2 py-1 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => openDeleteDialog(period)}
+                      className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {deletingPeriodId === period.id ? "Deleting..." : "Delete"}
+                      Delete
                     </button>
                   </td>
                 </tr>

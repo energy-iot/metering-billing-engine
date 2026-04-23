@@ -4,31 +4,19 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { CopyButton } from "@/components/CopyButton";
+import { Currency } from "@/components/format/currency";
+import { Kwh } from "@/components/format/kwh";
+import { LocalDate } from "@/components/format/local-date";
+import { StatusChip } from "@/components/ui/status-chip";
+import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/close-period-dialog";
 import type {
   BillingLineItem,
   BillingPeriod,
   Tenant,
   TierConfig,
 } from "@/lib/types/database";
-
-function formatAmount(value: number): string {
-  return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatKwh(value: number): string {
-  return new Intl.NumberFormat("en", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 export function BillingTable({
   microgridId,
@@ -55,6 +43,10 @@ export function BillingTable({
   const [generateErrors, setGenerateErrors] = useState<
     { tenantName: string; error: string }[]
   >([]);
+
+  // Dialog state
+  const [closePeriodOpen, setClosePeriodOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const isDraft = period.status === "draft";
 
@@ -118,14 +110,6 @@ export function BillingTable({
   }
 
   async function handleDelete() {
-    const dateRange = period.start_date === period.end_date
-      ? formatDate(period.start_date)
-      : `${formatDate(period.start_date)} – ${formatDate(period.end_date)}`;
-    const message =
-      period.status === "closed"
-        ? `Permanently delete this closed billing period (${dateRange}) and all its finalized bills? This cannot be undone.`
-        : `Delete this draft billing period (${dateRange}) and any generated bills? This cannot be undone.`;
-    if (!confirm(message)) return;
     setError(null);
     setDeleting(true);
     const { error: deleteError } = await supabase
@@ -133,22 +117,13 @@ export function BillingTable({
       .delete()
       .eq("id", period.id);
     if (deleteError) {
-      setError(deleteError.message);
       setDeleting(false);
-      return;
+      throw new Error(deleteError.message);
     }
     router.push(`/microgrids/${microgridId}/billing`);
   }
 
   async function handleClose() {
-    if (
-      !confirm(
-        "Are you sure you want to close this billing period? This action cannot be undone."
-      )
-    ) {
-      return;
-    }
-
     setError(null);
     setClosing(true);
 
@@ -161,34 +136,132 @@ export function BillingTable({
       .eq("id", period.id);
 
     if (updateError) {
-      setError(updateError.message);
       setClosing(false);
-      return;
+      throw new Error(updateError.message);
     }
 
     setClosing(false);
     router.refresh();
   }
 
+  // Build period label for ClosePeriodDialog
+  const periodLabel =
+    period.start_date === period.end_date
+      ? period.start_date
+      : `${period.start_date} – ${period.end_date}`;
+
+  // Build summary rows for ClosePeriodDialog
+  const closePeriodSummaryRows: ClosePeriodSummaryRow[] = [
+    {
+      label: "Tenants",
+      value: String(lineItems.length),
+    },
+    {
+      label: `Total (${currency})`,
+      value: <Currency value={grandTotal} bareNumber />,
+    },
+    {
+      label: "Total (kWh)",
+      value: <Kwh value={grandTotalKwh} bareNumber />,
+    },
+  ];
+
+  // CopyTable columns built from tiers
+  // Format helpers (plain string, for CopyTable column defs)
+  const kwhFormat = (v: number | string | null) =>
+    v == null ? "—" : new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(Number(v));
+  const amountFormat = (v: number | string | null) =>
+    v == null ? "—" : new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(Number(v));
+
+  const columns: ColumnDef<Tenant>[] = [
+    {
+      kind: "row-header",
+      header: "Tenant",
+      accessor: (t) => t.name,
+    },
+    {
+      kind: "value",
+      header: "Begin (kWh)",
+      accessor: (t) => lineItemMap.get(t.id)?.start_kwh ?? null,
+      format: (v) => (v == null ? "—" : kwhFormat(v)),
+    },
+    {
+      kind: "value",
+      header: "End (kWh)",
+      accessor: (t) => lineItemMap.get(t.id)?.end_kwh ?? null,
+      format: (v) => (v == null ? "—" : kwhFormat(v)),
+    },
+    {
+      kind: "value",
+      header: "Usage (kWh)",
+      accessor: (t) => lineItemMap.get(t.id)?.usage_kwh ?? null,
+      format: (v) => (v == null ? "—" : kwhFormat(v)),
+    },
+    ...tiers.flatMap((tier, i): ColumnDef<Tenant>[] => [
+      {
+        kind: "value",
+        header: `${tier.label} kWh`,
+        accessor: (t) => lineItemMap.get(t.id)?.tier_breakdown[i]?.kwh ?? null,
+        format: (v) => (v == null ? "—" : kwhFormat(v)),
+      },
+      {
+        kind: "value",
+        header: `${tier.label} (${currency})`,
+        accessor: (t) => lineItemMap.get(t.id)?.tier_breakdown[i]?.amount ?? null,
+        format: (v) => (v == null ? "—" : amountFormat(v)),
+      },
+    ]),
+    {
+      kind: "value",
+      header: `Total (${currency})`,
+      accessor: (t) => lineItemMap.get(t.id)?.total_amount ?? null,
+      format: (v) => (v == null ? "—" : amountFormat(v)),
+    },
+  ];
+
+  // Tenants with line items for the CopyTable (only tenants that have data)
+  const tenantsWithItems = tenants.filter((t) => lineItemMap.has(t.id));
+
   return (
     <div className="space-y-4">
+      {/* Delete Period Dialog */}
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="Delete period?"
+        description="This permanently removes the period and all its line items."
+        confirmLabel="Delete"
+        tone="destructive"
+        onConfirm={handleDelete}
+      />
+
+      {/* Close Period Dialog */}
+      <ClosePeriodDialog
+        open={closePeriodOpen}
+        onOpenChange={setClosePeriodOpen}
+        periodLabel={periodLabel}
+        summaryRows={closePeriodSummaryRows}
+        grandTotal={grandTotal}
+        onConfirm={handleClose}
+      />
+
       {/* Header */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6">
+      <div className="rounded-lg border border-border bg-card p-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              {period.start_date === period.end_date
-                ? formatDate(period.start_date)
-                : <>{formatDate(period.start_date)} &ndash; {formatDate(period.end_date)}</>}
+            <h2 className="text-lg font-semibold text-foreground">
+              {period.start_date === period.end_date ? (
+                <LocalDate value={period.start_date + "T00:00:00"} />
+              ) : (
+                <>
+                  <LocalDate value={period.start_date + "T00:00:00"} />
+                  {" – "}
+                  <LocalDate value={period.end_date + "T00:00:00"} />
+                </>
+              )}
             </h2>
-            <span
-              className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                period.status === "closed"
-                  ? "bg-green-100 text-green-800"
-                  : "bg-yellow-100 text-yellow-800"
-              }`}
-            >
-              {period.status}
+            <span className="mt-1 inline-block">
+              <StatusChip kind="billingPeriod" status={period.status} />
             </span>
           </div>
 
@@ -198,7 +271,7 @@ export function BillingTable({
                 <button
                   onClick={handleGenerate}
                   disabled={generating || closing || deleting}
-                  className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {generating
                     ? "Generating..."
@@ -207,18 +280,18 @@ export function BillingTable({
                       : "Generate"}
                 </button>
                 <button
-                  onClick={handleClose}
+                  onClick={() => setClosePeriodOpen(true)}
                   disabled={generating || closing || deleting || lineItems.length === 0}
-                  className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {closing ? "Closing..." : "Close Period"}
                 </button>
               </>
             )}
             <button
-              onClick={handleDelete}
+              onClick={() => setDeleteDialogOpen(true)}
               disabled={generating || closing || deleting}
-              className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md border border-destructive bg-card px-4 py-2 text-sm text-destructive hover:bg-destructive-muted disabled:cursor-not-allowed disabled:opacity-50"
             >
               {deleting ? "Deleting..." : "Delete"}
             </button>
@@ -228,14 +301,14 @@ export function BillingTable({
 
       {/* Errors */}
       {error && (
-        <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
         </div>
       )}
 
       {/* Generate warnings */}
       {generateErrors.length > 0 && (
-        <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-700">
+        <div className="rounded-md bg-warning-muted p-3 text-sm text-warning-fg">
           <p className="font-medium">
             Some tenants could not be billed:
           </p>
@@ -250,160 +323,64 @@ export function BillingTable({
       )}
 
       {/* Billing Table */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6">
+      <div className="rounded-lg border border-border bg-card p-6">
         {lineItems.length === 0 && tenants.length > 0 ? (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             No billing data yet.{" "}
             {isDraft
               ? 'Click "Generate" to fetch meter readings and calculate costs.'
               : ""}
           </p>
         ) : tenants.length === 0 ? (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             No tenants configured for this microgrid.
           </p>
+        ) : tenantsWithItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No billing data yet.{" "}
+            {isDraft
+              ? 'Click "Generate" to fetch meter readings and calculate costs.'
+              : ""}
+          </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="pb-2 pr-4 font-medium text-gray-700">
-                    Tenant
-                  </th>
-                  <th className="pb-2 pr-4 text-right font-medium text-gray-700">
-                    Begin (kWh)
-                  </th>
-                  <th className="pb-2 pr-4 text-right font-medium text-gray-700">
-                    End (kWh)
-                  </th>
-                  <th className="pb-2 pr-4 text-right font-medium text-gray-700">
-                    Usage (kWh)
-                  </th>
-                  {tiers.map((tier, i) => (
-                    <React.Fragment key={`tier-hdr-${i}`}>
-                      <th className="pb-2 pr-2 text-right font-medium text-gray-700">
-                        {tier.label} kWh
-                      </th>
-                      <th className="pb-2 pr-2 text-right font-medium text-gray-700">
-                        {tier.label} ({currency})
-                      </th>
-                    </React.Fragment>
-                  ))}
-                  <th className="pb-2 text-right font-medium text-gray-700">
-                    Total ({currency})
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {tenants.map((tenant) => {
-                  const item = lineItemMap.get(tenant.id);
+          <div className="space-y-4">
+            <CopyTable
+              rows={tenantsWithItems}
+              columns={columns}
+              caption={`Billing table for period ${periodLabel} — ${tenantsWithItems.length} tenant${tenantsWithItems.length !== 1 ? "s" : ""}`}
+              ariaLabel={`Billing data for ${periodLabel}`}
+            />
 
-                  if (!item) {
-                    return (
-                      <tr
-                        key={tenant.id}
-                        className="border-b border-gray-100"
-                      >
-                        <td className="py-3 pr-4 text-gray-900">
-                          {tenant.name}
-                        </td>
-                        <td
-                          className="py-3 pr-4 text-right text-gray-400"
-                          colSpan={tiers.length * 2 + 4}
-                        >
-                          {tenant.meter_id ? "No data" : "No meter"}
-                        </td>
-                      </tr>
-                    );
-                  }
-
-                  return (
-                    <tr
-                      key={tenant.id}
-                      className="border-b border-gray-100"
-                    >
-                      <td className="py-3 pr-4 text-gray-900">
-                        {tenant.name}
-                      </td>
-                      <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
-                        {item.start_kwh !== null && item.start_kwh !== undefined ? (
-                          <>
-                            {formatKwh(item.start_kwh)}
-                            <CopyButton value={item.start_kwh} />
-                          </>
-                        ) : (
-                          <span className="text-gray-400">&mdash;</span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
-                        {item.end_kwh !== null && item.end_kwh !== undefined ? (
-                          <>
-                            {formatKwh(item.end_kwh)}
-                            <CopyButton value={item.end_kwh} />
-                          </>
-                        ) : (
-                          <span className="text-gray-400">&mdash;</span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
-                        {formatKwh(item.usage_kwh)}
-                        <CopyButton value={item.usage_kwh} />
-                      </td>
-                      {tiers.map((_, i) => {
-                        const tierData = item.tier_breakdown[i];
-                        const kwh = tierData?.kwh ?? 0;
-                        const amount = tierData?.amount ?? 0;
-                        return (
-                          <React.Fragment key={`tier-${i}`}>
-                            <td className="whitespace-nowrap py-3 pr-2 text-right text-gray-900">
-                              {formatKwh(kwh)}
-                              <CopyButton value={kwh} />
-                            </td>
-                            <td className="whitespace-nowrap py-3 pr-2 text-right text-gray-900">
-                              {formatAmount(amount)}
-                              <CopyButton value={amount} />
-                            </td>
-                          </React.Fragment>
-                        );
-                      })}
-                      <td className="whitespace-nowrap py-3 text-right font-medium text-gray-900">
-                        {formatAmount(item.total_amount)}
-                        <CopyButton value={item.total_amount} />
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {/* Grand total row */}
-                {lineItems.length > 0 && (
-                  <tr className="border-t-2 border-gray-300 font-medium">
-                    <td className="py-3 pr-4 text-gray-900">Total</td>
-                    <td className="py-3 pr-4"></td>
-                    <td className="py-3 pr-4"></td>
-                    <td className="whitespace-nowrap py-3 pr-4 text-right text-gray-900">
-                      {formatKwh(grandTotalKwh)}
-                      <CopyButton value={grandTotalKwh} />
-                    </td>
-                    {tiers.map((_, i) => (
-                      <React.Fragment key={`grand-tier-${i}`}>
-                        <td className="whitespace-nowrap py-3 pr-2 text-right text-gray-900">
-                          {formatKwh(grandTierKwh[i])}
-                          <CopyButton value={grandTierKwh[i]} />
-                        </td>
-                        <td className="whitespace-nowrap py-3 pr-2 text-right text-gray-900">
-                          {formatAmount(grandTierAmount[i])}
-                          <CopyButton value={grandTierAmount[i]} />
-                        </td>
-                      </React.Fragment>
-                    ))}
-                    <td className="whitespace-nowrap py-3 text-right text-gray-900">
-                      {formatAmount(grandTotal)}
-                      <CopyButton value={grandTotal} />
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {/* Grand-total footer — rendered BELOW the CopyTable */}
+            {lineItems.length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t-2 border-border pt-3 text-sm font-medium text-foreground">
+                <span className="w-32 text-foreground">Total</span>
+                <span className="whitespace-nowrap">
+                  <span className="text-xs text-muted-foreground mr-1">kWh</span>
+                  <Kwh value={grandTotalKwh} bareNumber />
+                  <CopyButton value={grandTotalKwh} />
+                </span>
+                {tiers.map((_, i) => (
+                  <React.Fragment key={`grand-tier-${i}`}>
+                    <span className="whitespace-nowrap">
+                      <span className="text-xs text-muted-foreground mr-1">{tiers[i].label} kWh</span>
+                      <Kwh value={grandTierKwh[i]} bareNumber />
+                      <CopyButton value={grandTierKwh[i]} />
+                    </span>
+                    <span className="whitespace-nowrap">
+                      <span className="text-xs text-muted-foreground mr-1">{tiers[i].label} ({currency})</span>
+                      <Currency value={grandTierAmount[i]} bareNumber />
+                      <CopyButton value={grandTierAmount[i]} />
+                    </span>
+                  </React.Fragment>
+                ))}
+                <span className="whitespace-nowrap">
+                  <span className="text-xs text-muted-foreground mr-1">Total ({currency})</span>
+                  <Currency value={grandTotal} bareNumber />
+                  <CopyButton value={grandTotal} />
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

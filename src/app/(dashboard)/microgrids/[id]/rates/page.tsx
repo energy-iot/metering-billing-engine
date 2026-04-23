@@ -29,7 +29,7 @@ export default async function RatesPage({
 
   if (microgridError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading microgrid: {microgridError.message}
       </div>
     );
@@ -37,7 +37,7 @@ export default async function RatesPage({
 
   if (scheduleError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading rate schedule: {scheduleError.message}
       </div>
     );

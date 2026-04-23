@@ -64,7 +64,7 @@ export default async function BillingPeriodDetailPage({
 
   if (microgridError || !microgrid) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading microgrid: {microgridError?.message ?? "Not found"}
       </div>
     );
@@ -72,7 +72,7 @@ export default async function BillingPeriodDetailPage({
 
   if (tenantsError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading tenants: {tenantsError.message}
       </div>
     );
@@ -80,7 +80,7 @@ export default async function BillingPeriodDetailPage({
 
   if (lineItemsError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading line items: {lineItemsError.message}
       </div>
     );
@@ -88,7 +88,7 @@ export default async function BillingPeriodDetailPage({
 
   if (scheduleError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading rate schedule: {scheduleError.message}
       </div>
     );

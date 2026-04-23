@@ -1,0 +1,187 @@
+// BillingTable integration test (jsdom, component environment)
+//
+// Strategy:
+//   - Mount BillingTable with a minimal fixture (one period, two tiers, three tenants,
+//     three line items) wrapped in <LocaleProvider locale="en-UG" currency="UGX">.
+//   - Assert rendered markup only; does NOT fire mutation handlers (Close / Delete /
+//     Generate) — those handlers instantiate a Supabase client and router, both mocked.
+//   - Assertions:
+//     (a) bg-warning-muted in StatusChip for a draft period
+//     (b) <caption> text from CopyTable
+//     (c) <Currency bareNumber> cells do not contain "UGX"
+
+import { describe, it, expect, vi } from "vitest";
+import { render } from "@testing-library/react";
+import { BillingTable } from "../BillingTable";
+import { LocaleProvider } from "../format/locale-context";
+import type {
+  BillingLineItem,
+  BillingPeriod,
+  Tenant,
+  TierConfig,
+} from "@/lib/types/database";
+
+// Mock next/navigation (BillingTable calls useRouter inside)
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
+// Mock Supabase client (BillingTable calls createClient() on render)
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({
+    from: () => ({
+      delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    }),
+  }),
+}));
+
+// Mock clipboard API (CopyButton uses navigator.clipboard)
+Object.defineProperty(navigator, "clipboard", {
+  value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  writable: true,
+});
+
+// ─── Fixture data ───────────────────────────────────────────────────────────
+
+const tiers: TierConfig[] = [
+  { label: "Tier 1", min_kwh: 1, max_kwh: 50, rate_per_kwh: 500 },
+  { label: "Tier 2", min_kwh: 51, max_kwh: null, rate_per_kwh: 800 },
+];
+
+const period: BillingPeriod = {
+  id: "period-1",
+  microgrid_id: "mg-1",
+  start_date: "2026-03-01",
+  end_date: "2026-03-31",
+  status: "draft",
+  created_at: "2026-03-01T00:00:00Z",
+  closed_at: null,
+};
+
+const tenants: Tenant[] = [
+  { id: "t-1", microgrid_id: "mg-1", name: "Alice", phone: null, email: null, meter_id: "m-1", created_at: "2026-01-01T00:00:00Z" },
+  { id: "t-2", microgrid_id: "mg-1", name: "Bob", phone: null, email: null, meter_id: "m-2", created_at: "2026-01-01T00:00:00Z" },
+  { id: "t-3", microgrid_id: "mg-1", name: "Carol", phone: null, email: null, meter_id: "m-3", created_at: "2026-01-01T00:00:00Z" },
+];
+
+const lineItems: BillingLineItem[] = [
+  {
+    id: "li-1",
+    billing_period_id: "period-1",
+    tenant_id: "t-1",
+    meter_id: "m-1",
+    usage_kwh: 80,
+    start_kwh: 200,
+    end_kwh: 280,
+    tier_breakdown: [
+      { label: "Tier 1", kwh: 50, amount: 25000 },
+      { label: "Tier 2", kwh: 30, amount: 24000 },
+    ],
+    total_amount: 49000,
+    created_at: "2026-04-01T00:00:00Z",
+  },
+  {
+    id: "li-2",
+    billing_period_id: "period-1",
+    tenant_id: "t-2",
+    meter_id: "m-2",
+    usage_kwh: 45,
+    start_kwh: 100,
+    end_kwh: 145,
+    tier_breakdown: [
+      { label: "Tier 1", kwh: 45, amount: 22500 },
+      { label: "Tier 2", kwh: 0, amount: 0 },
+    ],
+    total_amount: 22500,
+    created_at: "2026-04-01T00:00:00Z",
+  },
+  {
+    id: "li-3",
+    billing_period_id: "period-1",
+    tenant_id: "t-3",
+    meter_id: "m-3",
+    usage_kwh: 110,
+    start_kwh: 50,
+    end_kwh: 160,
+    tier_breakdown: [
+      { label: "Tier 1", kwh: 50, amount: 25000 },
+      { label: "Tier 2", kwh: 60, amount: 48000 },
+    ],
+    total_amount: 73000,
+    created_at: "2026-04-01T00:00:00Z",
+  },
+];
+
+function Wrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <LocaleProvider locale="en-UG" currency="UGX">
+      {children}
+    </LocaleProvider>
+  );
+}
+
+describe("BillingTable", () => {
+  it("(a) draft period status chip contains bg-warning-muted", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          microgridId="mg-1"
+          period={period}
+          lineItems={lineItems}
+          tenants={tenants}
+          tiers={tiers}
+          currency="UGX"
+        />
+      </Wrapper>
+    );
+
+    // StatusChip for billingPeriod.draft maps to tone="warn" → Chip gets bg-warning-muted class
+    const chip = container.querySelector(".bg-warning-muted");
+    expect(chip).not.toBeNull();
+  });
+
+  it("(b) CopyTable renders a <caption> element with period info", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          microgridId="mg-1"
+          period={period}
+          lineItems={lineItems}
+          tenants={tenants}
+          tiers={tiers}
+          currency="UGX"
+        />
+      </Wrapper>
+    );
+
+    // CopyTable always renders a <caption> (sr-only) describing the table
+    const caption = container.querySelector("caption");
+    expect(caption).not.toBeNull();
+    // Caption should mention the period
+    expect(caption?.textContent).toContain("Billing table for period");
+  });
+
+  it("(c) Currency bareNumber cells do not contain 'UGX'", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          microgridId="mg-1"
+          period={period}
+          lineItems={lineItems}
+          tenants={tenants}
+          tiers={tiers}
+          currency="UGX"
+        />
+      </Wrapper>
+    );
+
+    // CopyTable cells render plain formatted numbers via format functions (no currency symbol)
+    // The grand-total footer uses <Currency bareNumber> which also omits "UGX"
+    // Find all table data cells and verify none contain the currency code
+    const tds = Array.from(container.querySelectorAll("td"));
+    const tdTexts = tds.map((td) => td.textContent ?? "");
+    const hasUgxInCell = tdTexts.some((t) => t.includes("UGX"));
+    expect(hasUgxInCell).toBe(false);
+  });
+});

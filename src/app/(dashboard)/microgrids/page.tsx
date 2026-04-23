@@ -15,7 +15,7 @@ export default async function MicrogridsPage() {
 
   if (error) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading microgrids: {error.message}
       </div>
     );
@@ -24,10 +24,10 @@ export default async function MicrogridsPage() {
   if (!microgrids || microgrids.length === 0) {
     return (
       <div>
-        <h1 className="mb-6 text-2xl font-semibold text-gray-900">
+        <h1 className="mb-6 text-2xl font-semibold text-foreground">
           Microgrids
         </h1>
-        <div className="rounded-md border border-gray-200 bg-white p-8 text-center text-gray-500">
+        <div className="rounded-md border border-border bg-card p-8 text-center text-muted-foreground">
           No microgrids found. Microgrids are configured by your system
           administrator.
         </div>
@@ -50,23 +50,23 @@ export default async function MicrogridsPage() {
 
   return (
     <div>
-      <h1 className="mb-6 text-2xl font-semibold text-gray-900">Microgrids</h1>
+      <h1 className="mb-6 text-2xl font-semibold text-foreground">Microgrids</h1>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {microgridsWithCounts.map((mg) => (
           <a
             key={mg.id}
             href={`/microgrids/${mg.id}`}
-            className="block rounded-lg border border-gray-200 bg-white p-6 transition-colors hover:border-gray-300 hover:bg-gray-50"
+            className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted"
           >
-            <h2 className="font-medium text-gray-900">{mg.name}</h2>
+            <h2 className="font-medium text-foreground">{mg.name}</h2>
             {mg.location && (
-              <p className="mt-1 text-sm text-gray-500">{mg.location}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{mg.location}</p>
             )}
             <div className="mt-3 flex items-center justify-between text-sm">
-              <span className="text-gray-600">
+              <span className="text-muted-foreground">
                 {mg.tenant_count} tenant{mg.tenant_count !== 1 ? "s" : ""}
               </span>
-              <span className="text-gray-400">{mg.currency}</span>
+              <span className="text-muted-foreground">{mg.currency}</span>
             </div>
           </a>
         ))}

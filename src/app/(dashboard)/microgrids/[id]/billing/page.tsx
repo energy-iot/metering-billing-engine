@@ -20,7 +20,7 @@ export default async function BillingPage({
 
   if (error) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
         Error loading billing periods: {error.message}
       </div>
     );
