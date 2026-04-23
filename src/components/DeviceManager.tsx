@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { Device, Household } from "@/lib/types/domain";
 import type {
   DiscoveredDevice,
-  EdgeDiscoveryResult,
+  EdgeDiscoveryResponse,
 } from "@/lib/openems/types";
 import { DEVICE_TYPE_INFO } from "@/lib/openems/device-descriptions";
 import { StatusChip } from "@/components/ui/status-chip";
@@ -36,7 +36,7 @@ export function DeviceManager({
 
   // Discovery state
   const [discoveryResults, setDiscoveryResults] = useState<
-    EdgeDiscoveryResult[]
+    EdgeDiscoveryResponse[]
   >([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -114,7 +114,13 @@ export function DeviceManager({
         return;
       }
 
-      setDiscoveryResults(data.edges ?? []);
+      // Old multi-edge API returned { edges: [] }. New single-edge API returns { edgeId, devices }.
+      // Wrap in an array to keep compatibility with the legacy multi-edge rendering below.
+      if (data.edgeId && Array.isArray(data.devices)) {
+        setDiscoveryResults([{ edgeId: data.edgeId, online: data.online ?? false, devices: data.devices }]);
+      } else {
+        setDiscoveryResults(data.edges ?? []);
+      }
     } catch {
       setDiscoveryError(
         "Could not reach the server. Check your network connection."
@@ -262,7 +268,7 @@ export function DeviceManager({
                   <div className="ml-5 space-y-2">
                     {edge.devices.map((device) => {
                       const alreadyAdded = existingKeys.has(device.componentId);
-                      const typeInfo = DEVICE_TYPE_INFO[device.deviceType];
+                      const typeInfo = DEVICE_TYPE_INFO[device.suggestedDeviceType];
 
                       return (
                         <div
@@ -290,9 +296,9 @@ export function DeviceManager({
                                 </p>
                               </div>
                               {alreadyAdded ? (
-                                <StatusChip kind="meterType" status={device.deviceType} state="disabled" />
+                                <StatusChip kind="meterType" status={device.suggestedDeviceType} state="disabled" />
                               ) : (
-                                <StatusChip kind="meterType" status={device.deviceType} />
+                                <StatusChip kind="meterType" status={device.suggestedDeviceType} />
                               )}
                             </div>
 

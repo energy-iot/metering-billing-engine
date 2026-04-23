@@ -81,12 +81,26 @@ export type EdgeFactory = {
 /** A discovered device from OpenEMS (formerly DiscoveredMeter) */
 export type DiscoveredDevice = {
   componentId: string;
+  factoryId: string;
   alias: string;
-  deviceType: string; // OpenEMS factory-derived classification (GRID, PRODUCTION, CONSUMPTION, UNKNOWN)
-  channelAddress: string; // e.g. "meter0/ActiveConsumptionEnergy"
+  nature: string;
+  openemsChannelAddress: string; // e.g. "meter0/ActiveConsumptionEnergy"
+  suggestedDeviceType: import("@/lib/types/domain").DeviceType;
+  alreadyAdded?: boolean;
 };
 
-/** Discovery result per edge */
+/** Single-edge discovery result (F #57) — flat, not wrapped in an array */
+export type EdgeDiscoveryResponse = {
+  edgeId: string;
+  online: boolean;
+  devices: DiscoveredDevice[];
+};
+
+/**
+ * @deprecated Use EdgeDiscoveryResponse instead (single-edge contract, F #57).
+ * EdgeDiscoveryResult is kept for backward-compatibility only; callers that
+ * used the old multi-edge array shape should migrate to EdgeDiscoveryResponse.
+ */
 export type EdgeDiscoveryResult = {
   edgeId: string;
   online: boolean;
