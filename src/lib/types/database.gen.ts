@@ -613,6 +613,19 @@ export type Database = {
       }
     }
     Functions: {
+      fn_create_household_with_meter: {
+        Args: {
+          p_address_line1?: string
+          p_address_line2?: string
+          p_device_id: string
+          p_display_name: string
+          p_microgrid_id: string
+          p_primary_email?: string
+          p_primary_phone?: string
+          p_unit_label?: string
+        }
+        Returns: string
+      }
       is_super_admin: { Args: never; Returns: boolean }
       user_can_access_microgrid: {
         Args: { _microgrid_id: string }

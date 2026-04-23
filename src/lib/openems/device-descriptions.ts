@@ -83,3 +83,22 @@ export const DEVICE_TYPE_INFO: Record<
 // Legacy export alias to ease any lingering references during migration.
 /** @deprecated Use DEVICE_TYPE_INFO */
 export const METER_TYPE_INFO = DEVICE_TYPE_INFO;
+
+/**
+ * humanReadable — return the human-readable label for a device-type enum value
+ * (or any legacy uppercase classification key). Falls back to the raw key if
+ * unknown so callers never render `undefined`.
+ *
+ * Example:
+ *   humanReadable("consumption_meter") // "Consumption meter"
+ *   humanReadable("grid_meter")        // "Grid meter"
+ */
+export function humanReadable(deviceType: string | null | undefined): string {
+  if (!deviceType) return "Unclassified";
+  const entry = DEVICE_TYPE_INFO[deviceType];
+  if (entry) return entry.label;
+  // Secondary lookup: try uppercase fallback (legacy keys).
+  const upper = DEVICE_TYPE_INFO[deviceType.toUpperCase()];
+  if (upper) return upper.label;
+  return deviceType;
+}
