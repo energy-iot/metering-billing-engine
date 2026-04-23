@@ -45,9 +45,12 @@ vi.mock("./edge-row-actions", () => ({
 }));
 
 // Stub currentUserCanAccessMicrogrid — always returns true for smoke tests.
-vi.mock("@/lib/auth/access", () => ({
-  currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
-}));
+vi.mock("@/lib/auth/access", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/access")>(
+    "@/lib/auth/access",
+  );
+  return { ...actual, currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true) };
+});
 
 import SetupEdgesPage from "./page";
 

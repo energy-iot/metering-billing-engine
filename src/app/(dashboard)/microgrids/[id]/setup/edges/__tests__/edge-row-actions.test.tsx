@@ -159,6 +159,15 @@ describe("EdgeRowActions", () => {
     expect(screen.getByTestId("edge-form-modal")).toBeDefined();
   });
 
+  // (e) DeleteEntityButton wrapper is hidden (not keyboard-reachable via tab)
+  it("(e) canManage=true: delete wrapper carries hidden attribute (no ghost tab stop)", () => {
+    render(
+      <EdgeRowActions edge={testEdge} microgridId="mg-1" canManage={true} />
+    );
+    const wrapper = screen.getByTestId("delete-entity-wrapper");
+    expect(wrapper.hasAttribute("hidden")).toBe(true);
+  });
+
   // (d) Clicking Delete edge triggers the DeleteEntityButton stub
   it("(d) Clicking Delete edge activates the DeleteEntityButton stub", () => {
     render(

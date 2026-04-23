@@ -44,6 +44,7 @@ interface EdgeRowActionsProps {
     | "openems_backend_url"
     | "role"
   >;
+  /** reserved for future Rediscover/Reassign menu items in the Discover workstream */
   microgridId: string;
   canManage: boolean;
 }
@@ -108,11 +109,12 @@ export function EdgeRowActions({
 
       {/* DeleteEntityButton rendered outside the portal so its ConfirmDialog
           stacks above the (already-closed) menu without z-index conflicts.
-          Visually hidden wrapper — the button inside is triggered imperatively. */}
+          Hidden wrapper — display:none removes the button from paint AND tab
+          order. sr-only would leave it keyboard-reachable (ghost tab stop). */}
       {canManage && (
         <div
           ref={deleteWrapperRef}
-          className="sr-only"
+          hidden
           data-testid="delete-entity-wrapper"
         >
           <DeleteEntityButton
