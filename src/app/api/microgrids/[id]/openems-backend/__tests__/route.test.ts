@@ -89,7 +89,14 @@ function makePutRequest(body: unknown): NextRequest {
   });
 }
 
-function mgSelectHandler(row: { id: string; name: string } | null) {
+function mgSelectHandler(
+  row: {
+    id: string;
+    name: string;
+    ems_type?: "cloud_aws" | "direct_url" | null;
+    ems_aws_secret_access_key_encrypted?: string | null;
+  } | null
+) {
   return () => ({
     select: () => ({
       eq: () => ({
@@ -146,7 +153,16 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       return handler(table);
     });
 
-    mockRpc.mockResolvedValue({ data: "\\x01020304" /* bytea hex */, error: null });
+    mockRpc.mockImplementation((fnName: string) => {
+      if (fnName === "fn_get_ems_secret") {
+        return Promise.resolve({
+          data: "DECRYPTED_FAKE_SECRET",
+          error: null,
+        });
+      }
+      // fn_ems_encrypt_secret (default)
+      return Promise.resolve({ data: "\\x01020304", error: null });
+    });
   });
 
   it("returns 400 on malformed body", async () => {
@@ -157,7 +173,13 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 400 when cloud_aws config is missing secretAccessKey", async () => {
+  it("returns 400 when cloud_aws config is missing secretAccessKey AND no existing ciphertext", async () => {
+    // Route now reads the microgrid row first to check for an existing
+    // ciphertext (#102 secret-preserve). When none exists, blank secret
+    // still yields 400.
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([])); // not hit; left here for safety
+
     const { PUT } = await import("../route");
     const res = await PUT(
       makePutRequest({
@@ -387,6 +409,74 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe("zero_edges");
+  });
+
+  // AC-TEST-PRESERVE (#102): "Leave blank to keep the current secret"
+  it("preserve-secret: blank secretAccessKey + existing ciphertext → no re-encrypt, existing secret used for Discover", async () => {
+    registerFrom(
+      mgSelectHandler({
+        id: MG_ID,
+        name: MG_NAME,
+        ems_type: "cloud_aws",
+        // sentinel non-null bytea hex representation
+        ems_aws_secret_access_key_encrypted: "\\x01020304",
+      })
+    );
+    registerFrom(billingPeriodsHandler([]));
+    registerFrom(mgUpdateHandler(null)); // persist config (WITHOUT re-encrypt)
+    registerFrom(edgesSelectHandler([]));
+    registerFrom(mgUpdateHandler(null)); // health
+
+    getEdgesStatusMock.mockResolvedValue([
+      { edgeId: "edge0", online: true },
+    ]);
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "cloud_aws",
+        backendUrl: "https://lambda.example.com/",
+        region: "us-east-1",
+        accessKeyId: "AKIAEXAMPLEKEYID12345",
+        // NO secretAccessKey — preserve branch
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.status).toBe("success");
+
+    // Two RPC calls expected: fn_get_ems_secret (decrypt existing) and
+    // NO fn_ems_encrypt_secret (the preserve branch skips re-encryption).
+    const rpcCalls = mockRpc.mock.calls.map((c) => c[0]);
+    expect(rpcCalls).toContain("fn_get_ems_secret");
+    expect(rpcCalls).not.toContain("fn_ems_encrypt_secret");
+  });
+
+  it("preserve-secret: blank secretAccessKey + NO existing ciphertext → 400", async () => {
+    registerFrom(
+      mgSelectHandler({
+        id: MG_ID,
+        name: MG_NAME,
+        ems_type: null,
+        ems_aws_secret_access_key_encrypted: null,
+      })
+    );
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "cloud_aws",
+        backendUrl: "https://lambda.example.com/",
+        region: "us-east-1",
+        accessKeyId: "AKIAEXAMPLEKEYID12345",
+        // NO secretAccessKey
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("secretAccessKey");
   });
 });
 
