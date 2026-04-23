@@ -67,6 +67,12 @@ INSERT INTO microgrids (
 );
 
 -- ── Edge: Metering Pi (OpenEMS) ─────────────────────────────────────────
+-- NOTE: data_source_type + openems_backend_url are dropped by migration
+-- 00018. They're still present during seed execution (which runs between
+-- migrations 00002 and the rest) because the seed sits at migration slot
+-- 00003 — the columns don't vanish until 00018 runs later. Supplying
+-- defaults satisfies 00001's CHECK constraint; 00018's column drops erase
+-- them from the resulting schema.
 INSERT INTO edges (
   id, microgrid_id, name,
   data_source_type, openems_backend_url, openems_edge_id,
@@ -75,9 +81,7 @@ INSERT INTO edges (
   'e0000000-0000-0000-0000-000000000001',
   'b0000000-0000-0000-0000-000000000001',
   'Metering Pi',
-  'openems',
-  'http://localhost:8075',
-  'edge0',
+  'openems', 'http://localhost:8075', 'edge0',
   'metering'
 );
 

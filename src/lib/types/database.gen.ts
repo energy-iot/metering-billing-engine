@@ -231,32 +231,26 @@ export type Database = {
       edges: {
         Row: {
           created_at: string
-          data_source_type: Database["public"]["Enums"]["edge_data_source"]
           id: string
           microgrid_id: string
           name: string
-          openems_backend_url: string | null
-          openems_edge_id: string | null
+          openems_edge_id: string
           role: string | null
         }
         Insert: {
           created_at?: string
-          data_source_type?: Database["public"]["Enums"]["edge_data_source"]
           id?: string
           microgrid_id: string
           name: string
-          openems_backend_url?: string | null
-          openems_edge_id?: string | null
+          openems_edge_id: string
           role?: string | null
         }
         Update: {
           created_at?: string
-          data_source_type?: Database["public"]["Enums"]["edge_data_source"]
           id?: string
           microgrid_id?: string
           name?: string
-          openems_backend_url?: string | null
-          openems_edge_id?: string | null
+          openems_edge_id?: string
           role?: string | null
         }
         Relationships: [
@@ -445,6 +439,15 @@ export type Database = {
           community_id: string
           created_at: string
           currency: string
+          ems_aws_access_key_id: string | null
+          ems_aws_region: string | null
+          ems_aws_secret_access_key_encrypted: string | null
+          ems_backend_url: string | null
+          ems_last_discover_at: string | null
+          ems_last_discover_count: number | null
+          ems_last_discover_error: string | null
+          ems_last_discover_status: string | null
+          ems_type: Database["public"]["Enums"]["microgrid_ems_type"] | null
           id: string
           lat: number | null
           lng: number | null
@@ -460,6 +463,15 @@ export type Database = {
           community_id: string
           created_at?: string
           currency?: string
+          ems_aws_access_key_id?: string | null
+          ems_aws_region?: string | null
+          ems_aws_secret_access_key_encrypted?: string | null
+          ems_backend_url?: string | null
+          ems_last_discover_at?: string | null
+          ems_last_discover_count?: number | null
+          ems_last_discover_error?: string | null
+          ems_last_discover_status?: string | null
+          ems_type?: Database["public"]["Enums"]["microgrid_ems_type"] | null
           id?: string
           lat?: number | null
           lng?: number | null
@@ -475,6 +487,15 @@ export type Database = {
           community_id?: string
           created_at?: string
           currency?: string
+          ems_aws_access_key_id?: string | null
+          ems_aws_region?: string | null
+          ems_aws_secret_access_key_encrypted?: string | null
+          ems_backend_url?: string | null
+          ems_last_discover_at?: string | null
+          ems_last_discover_count?: number | null
+          ems_last_discover_error?: string | null
+          ems_last_discover_status?: string | null
+          ems_type?: Database["public"]["Enums"]["microgrid_ems_type"] | null
           id?: string
           lat?: number | null
           lng?: number | null
@@ -723,6 +744,8 @@ export type Database = {
         }
         Returns: string
       }
+      fn_ems_decrypt_secret: { Args: { p_ciphertext: string }; Returns: string }
+      fn_ems_encrypt_secret: { Args: { p_plaintext: string }; Returns: string }
       fn_entity_delete_community: { Args: { p_id: string }; Returns: number }
       fn_entity_delete_edge: { Args: { p_id: string }; Returns: number }
       fn_entity_delete_microgrid: { Args: { p_id: string }; Returns: number }
@@ -738,6 +761,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
       is_super_admin: { Args: never; Returns: boolean }
       user_can_access_microgrid: {
         Args: { _microgrid_id: string }
@@ -759,7 +783,6 @@ export type Database = {
         | "inverter"
         | "ev_charger"
         | "other"
-      edge_data_source: "openems" | "modbus_direct" | "mqtt" | "rest_api"
       household_device_role:
         | "primary_consumption_meter"
         | "secondary_meter"
@@ -767,6 +790,7 @@ export type Database = {
         | "solar"
         | "ev_charger"
         | "other"
+      microgrid_ems_type: "cloud_aws" | "direct_url"
       role_scope_type: "org"
       user_role: "super_admin" | "org_manager"
     }
@@ -909,7 +933,6 @@ export const Constants = {
         "ev_charger",
         "other",
       ],
-      edge_data_source: ["openems", "modbus_direct", "mqtt", "rest_api"],
       household_device_role: [
         "primary_consumption_meter",
         "secondary_meter",
@@ -918,6 +941,7 @@ export const Constants = {
         "ev_charger",
         "other",
       ],
+      microgrid_ems_type: ["cloud_aws", "direct_url"],
       role_scope_type: ["org"],
       user_role: ["super_admin", "org_manager"],
     },
