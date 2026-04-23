@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
 let canAccessReturn = true;
+let isSuperAdminReturn = true;
 let getUserReturn: { user: { id: string } | null } = {
   user: { id: "user-1" },
 };
@@ -25,9 +26,11 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/auth/access", () => ({
   currentUserCanAccessMicrogrid: async () => canAccessReturn,
   currentUserCanAccessCommunity: async () => canAccessReturn,
-  currentUserIsSuperAdmin: async () => canAccessReturn,
+  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
   getCurrentUserRoles: async () =>
-    canAccessReturn
+    isSuperAdminReturn
+      ? [{ role: "super_admin", scope_type: "org", scope_id: "org-1" }]
+      : canAccessReturn
       ? [{ role: "org_manager", scope_type: "org", scope_id: "org-1" }]
       : [],
 }));
@@ -86,6 +89,7 @@ describe("DELETE /api/edges/[id]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canAccessReturn = true;
+    isSuperAdminReturn = true;
     getUserReturn = { user: { id: "user-1" } };
   });
 
@@ -144,12 +148,48 @@ describe("DELETE /api/edges/[id]", () => {
     expect(logged.descendant_counts).toHaveProperty("billing_line_items_nulled");
     infoSpy.mockRestore();
   });
+
+  it("204 org_manager happy path — actor_role logged as org_manager (Nit #6)", async () => {
+    // Super admin is NOT the caller; org_manager has access via canAccess.
+    isSuperAdminReturn = false;
+    canAccessReturn = true;
+    configureEdgeLookup({
+      data: { id: VALID_UUID, name: "Edge-1", microgrid_id: "mg-1" },
+      error: null,
+    });
+    mockRpcImpl.mockResolvedValueOnce({ data: 1, error: null });
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const { DELETE } = await import("../[id]/route");
+    const res = await DELETE(makeDelete(VALID_UUID), {
+      params: Promise.resolve({ id: VALID_UUID }),
+    });
+    expect(res.status).toBe(204);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(infoSpy.mock.calls[0][0] as string);
+    expect(logged.actor_role).toBe("org_manager");
+    infoSpy.mockRestore();
+  });
 });
 
 describe("GET /api/edges/[id]/delete-preview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canAccessReturn = true;
+    isSuperAdminReturn = true;
+  });
+
+  it("404 when edge does not exist (not 403) — Nit #3", async () => {
+    // Edge not found — configureEdgeLookup returns null so the route must
+    // return 404 before reaching the permission check.
+    configureEdgeLookup({ data: null, error: null });
+
+    const { GET } = await import("../[id]/delete-preview/route");
+    const res = await GET(
+      new NextRequest(`http://localhost/api/edges/${VALID_UUID}/delete-preview`),
+      { params: Promise.resolve({ id: VALID_UUID }) }
+    );
+    expect(res.status).toBe(404);
   });
 
   it("200 happy path — parent = { kind:'microgrid', id:<microgrid_id> }", async () => {
