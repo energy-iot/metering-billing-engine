@@ -182,7 +182,7 @@ export async function buildOrderParamsFromPeriod(
       amount: totalAmount,
       description: `Utility bill for ${dateRange}`,
       // TODO: replace with a real callback route once the post-payment flow exists.
-      callbackUrl: "https://webhook.site/2229cd55-f18b-4cb8-9baf-08785ab88718",
+      callbackUrl: "https://nearlyfreeenergy.com",
       billingAddress,
       // currency not set here — createPaymentOrder defaults to "UGX"
     },
