@@ -6,9 +6,11 @@
  * tables and flow through DeviceConfig in src/lib/adapters/types.ts.
  *
  * Channel address convention for energy reads:
- *   `${componentId}/ActiveConsumptionEnergy`
- * This suffix is OpenEMS-specific; non-consumption channels (battery SoC, PV
- * production) resolve their channel name from device_type in the adapter.
+ *   `${componentId}/ActiveConsumptionEnergy` — for consumption_meter and ev_charger
+ *   `null` — for battery, inverter, grid_meter, pv_meter (no single billing channel)
+ *
+ * The channel is derived per deviceType via channelAddressFor() in
+ * src/lib/openems/channel-address.ts. Non-consumption channels are deferred.
  */
 
 /** JSON-RPC request envelope */
@@ -84,7 +86,7 @@ export type DiscoveredDevice = {
   factoryId: string;
   alias: string;
   nature: string;
-  openemsChannelAddress: string; // e.g. "meter0/ActiveConsumptionEnergy"
+  openemsChannelAddress: string | null; // e.g. "meter0/ActiveConsumptionEnergy"; null for non-billable types
   suggestedDeviceType: import("@/lib/types/domain").DeviceType;
   alreadyAdded?: boolean;
 };

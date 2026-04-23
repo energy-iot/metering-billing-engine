@@ -109,8 +109,10 @@ export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
   }, [openemsEdgeId]);
 
   const handleSave = useCallback(async () => {
-    // Only save rows that are not already added
-    const toSave = devices.filter((d) => !d.alreadyAdded);
+    // Only save rows that are not already added and have a billable channel address.
+    // Null-channel rows (battery, inverter, grid_meter, pv_meter) are excluded by default;
+    // force-saving without a channel is deferred to a future ticket.
+    const toSave = devices.filter((d) => !d.alreadyAdded && d.openemsChannelAddress !== null);
     if (toSave.length === 0) return;
 
     setSaveError(null);
@@ -166,7 +168,8 @@ export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
     []
   );
 
-  const pendingCount = devices.filter((d) => !d.alreadyAdded).length;
+  // Pending = not already added AND has a billable channel (null-channel rows are excluded from Save)
+  const pendingCount = devices.filter((d) => !d.alreadyAdded && d.openemsChannelAddress !== null).length;
   // Derived flags so TypeScript doesn't narrow phase away inside JSX blocks
   const isSaving = phase === "saving";
   const isDiscovering = phase === "discovering";
@@ -251,6 +254,42 @@ export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
                       <Chip tone="neutral" state="disabled">
                         Already added
                       </Chip>
+                    </div>
+                  );
+                }
+
+                // Null-channel devices: no single auto-billing channel exists for this
+                // device type. Render as muted row with explanatory help text. Excluded
+                // from the Save payload (force-save is a future ticket).
+                if (device.openemsChannelAddress === null) {
+                  return (
+                    <div
+                      key={device.componentId}
+                      className="rounded-md border border-border bg-muted px-4 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-muted-foreground">
+                              {device.alias || device.componentId}
+                            </p>
+                            <StatusChip
+                              kind="deviceType"
+                              status={device.suggestedDeviceType}
+                              state="disabled"
+                            />
+                          </div>
+                          <p className="font-mono text-xs text-muted-foreground">
+                            {device.componentId}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {device.factoryId}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        No auto-billing channel for this device type; device metadata saved without an auto-query channel.
+                      </p>
                     </div>
                   );
                 }

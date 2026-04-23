@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { createClient } from "@/lib/supabase/server";
 import { classifyDeviceType } from "@/lib/openems/classify";
+import { channelAddressFor } from "@/lib/openems/channel-address";
 import type { DiscoveredDevice, EdgeDiscoveryResponse } from "@/lib/openems/types";
 
 /**
@@ -15,15 +16,6 @@ const SUPPORTED_NATURE_IDS = [
   "io.openems.edge.evcs.api.Evcs",
   "io.openems.edge.inverter.api.Inverter",
 ];
-
-/**
- * Derive a channel address from a component ID and its primary nature.
- * Consumption / grid / PV meters use ActiveConsumptionEnergy; others fall back
- * to the same convention until richer channel mapping is needed.
- */
-function channelAddressFor(componentId: string): string {
-  return `${componentId}/ActiveConsumptionEnergy`;
-}
 
 /**
  * GET /api/openems/discover?edgeId=<id>
@@ -87,7 +79,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       );
       if (!matchedNature) continue;
 
-      const openemsChannelAddress = channelAddressFor(componentId);
+      const suggestedDeviceType = classifyDeviceType(component.factoryId, matchedNature);
+      const openemsChannelAddress = channelAddressFor(componentId, suggestedDeviceType);
 
       discovered.push({
         componentId,
@@ -95,16 +88,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         alias: component.alias,
         nature: matchedNature,
         openemsChannelAddress,
-        suggestedDeviceType: classifyDeviceType(component.factoryId, matchedNature),
+        suggestedDeviceType,
         alreadyAdded: false, // filled in below after dedup check
       });
     }
 
-    // Dedup check: look up existing devices rows for this edge by channel address.
+    // Dedup check: look up existing devices rows for this edge by component ID.
     // We resolve the DB edge row via the edge's openems_edge_id.
     if (discovered.length > 0) {
-      const channelAddresses = discovered.map((d) => d.openemsChannelAddress);
-
       // Find the edge row in DB (the API receives the OpenEMS edge ID string,
       // but the DB edge PK is a UUID; join via openems_edge_id).
       const { data: edgeRows } = await supabase
@@ -126,17 +117,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           (existingDevices ?? []).map((d) => d.openems_component_id ?? "")
         );
 
-        // Mark already-added entries. We key on componentId (= openems_component_id)
-        // because the existing schema uses UNIQUE (edge_id, openems_component_id).
-        // The ticket specifies (edge_id, openems_channel_address) as the dedup key;
-        // channel address is derived deterministically from componentId, so they are
-        // equivalent for this edge.
+        // Mark already-added entries. Dedup keys on componentId (= openems_component_id)
+        // via the UNIQUE (edge_id, openems_component_id) constraint in 00001_schema.sql:145.
+        // Channel address is derived per deviceType and may be null for non-billable types
+        // (battery, inverter, grid_meter, pv_meter). The dedup key is deviceType-independent
+        // — a component can only appear once per edge regardless of which channel it maps to.
         for (const device of discovered) {
           device.alreadyAdded = existingComponentIds.has(device.componentId);
         }
-
-        // Suppress unused variable warning for channelAddresses
-        void channelAddresses;
       }
     }
 
