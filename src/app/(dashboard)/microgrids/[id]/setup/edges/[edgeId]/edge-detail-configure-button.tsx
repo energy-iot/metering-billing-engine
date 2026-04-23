@@ -26,7 +26,6 @@ export function EdgeDetailConfigureButton({ edge }: { edge: Edge }) {
         Configure…
       </button>
       <EdgeFormModal
-        mode="edit"
         edge={edge}
         open={open}
         onOpenChange={(next) => {

@@ -1,10 +1,11 @@
 /**
- * /api/edges + /api/edges/[id] — unit tests (post-#101).
+ * /api/edges + /api/edges/[id] — unit tests (post-#104).
  *
  * POST /api/edges: retired — returns 410 Gone with migration pointer.
  * PATCH /api/edges/[id]:
  *   - Happy path (name-only) → 200
  *   - Rejects legacy fields `data_source_type` / `openems_backend_url` → 400
+ *   - Rejects `openems_edge_id` (immutable since #104) → 400 + rediscover pointer
  *   - Missing all fields → 400
  *   - Empty name → 422
  *   - RLS violation on update → 403
@@ -124,6 +125,18 @@ describe("PATCH /api/edges/[id]", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toContain("openems_backend_url");
+  });
+
+  it("rejects openems_edge_id with 400 + rediscover pointer", async () => {
+    const { PATCH } = await import("../[id]/route");
+    const res = await PATCH(
+      makePatchRequest(EDGE_UUID, { openems_edge_id: "edge1" }),
+      { params: Promise.resolve({ id: EDGE_UUID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("openems_edge_id");
+    expect(json.error).toContain("Remove and rediscover");
   });
 
   it("returns 422 when name is empty", async () => {
