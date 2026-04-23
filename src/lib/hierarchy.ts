@@ -1,0 +1,383 @@
+/**
+ * hierarchy.ts — shared helper for HierarchyNav data fetching.
+ *
+ * All dashboard routes that render a breadcrumb call `getHierarchyLevels()`
+ * instead of writing their own Supabase queries. This keeps level-assembly
+ * logic in one place and prevents drift across routes.
+ *
+ * RLS scoping is automatic: the Supabase JS client inherits the authenticated
+ * user's session, so `count: 'exact'` returns only rows the user can see.
+ *
+ * D4 sole-placer invariant: only layout/page files listed in the ticket's
+ * route → levels map may import this helper. Do not add inline HierarchyNav
+ * placements outside of the D4 layout pattern.
+ */
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { HierarchyLevel } from "@/components/ui/hierarchy-nav";
+
+export type HierarchyScope =
+  | { kind: "communities" }
+  | { kind: "microgrids"; communityId?: string }
+  | { kind: "microgrid"; microgridId: string }
+  | { kind: "edge"; microgridId: string; edgeId: string }
+  | { kind: "household"; microgridId: string; householdId: string };
+
+type SiblingRow = { id: string; name: string | null };
+
+// ── Internal fetch helpers ─────────────────────────────────────────────────────
+
+/** Fetch the single accessible org + sibling orgs for a switcher. */
+async function fetchOrgLevel(
+  supabase: SupabaseClient,
+  currentOrgId?: string,
+): Promise<HierarchyLevel> {
+  const { data: orgs } = await supabase
+    .from("organizations")
+    .select("id, name")
+    .order("name")
+    .returns<SiblingRow[]>();
+
+  const orgList = orgs ?? [];
+
+  if (orgList.length === 0) {
+    return {
+      kind: "Organization",
+      label: "No organizations",
+      count: 0,
+      href: "/",
+      active: false,
+    };
+  }
+
+  const current =
+    (currentOrgId ? orgList.find((o) => o.id === currentOrgId) : undefined) ??
+    orgList[0];
+
+  return {
+    kind: "Organization",
+    label: current?.name ?? "Organization",
+    count: orgList.length,
+    href: "/",
+    active: false,
+    siblings:
+      orgList.length > 1
+        ? orgList.map((o) => ({ label: o.name ?? o.id, href: "/" }))
+        : undefined,
+  };
+}
+
+/** Fetch the community level given a community id. */
+async function fetchCommunityLevel(
+  supabase: SupabaseClient,
+  communityId: string,
+  active: boolean,
+): Promise<HierarchyLevel | null> {
+  const { data: community } = await supabase
+    .from("communities")
+    .select("id, name, org_id")
+    .eq("id", communityId)
+    .single<{ id: string; name: string; org_id: string }>();
+
+  if (!community) return null;
+
+  // Count sibling communities in the same org.
+  const { data: siblings } = await supabase
+    .from("communities")
+    .select("id, name")
+    .eq("org_id", community.org_id)
+    .order("name")
+    .returns<SiblingRow[]>();
+
+  const siblingList = siblings ?? [];
+  const count = siblingList.length;
+
+  return {
+    kind: "Community",
+    label: community.name,
+    count,
+    href: `/microgrids?community=${community.id}`,
+    active,
+    siblings:
+      count > 1
+        ? siblingList.map((c) => ({
+            label: c.name ?? c.id,
+            href: `/microgrids?community=${c.id}`,
+          }))
+        : undefined,
+  };
+}
+
+/** Fetch the microgrid level given a microgrid id. */
+async function fetchMicrogridLevel(
+  supabase: SupabaseClient,
+  microgridId: string,
+  active: boolean,
+): Promise<{ level: HierarchyLevel | null; communityId: string | null; orgId: string | null }> {
+  const { data: microgrid } = await supabase
+    .from("microgrids")
+    .select("id, name, community_id")
+    .eq("id", microgridId)
+    .single<{ id: string; name: string; community_id: string }>();
+
+  if (!microgrid) return { level: null, communityId: null, orgId: null };
+
+  // Sibling microgrids in the same community.
+  const { data: siblings } = await supabase
+    .from("microgrids")
+    .select("id, name")
+    .eq("community_id", microgrid.community_id)
+    .order("name")
+    .returns<SiblingRow[]>();
+
+  const siblingList = siblings ?? [];
+  const count = siblingList.length;
+
+  const level: HierarchyLevel = {
+    kind: "Microgrid",
+    label: microgrid.name,
+    count,
+    href: `/microgrids/${microgridId}`,
+    active,
+    siblings:
+      count > 1
+        ? siblingList
+            .filter((s) => s.id !== microgridId)
+            .map((s) => ({ label: s.name ?? s.id, href: `/microgrids/${s.id}` }))
+        : undefined,
+  };
+
+  // Resolve community → org chain for ancestor levels.
+  const { data: community } = await supabase
+    .from("communities")
+    .select("id, org_id")
+    .eq("id", microgrid.community_id)
+    .single<{ id: string; org_id: string }>();
+
+  return {
+    level,
+    communityId: microgrid.community_id,
+    orgId: community?.org_id ?? null,
+  };
+}
+
+/** Fetch the edge level given an edge id. */
+async function fetchEdgeLevel(
+  supabase: SupabaseClient,
+  edgeId: string,
+  microgridId: string,
+  active: boolean,
+): Promise<HierarchyLevel | null> {
+  const { data: edge } = await supabase
+    .from("edges")
+    .select("id, name")
+    .eq("id", edgeId)
+    .eq("microgrid_id", microgridId)
+    .single<{ id: string; name: string }>();
+
+  if (!edge) return null;
+
+  // Count sibling edges for this microgrid.
+  const { data: siblings } = await supabase
+    .from("edges")
+    .select("id, name")
+    .eq("microgrid_id", microgridId)
+    .order("name")
+    .returns<SiblingRow[]>();
+
+  const siblingList = siblings ?? [];
+  const count = siblingList.length;
+
+  return {
+    kind: "Edge",
+    label: edge.name,
+    count,
+    href: `/microgrids/${microgridId}/setup/edges/${edgeId}`,
+    active,
+    siblings:
+      count > 1
+        ? siblingList
+            .filter((s) => s.id !== edgeId)
+            .map((s) => ({
+              label: s.name ?? s.id,
+              href: `/microgrids/${microgridId}/setup/edges/${s.id}`,
+            }))
+        : undefined,
+  };
+}
+
+/** Fetch the household level given a household id. */
+async function fetchHouseholdLevel(
+  supabase: SupabaseClient,
+  householdId: string,
+  microgridId: string,
+  active: boolean,
+): Promise<HierarchyLevel | null> {
+  const { data: household } = await supabase
+    .from("households")
+    .select("id, display_name")
+    .eq("id", householdId)
+    .eq("microgrid_id", microgridId)
+    .single<{ id: string; display_name: string }>();
+
+  if (!household) return null;
+
+  // Count sibling households for this microgrid.
+  const { data: siblings } = await supabase
+    .from("households")
+    .select("id, display_name")
+    .eq("microgrid_id", microgridId)
+    .order("display_name")
+    .returns<{ id: string; display_name: string }[]>();
+
+  const siblingList = siblings ?? [];
+  const count = siblingList.length;
+
+  return {
+    kind: "Household",
+    label: household.display_name,
+    count,
+    href: `/microgrids/${microgridId}/setup/households/${householdId}`,
+    active,
+    siblings:
+      count > 1
+        ? siblingList
+            .filter((s) => s.id !== householdId)
+            .map((s) => ({
+              label: s.display_name,
+              href: `/microgrids/${microgridId}/setup/households/${s.id}`,
+            }))
+        : undefined,
+  };
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/**
+ * getHierarchyLevels — return a `HierarchyLevel[]` array for HierarchyNav.
+ *
+ * Scope determines how deep the breadcrumb reaches:
+ *   - 'communities'  → [Organization] active
+ *   - 'microgrids'   → [Organization, Community (if communityId)] active
+ *   - 'microgrid'    → [Organization, Community, Microgrid] active
+ *   - 'edge'         → [Organization, Community, Microgrid, Edge] active
+ *   - 'household'    → [Organization, Community, Microgrid, Household] active
+ *
+ * Counts are RLS-scoped (Supabase honors the user's session automatically).
+ * Siblings are populated only when `count > 1`.
+ * Empty states: 0-org / 0-community / 0-microgrid cases return truncated arrays.
+ */
+export async function getHierarchyLevels(
+  supabase: SupabaseClient,
+  scope: HierarchyScope,
+): Promise<HierarchyLevel[]> {
+  switch (scope.kind) {
+    case "communities": {
+      const orgLevel = await fetchOrgLevel(supabase);
+      return [orgLevel];
+    }
+
+    case "microgrids": {
+      let orgId: string | undefined;
+      let communityLevel: HierarchyLevel | undefined;
+
+      if (scope.communityId) {
+        // Resolve community → org chain.
+        const { data: community } = await supabase
+          .from("communities")
+          .select("id, name, org_id")
+          .eq("id", scope.communityId)
+          .single<{ id: string; name: string; org_id: string }>();
+
+        orgId = community?.org_id;
+
+        const cl = await fetchCommunityLevel(supabase, scope.communityId, false);
+        if (cl) communityLevel = cl;
+      }
+
+      const orgLevel = await fetchOrgLevel(supabase, orgId);
+
+      // Empty-state: 0 orgs — return just org placeholder.
+      if (orgLevel.count === 0) return [orgLevel];
+
+      if (communityLevel) {
+        return [orgLevel, communityLevel];
+      }
+
+      return [orgLevel];
+    }
+
+    case "microgrid": {
+      const { level: microgridLevel, communityId, orgId } =
+        await fetchMicrogridLevel(supabase, scope.microgridId, true);
+
+      if (!microgridLevel || !communityId) {
+        // Microgrid not found — return org only.
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      const [orgLevel, communityLevel] = await Promise.all([
+        fetchOrgLevel(supabase, orgId ?? undefined),
+        fetchCommunityLevel(supabase, communityId, false),
+      ]);
+
+      const levels: HierarchyLevel[] = [orgLevel];
+
+      // Empty-state: 0 orgs.
+      if (orgLevel.count === 0) return levels;
+
+      if (communityLevel) levels.push(communityLevel);
+      levels.push(microgridLevel);
+
+      return levels;
+    }
+
+    case "edge": {
+      const { level: microgridLevel, communityId, orgId } =
+        await fetchMicrogridLevel(supabase, scope.microgridId, false);
+
+      if (!microgridLevel || !communityId) {
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      const [orgLevel, communityLevel, edgeLevel] = await Promise.all([
+        fetchOrgLevel(supabase, orgId ?? undefined),
+        fetchCommunityLevel(supabase, communityId, false),
+        fetchEdgeLevel(supabase, scope.edgeId, scope.microgridId, true),
+      ]);
+
+      const levels: HierarchyLevel[] = [orgLevel];
+      if (orgLevel.count === 0) return levels;
+      if (communityLevel) levels.push(communityLevel);
+      levels.push(microgridLevel);
+      if (edgeLevel) levels.push(edgeLevel);
+
+      return levels;
+    }
+
+    case "household": {
+      const { level: microgridLevel, communityId, orgId } =
+        await fetchMicrogridLevel(supabase, scope.microgridId, false);
+
+      if (!microgridLevel || !communityId) {
+        const orgLevel = await fetchOrgLevel(supabase);
+        return [orgLevel];
+      }
+
+      const [orgLevel, communityLevel, householdLevel] = await Promise.all([
+        fetchOrgLevel(supabase, orgId ?? undefined),
+        fetchCommunityLevel(supabase, communityId, false),
+        fetchHouseholdLevel(supabase, scope.householdId, scope.microgridId, true),
+      ]);
+
+      const levels: HierarchyLevel[] = [orgLevel];
+      if (orgLevel.count === 0) return levels;
+      if (communityLevel) levels.push(communityLevel);
+      levels.push(microgridLevel);
+      if (householdLevel) levels.push(householdLevel);
+
+      return levels;
+    }
+  }
+}

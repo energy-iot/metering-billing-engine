@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { HierarchyNav } from "@/components/ui/hierarchy-nav";
+import { getHierarchyLevels } from "@/lib/hierarchy";
 
 type CommunityRow = {
   id: string;
@@ -12,11 +14,14 @@ type CommunityRow = {
 export default async function CommunitiesPage() {
   const supabase = await createClient();
 
-  const { data: communities, error } = await supabase
-    .from("communities")
-    .select("id, name, address_city, address_country, microgrids(count)")
-    .order("name")
-    .returns<CommunityRow[]>();
+  const [{ data: communities, error }, levels] = await Promise.all([
+    supabase
+      .from("communities")
+      .select("id, name, address_city, address_country, microgrids(count)")
+      .order("name")
+      .returns<CommunityRow[]>(),
+    getHierarchyLevels(supabase, { kind: "communities" }),
+  ]);
 
   if (error) {
     return (
@@ -29,6 +34,7 @@ export default async function CommunitiesPage() {
   if (!communities || communities.length === 0) {
     return (
       <div>
+        <HierarchyNav levels={levels} className="mb-4" />
         <h1 className="mb-6 text-2xl font-semibold text-foreground">
           Communities
         </h1>
@@ -42,6 +48,7 @@ export default async function CommunitiesPage() {
 
   return (
     <div>
+      <HierarchyNav levels={levels} className="mb-4" />
       <h1 className="mb-6 text-2xl font-semibold text-foreground">
         Communities
       </h1>
