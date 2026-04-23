@@ -1,13 +1,13 @@
 /**
- * End-to-end smoke test for the "Get Billing URL" flow.
+ * End-to-end smoke test for the "Get Billing URL" flow (one bill = one link).
  *
- * Given a billing_period id, this:
- *   1. Loads the period + its tenant + total from Supabase (service role)
+ * Given a billing_line_items id, this:
+ *   1. Loads the line item + joined period + tenant from Supabase (service role)
  *   2. Runs the full Pesapal three-step flow (auth → IPN list → SubmitOrderRequest)
  *   3. Logs everything verbosely so failures are easy to diagnose
  *
  * Run:
- *   npx tsx --env-file=.env.local scripts/test-billing-url.ts <billing_period_id>
+ *   npx tsx --env-file=.env.local scripts/test-billing-url.ts <billing_line_item_id>
  *
  * Env vars required (put in .env.local):
  *   NEXT_PUBLIC_SUPABASE_URL
@@ -19,7 +19,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { createPaymentOrder, PesapalError } from "@/lib/pesapal";
-import { buildOrderParamsFromPeriod } from "@/lib/pesapal/build-params";
+import { buildOrderParamsFromLineItem } from "@/lib/pesapal/build-params";
 
 function requireEnv(name: string): string {
   const val = process.env[name];
@@ -31,10 +31,10 @@ function requireEnv(name: string): string {
 }
 
 async function main() {
-  const periodId = process.argv[2];
-  if (!periodId) {
+  const lineItemId = process.argv[2];
+  if (!lineItemId) {
     console.error(
-      "Usage: npx tsx --env-file=.env.local scripts/test-billing-url.ts <billing_period_id>",
+      "Usage: npx tsx --env-file=.env.local scripts/test-billing-url.ts <billing_line_item_id>",
     );
     process.exit(1);
   }
@@ -48,12 +48,12 @@ async function main() {
     auth: { persistSession: false },
   });
 
-  console.log("\n--- Resolving Supabase data for period ---");
-  console.log(`[period] id: ${periodId}`);
+  console.log("\n--- Resolving Supabase data for line item ---");
+  console.log(`[line_item] id: ${lineItemId}`);
 
   let built;
   try {
-    built = await buildOrderParamsFromPeriod(supabase as any, periodId);
+    built = await buildOrderParamsFromLineItem(supabase as any, lineItemId);
   } catch (err) {
     if (err instanceof PesapalError) {
       console.error(`FAILED (${err.code}): ${err.message}`);
@@ -64,14 +64,14 @@ async function main() {
 
   const { params, debug } = built;
   console.log(
-    `[period] range:      ${debug.dateRange}  (${debug.period.start_date} → ${debug.period.end_date})`,
+    `[period]    range:     ${debug.dateRange}  (${debug.period.start_date} → ${debug.period.end_date})`,
   );
-  console.log(`[period] microgrid:  ${debug.period.microgrid_id}`);
+  console.log(`[period]    microgrid: ${debug.period.microgrid_id}`);
+  console.log(`[line_item] total:     ${debug.lineItem.total_amount}`);
   console.log(
-    `[tenant] ${debug.tenant.id} — ${debug.tenant.name}  ` +
+    `[tenant]    ${debug.tenant.id} — ${debug.tenant.name}  ` +
       `email=${debug.tenant.email ?? "-"}  phone=${debug.tenant.phone ?? "-"}`,
   );
-  console.log(`[total]  ${debug.totalAmount}`);
   console.log(`[params] amount:         ${params.amount}`);
   console.log(`[params] description:    ${params.description}`);
   console.log(`[params] callbackUrl:    ${params.callbackUrl}`);
@@ -80,7 +80,7 @@ async function main() {
   );
 
   // Unique per run — Pesapal caches by id.
-  const orderId = `INV-${periodId}-${Date.now()}`;
+  const orderId = `INV-${lineItemId}-${Date.now()}`;
   console.log(`\n--- Submitting to Pesapal ---`);
   console.log(`[order] id: ${orderId}`);
 

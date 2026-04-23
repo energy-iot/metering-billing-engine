@@ -1,12 +1,18 @@
 /**
- * Build Pesapal createPaymentOrder params from a Supabase billing_period.
+ * Build Pesapal createPaymentOrder params from a single billing_line_items row.
  *
- * Looks up the billing_period, its line items (for total + tenant), and the
- * tenant's contact info. Used by both:
- *   - /api/billing/[periodId]/url (UI click flow)
+ * One bill → one payment link. The line item carries both the amount and the
+ * tenant to charge; the joined period supplies the date range used in the
+ * human-readable description.
+ *
+ * Used by both:
+ *   - /api/billing-line-items/[lineItemId]/url (UI click flow)
  *   - scripts/test-billing-url.ts (CLI smoke test)
  *
- * Kept separate so both paths log identical inputs/outputs.
+ * Kept separate so both paths log identical inputs/outputs and enforce the
+ * same trust boundary — all fields are derived from Supabase records the
+ * caller can access (i.e. RLS still applies when a non-service-role client is
+ * passed in).
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -21,8 +27,11 @@ type PeriodRow = {
 };
 
 type LineItemRow = {
+  id: string;
   tenant_id: string;
   total_amount: number;
+  billing_period_id: string;
+  billing_periods: PeriodRow | PeriodRow[] | null;
 };
 
 type TenantRow = {
@@ -60,95 +69,85 @@ export interface BuildParamsResult {
   params: Omit<CreatePaymentOrderParams, "id">;
   /** Raw rows used to build the params — handy for verbose CLI logging. */
   debug: {
+    lineItem: { id: string; total_amount: number };
     period: PeriodRow;
     tenant: TenantRow;
-    totalAmount: number;
     dateRange: string;
   };
 }
 
 /**
- * Given a billing_period id, produce CreatePaymentOrderParams.
- * Throws PesapalError with a helpful code on any lookup failure so callers
- * can surface a meaningful message.
+ * Given a billing_line_items id, produce CreatePaymentOrderParams for exactly
+ * that one bill. Throws PesapalError with a helpful code on any lookup failure
+ * so callers can surface a meaningful message.
+ *
+ * RLS: the caller's `supabase` client dictates access. A service-role client
+ * bypasses RLS; the SSR client in the route will only find line items the
+ * logged-in user can see.
  */
-export async function buildOrderParamsFromPeriod(
+export async function buildOrderParamsFromLineItem(
   supabase: SupabaseClient,
-  periodId: string,
+  lineItemId: string,
 ): Promise<BuildParamsResult> {
-  // 1. Fetch the billing period
-  const { data: period, error: periodErr } = await supabase
-    .from("billing_periods")
-    .select("id, microgrid_id, start_date, end_date")
-    .eq("id", periodId)
-    .single<PeriodRow>();
-  if (periodErr || !period) {
+  // 1. Fetch the line item + its period in one query. We go through the FK
+  //    join so we get the date range + microgrid lineage "for free" and
+  //    implicitly verify the line item's billing_period exists.
+  const { data: lineItem, error: lineItemErr } = await supabase
+    .from("billing_line_items")
+    .select(
+      `
+      id,
+      tenant_id,
+      total_amount,
+      billing_period_id,
+      billing_periods!inner (
+        id,
+        microgrid_id,
+        start_date,
+        end_date
+      )
+    `,
+    )
+    .eq("id", lineItemId)
+    .single<LineItemRow>();
+  if (lineItemErr || !lineItem) {
     throw new PesapalError(
-      `Billing period ${periodId} not found`,
+      `Billing line item ${lineItemId} not found`,
+      "PESAPAL_LINE_ITEM_NOT_FOUND",
+      404,
+      lineItemErr,
+    );
+  }
+
+  // PostgREST returns joined single rows as either an object or a single-
+  // element array depending on the FK cardinality it detects. Normalize.
+  const period: PeriodRow | null = Array.isArray(lineItem.billing_periods)
+    ? (lineItem.billing_periods[0] ?? null)
+    : lineItem.billing_periods;
+  if (!period) {
+    throw new PesapalError(
+      `Billing period for line item ${lineItemId} not found`,
       "PESAPAL_PERIOD_NOT_FOUND",
       404,
-      periodErr,
     );
   }
 
-  // 2. Fetch line items for this period (sum = total amount, first = tenant)
-  const { data: lineItems, error: lineItemsErr } = await supabase
-    .from("billing_line_items")
-    .select("tenant_id, total_amount")
-    .eq("billing_period_id", periodId)
-    .order("created_at", { ascending: true })
-    .returns<LineItemRow[]>();
-  if (lineItemsErr) {
-    throw new PesapalError(
-      `Failed to read line items: ${lineItemsErr.message}`,
-      "PESAPAL_LINE_ITEMS_ERROR",
-      500,
-      lineItemsErr,
-    );
-  }
-
-  const totalAmount = (lineItems ?? []).reduce(
-    (sum, row) => sum + Number(row.total_amount),
-    0,
-  );
-
-  // 3. Pick the tenant to bill:
-  //    preferred: the first tenant with a line item in this period.
-  //    fallback: the first (oldest) tenant in the microgrid.
-  let tenantId: string | undefined = lineItems?.[0]?.tenant_id;
-  if (!tenantId) {
-    const { data: fallbackTenant } = await supabase
-      .from("tenants")
-      .select("id")
-      .eq("microgrid_id", period.microgrid_id)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle<{ id: string }>();
-    tenantId = fallbackTenant?.id;
-  }
-  if (!tenantId) {
-    throw new PesapalError(
-      "No tenant found for this microgrid — add a tenant before generating a billing URL",
-      "PESAPAL_NO_TENANT",
-      400,
-    );
-  }
-
+  // 2. Fetch the tenant named on this line item.
   const { data: tenant, error: tenantErr } = await supabase
     .from("tenants")
     .select("id, name, email, phone")
-    .eq("id", tenantId)
+    .eq("id", lineItem.tenant_id)
     .single<TenantRow>();
   if (tenantErr || !tenant) {
     throw new PesapalError(
-      `Tenant ${tenantId} not found`,
+      `Tenant ${lineItem.tenant_id} not found`,
       "PESAPAL_TENANT_NOT_FOUND",
       404,
       tenantErr,
     );
   }
 
-  // 4. Pesapal requires email OR phone on billing_address.
+  // 3. Pesapal requires email OR phone on billing_address.
   if (!tenant.email && !tenant.phone) {
     throw new PesapalError(
       `Tenant "${tenant.name}" has neither email nor phone — Pesapal needs one of them`,
@@ -157,16 +156,17 @@ export async function buildOrderParamsFromPeriod(
     );
   }
 
-  // 5. Guard against $0 amounts (Pesapal rejects them) and give a clear reason.
-  if (totalAmount <= 0) {
+  // 4. Guard against $0 / negative amounts (Pesapal rejects them).
+  const totalAmount = Number(lineItem.total_amount);
+  if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
     throw new PesapalError(
-      "Period total is 0 — generate line items before creating a billing URL",
+      "Line item total is 0 — nothing to bill",
       "PESAPAL_ZERO_AMOUNT",
       400,
     );
   }
 
-  // 6. Build the params.
+  // 5. Build the params.
   const { firstName, lastName } = splitName(tenant.name);
   const dateRange = formatDateRange(period.start_date, period.end_date);
 
@@ -187,9 +187,9 @@ export async function buildOrderParamsFromPeriod(
       // currency not set here — createPaymentOrder defaults to "UGX"
     },
     debug: {
+      lineItem: { id: lineItem.id, total_amount: totalAmount },
       period,
       tenant,
-      totalAmount,
       dateRange,
     },
   };

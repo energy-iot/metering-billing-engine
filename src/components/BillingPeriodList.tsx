@@ -58,54 +58,6 @@ export function BillingPeriodList({
   const [endDate, setEndDate] = useState(defaults.end);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generatingUrlPeriodId, setGeneratingUrlPeriodId] = useState<string | null>(null);
-  const [urlFeedback, setUrlFeedback] = useState<
-    { periodId: string; kind: "success" | "error"; message: string } | null
-  >(null);
-
-  async function handleGetBillingUrl(period: BillingPeriod) {
-    setUrlFeedback(null);
-    setGeneratingUrlPeriodId(period.id);
-
-    // Other components on the page can contribute params by appending to this
-    // body. For now we send an empty body and let the server fall back to
-    // placeholders.
-    const requestBody: Record<string, unknown> = {};
-
-    try {
-      const res = await fetch(`/api/billing/${period.id}/url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      });
-      const data = await res.json();
-
-      if (!res.ok || !data.redirectUrl) {
-        const msg = data.error ?? `Request failed (${res.status})`;
-        setUrlFeedback({ periodId: period.id, kind: "error", message: msg });
-      } else {
-        await navigator.clipboard.writeText(data.redirectUrl);
-        setUrlFeedback({
-          periodId: period.id,
-          kind: "success",
-          message: "URL copied to clipboard",
-        });
-      }
-    } catch (err) {
-      setUrlFeedback({
-        periodId: period.id,
-        kind: "error",
-        message: err instanceof Error ? err.message : "Request failed",
-      });
-    } finally {
-      setGeneratingUrlPeriodId(null);
-      window.setTimeout(() => {
-        setUrlFeedback((current) =>
-          current?.periodId === period.id ? null : current,
-        );
-      }, 2500);
-    }
-  }
 
   // ConfirmDialog state for delete
   const [deletingPeriod, setDeletingPeriod] = useState<BillingPeriod | null>(null);
@@ -305,29 +257,6 @@ export function BillingPeriodList({
                     >
                       Delete
                     </button>
-                    <span className="relative inline-block">
-                      <button
-                        onClick={() => handleGetBillingUrl(period)}
-                        disabled={generatingUrlPeriodId === period.id}
-                        className="rounded-md px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {generatingUrlPeriodId === period.id
-                          ? "Getting URL..."
-                          : "Get Billing URL"}
-                      </button>
-                      {urlFeedback?.periodId === period.id && (
-                        <span
-                          role="status"
-                          className={`pointer-events-none absolute left-1/2 top-full z-10 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-xs text-white shadow-lg ${
-                            urlFeedback.kind === "success"
-                              ? "bg-gray-900"
-                              : "bg-red-600"
-                          }`}
-                        >
-                          {urlFeedback.message}
-                        </span>
-                      )}
-                    </span>
                   </td>
                 </tr>
               ))}
