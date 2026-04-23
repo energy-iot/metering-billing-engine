@@ -32,6 +32,7 @@ const MAPS: Record<Kind, StatusMap> = {
     degraded: { label: "Degraded", tone: "warn",    dot: true },
     offline:  { label: "Offline",  tone: "alert",   dot: true },
     stale:    { label: "Stale",    tone: "success", dot: true }, // pair with state="stale"
+    unknown:  { label: "Unknown",  tone: "neutral", dot: true },
   },
   // Edge data-source classification — mirrors `edge_data_source` enum in AB #50.
   // Tones: brand for the default (openems); neutral for the non-OpenEMS hedge
