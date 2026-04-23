@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { validateCurrency } from "@/lib/validation/currency";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { countEntityDescendants } from "@/lib/entity-descendants";
+import {
+  errorBody,
+  mapPgError,
+  resolveActorRole,
+  UUID_RE,
+  type EntityDeleteLogPayload,
+} from "@/lib/entity-deletion/shared";
 
 /**
  * PATCH /api/microgrids/[id] — update a microgrid (#76).
@@ -158,4 +164,112 @@ export async function PATCH(
   }
 
   return NextResponse.json({ microgrid: data }, { status: 200 });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Entity deletion (#89) — see ./delete-preview/route.ts for the preview GET.
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * DELETE /api/microgrids/[id] — delete a microgrid (#89).
+ *
+ * Authorization: super_admin OR org_manager with access to the microgrid's
+ * parent org (AC-ROUTE-2 step 2).
+ *
+ * Cascade policy (trust-preview per AC-ROUTE-6): intentional data loss
+ * warning per AC-ROUTE-8 — deleting a microgrid while a `draft` billing
+ * period is active destroys in-progress meter readings + line items that
+ * have not yet been finalized. This is acceptable: the blast-radius dialog
+ * surfaces draft vs closed counts distinctly and the operator committed
+ * to "destroy everything under {name}" by typing the name.
+ *
+ * Idempotency: first-delete wins, repeats 404 (AC-ROUTE-7).
+ *
+ * Revalidation (AC-UI-6): both `/communities/<community_id>` and
+ * `/microgrids` layouts are busted.
+ */
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+): Promise<NextResponse> {
+  const { id } = await params;
+
+  if (!UUID_RE.test(id)) {
+    return NextResponse.json(
+      errorBody("Invalid microgrid id — expected UUID."),
+      { status: 400 }
+    );
+  }
+
+  const supabase = await createClient();
+
+  if (!(await currentUserCanAccessMicrogrid(supabase, id))) {
+    return NextResponse.json(
+      errorBody("You do not have permission to delete this microgrid."),
+      { status: 403 }
+    );
+  }
+
+  const { data: microgrid, error: fetchErr } = await supabase
+    .from("microgrids")
+    .select("id, name, community_id")
+    .eq("id", id)
+    .maybeSingle<{ id: string; name: string; community_id: string }>();
+
+  if (fetchErr) {
+    const mapped = mapPgError(fetchErr, "microgrid");
+    return NextResponse.json(errorBody(mapped.message), { status: mapped.status });
+  }
+  if (!microgrid) {
+    return NextResponse.json(errorBody("Microgrid not found."), { status: 404 });
+  }
+  if (!microgrid.name || !microgrid.name.trim()) {
+    return NextResponse.json(
+      errorBody("Unnamed entity cannot be typed-to-confirm."),
+      { status: 409 }
+    );
+  }
+
+  const descendantCounts = await countEntityDescendants(supabase, "microgrid", id);
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const actorRole = await resolveActorRole(supabase);
+  if (!user || !actorRole) {
+    return NextResponse.json(
+      errorBody("You do not have permission to delete this microgrid."),
+      { status: 403 }
+    );
+  }
+
+  const { data: rowsDeleted, error: delErr } = await supabase.rpc(
+    "fn_entity_delete_microgrid",
+    { p_id: id }
+  );
+
+  if (delErr) {
+    const mapped = mapPgError(delErr, "microgrid");
+    return NextResponse.json(errorBody(mapped.message), { status: mapped.status });
+  }
+  if ((rowsDeleted ?? 0) === 0) {
+    return NextResponse.json(errorBody("Microgrid not found."), { status: 404 });
+  }
+
+  const payload: EntityDeleteLogPayload = {
+    event: "entity.delete",
+    entity_kind: "microgrid",
+    entity_id: id,
+    entity_name: microgrid.name,
+    actor_user_id: user.id,
+    actor_role: actorRole,
+    descendant_counts: descendantCounts,
+    at: new Date().toISOString(),
+  };
+  console.info(JSON.stringify(payload));
+
+  revalidatePath(`/communities/${microgrid.community_id}`, "layout");
+  revalidatePath("/microgrids", "layout");
+
+  return new NextResponse(null, { status: 204 });
 }

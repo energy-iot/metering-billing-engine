@@ -137,3 +137,76 @@ BEGIN
   RETURN OLD;
 END;
 $$;
+
+-- ── 4. RPCs that combine SET LOCAL + DELETE in a single transaction.
+--
+-- The Supabase JS client doesn't expose Postgres transactions — each
+-- `.from(...).delete()` runs in its own implicit transaction, so `SET
+-- LOCAL` would be scoped to a throwaway transaction that never sees the
+-- follow-up DELETE. These RPCs wrap both inside a single function body
+-- so the GUC + DELETE share a transaction without any round-trip.
+--
+-- SECURITY INVOKER (default) — the caller's RLS still applies; these
+-- RPCs are a thin SQL wrapper, NOT a privilege escalation. Permission
+-- checks happen in the route handler before dispatch; cross-org attempts
+-- surface as `result_rows_affected = 0` here (RLS filters) and the route
+-- converts that to 403.
+--
+-- Return type is the number of rows deleted. Routes compare this against
+-- 1 to distinguish "deleted" from "RLS-filtered" / "already gone."
+
+CREATE OR REPLACE FUNCTION fn_entity_delete_org(p_id UUID)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  SET LOCAL app.entity_cascade_delete = 'on';
+  DELETE FROM organizations WHERE id = p_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION fn_entity_delete_community(p_id UUID)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  SET LOCAL app.entity_cascade_delete = 'on';
+  DELETE FROM communities WHERE id = p_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION fn_entity_delete_microgrid(p_id UUID)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  SET LOCAL app.entity_cascade_delete = 'on';
+  DELETE FROM microgrids WHERE id = p_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION fn_entity_delete_edge(p_id UUID)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  SET LOCAL app.entity_cascade_delete = 'on';
+  DELETE FROM edges WHERE id = p_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;

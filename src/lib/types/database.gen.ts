@@ -723,6 +723,10 @@ export type Database = {
         }
         Returns: string
       }
+      fn_entity_delete_community: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_edge: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_microgrid: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_org: { Args: { p_id: string }; Returns: number }
       fn_finalize_user_invitation: {
         Args: {
           p_first_name: string
