@@ -39,6 +39,16 @@ vi.mock("./edges-crud-shell", () => ({
   EdgesCRUDShell: () => null,
 }));
 
+// Stub EdgeRowActions — client component that uses useRouter + Radix DropdownMenu.
+vi.mock("./edge-row-actions", () => ({
+  EdgeRowActions: () => null,
+}));
+
+// Stub currentUserCanAccessMicrogrid — always returns true for smoke tests.
+vi.mock("@/lib/auth/access", () => ({
+  currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
+}));
+
 import SetupEdgesPage from "./page";
 
 function buildEdgesQuery(data: unknown) {
