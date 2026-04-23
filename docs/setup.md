@@ -171,6 +171,53 @@ supabase stop           # Stop all local Supabase containers
 supabase start          # Restart containers
 ```
 
+## RLS Tests (local Supabase only)
+
+The RLS test suite (`src/lib/supabase/__tests__/rls.test.ts`) verifies that Row Level Security
+policies correctly constrain cross-tenant access. These tests **require a running local Supabase CLI
+instance** — they never run against cloud Supabase to prevent polluting shared data.
+
+### Running RLS tests
+
+```bash
+# 1. Start local Supabase (if not already running)
+supabase start
+
+# 2. Re-apply migrations + seed (only needed once, or after schema changes)
+supabase db reset
+
+# 3. Get the JWT secret (needed to mint impersonation JWTs)
+supabase status | grep "JWT secret"
+# Output: JWT secret: super-secret-jwt-token-with-at-least-32-characters-long
+
+# 4. Add SUPABASE_JWT_SECRET to .env.local
+echo 'SUPABASE_JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long' >> .env.local
+
+# 5. Run only the RLS tests
+npm test -- rls.test.ts
+
+# 6. Run the full test suite (includes RLS)
+npm test
+```
+
+### Bypassing RLS tests
+
+If you don't have local Supabase running (e.g. CI without Docker), set `SKIP_RLS_TESTS=1`:
+
+```bash
+SKIP_RLS_TESTS=1 npm test
+```
+
+Missing `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_JWT_SECRET` without `SKIP_RLS_TESTS=1` will **fail
+loudly** with an actionable error — this is intentional so CI catches missing config rather than
+silently skipping coverage.
+
+### How JWT impersonation works
+
+The harness mints JWTs locally with `jose` and `SUPABASE_JWT_SECRET`. Each JWT carries `sub=<userId>`
+and `aud=authenticated`, which Supabase PostgREST uses to derive `auth.uid()` when evaluating RLS
+policies. No password round-trips to GoTrue — the impersonation is purely local and fast.
+
 ## Full-Stack Setup (with OpenEMS)
 
 To test meter readings and billing generation, you need the OpenEMS stack running alongside MBE.

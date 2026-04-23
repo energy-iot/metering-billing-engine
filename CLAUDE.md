@@ -42,9 +42,25 @@ npm run lint
 # Tests
 npm test
 
+# Run only RLS tests
+npm test -- rls.test.ts
+
 # Build (standalone for Docker)
 npm run build
 ```
+
+### Running RLS Tests
+
+RLS tests (`src/lib/supabase/__tests__/rls.test.ts`) require:
+
+1. **Local Supabase CLI running** — `supabase start` (do NOT run against cloud)
+2. **`SUPABASE_JWT_SECRET` in `.env.local`** — retrieve with `supabase status | grep 'JWT secret'`
+3. **Seed loaded** — run `supabase db reset` once after `supabase start`
+
+Set `SKIP_RLS_TESTS=1` to bypass RLS tests when local Supabase is not available (e.g. CI without Docker).
+Missing env vars without `SKIP_RLS_TESTS=1` fail loudly — this is intentional.
+
+See `docs/setup.md § "RLS Tests"` for full instructions.
 
 ## Stack
 
