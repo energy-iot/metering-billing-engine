@@ -21,8 +21,22 @@ export default defineConfig({
         extends: true,
         test: {
           name: "lib",
+          // Exclude RLS tests from the general lib project — they run in their own project.
           include: ["src/lib/**/*.test.{ts,tsx}"],
+          exclude: ["src/lib/supabase/__tests__/rls.test.ts"],
           environment: "node",
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "rls",
+          // RLS tests hit a live local Supabase — must be single-threaded to avoid
+          // fixture-state collisions across test files sharing the same DB.
+          // fileParallelism: false ensures tests within this project run sequentially.
+          include: ["src/lib/supabase/__tests__/rls.test.ts"],
+          environment: "node",
+          fileParallelism: false,
         },
       },
     ],
