@@ -1,55 +1,45 @@
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserIsSuperAdmin } from "@/lib/auth/access";
+import { SidebarNavLinks } from "./sidebar-nav-links";
+import type { SidebarEntry } from "./sidebar-nav-links";
 
 /**
- * SidebarNav — dashboard sidebar navigation (#76).
+ * SidebarNav — dashboard sidebar navigation (#76, #97).
  *
  * Server component: resolves the user's super_admin status via the auth
- * access module, then renders the "Organizations" entry only for super_admin.
+ * access module, builds a pre-filtered entries array, and delegates
+ * rendering (including active-state via usePathname) to SidebarNavLinks.
  *
- * Entries are server-rendered — there is no client-side role check that a
- * tampered browser could bypass. The route's server component is the
- * authoritative visibility gate.
+ * The Organizations entry is omitted from the entries array when the user is
+ * not a super_admin — role gating stays entirely server-side so a tampered
+ * client cannot reveal hidden links by inspecting the DOM.
+ *
+ * Settings links to /settings/profile (lands the user on a real page) but
+ * uses matchPrefix="/settings" so any /settings/* route keeps it highlighted.
  */
 export async function SidebarNav() {
   const supabase = await createClient();
   const isSuperAdmin = await currentUserIsSuperAdmin(supabase);
 
-  return (
-    <nav className="flex-1 space-y-1 px-3 py-4">
-      <Link
-        href="/"
-        className="flex items-center rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-foreground"
-      >
-        Dashboard
-      </Link>
-      {isSuperAdmin && (
-        <Link
-          href="/organizations"
-          className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-        >
-          Organizations
-        </Link>
-      )}
-      <Link
-        href="/communities"
-        className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      >
-        Communities
-      </Link>
-      <Link
-        href="/microgrids"
-        className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      >
-        Microgrids
-      </Link>
-      <Link
-        href="/settings/profile"
-        className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      >
-        Settings
-      </Link>
-    </nav>
-  );
+  const entries: SidebarEntry[] = [
+    { label: "Dashboard", href: "/", matchPrefix: "/", exact: true },
+    ...(isSuperAdmin
+      ? [
+          {
+            label: "Organizations",
+            href: "/organizations",
+            matchPrefix: "/organizations",
+          } satisfies SidebarEntry,
+        ]
+      : []),
+    { label: "Communities", href: "/communities", matchPrefix: "/communities" },
+    { label: "Microgrids", href: "/microgrids", matchPrefix: "/microgrids" },
+    {
+      label: "Settings",
+      href: "/settings/profile",
+      matchPrefix: "/settings",
+    },
+  ];
+
+  return <SidebarNavLinks entries={entries} />;
 }
