@@ -2,33 +2,68 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useRef, type KeyboardEvent } from "react";
+import { StatusChip } from "@/components/ui/status-chip";
+import type { OpenemsBackendHealth } from "./openems-backend/health";
 
-// Setup sub-nav (D2 / #53).
+// Setup sub-nav (D2 / #53, extended #102).
 //
 // Visual language per designer mock `mgm-ia-v1.html` § .setup-subnav:
 //   pill-style container (bg-muted), each tab has its own rounded surface,
-//   active tab raises onto a bg-card surface. This is visually DEMOTED
-//   compared to the top Dashboard/Billing/Setup tabs so it signals
-//   "sub-area, not a primary destination".
+//   active tab raises onto a bg-card surface.
 //
 // A11y contract:
 //   - The nav is `role="tablist"` with `aria-label`.
-//   - Each link is `role="tab"` with `aria-selected` + `aria-controls` pointing at
-//     the content region id (the `children` container in the parent layout —
-//     ties the tab to a panel landmark via its known id).
-//   - ArrowLeft / ArrowRight cycle between tabs and move focus + navigate
-//     (focus mirrors active selection — no parking separate focused tab).
+//   - Each link is `role="tab"` with `aria-selected` + `aria-controls` pointing
+//     at the content region id.
+//   - ArrowLeft / ArrowRight cycle between tabs and move focus + navigate.
 //   - Home / End jump to first / last tab.
+//   - The OpenEMS Backend tab chip is rendered INSIDE the single <a> element
+//     (not a separate focusable surface) so we never nest interactive
+//     descendants. Radix Tooltip on the chip takes tabindex=0 on an inner
+//     span — that's fine because the anchor swallows clicks anyway.
 
 type SubTab = { label: string; segment: string };
 
 const TABS: SubTab[] = [
-  { label: "Edges & Devices", segment: "edges" },
-  { label: "Households",      segment: "households" },
-  { label: "Rate Schedule",   segment: "rates" },
+  { label: "Edges & Devices",  segment: "edges" },
+  { label: "Households",       segment: "households" },
+  { label: "OpenEMS Backend",  segment: "openems-backend" },
+  { label: "Rate Schedule",    segment: "rates" },
 ];
 
-export function SetupSubNav({ microgridId }: { microgridId: string }) {
+export type OpenemsBackendChipData = {
+  status: OpenemsBackendHealth;
+  lastDiscoverAt: string | null;
+  lastDiscoverError: string | null;
+  relativeTime: string | null;
+};
+
+function tooltipFor(data: OpenemsBackendChipData): string | null {
+  switch (data.status) {
+    case "healthy":
+      return data.relativeTime
+        ? `Last successful discovery: ${data.relativeTime}`
+        : "Connection healthy";
+    case "stale":
+      return data.relativeTime
+        ? `Last successful discovery: ${data.relativeTime}. Run 'Test again' to verify.`
+        : "Run 'Test again' to verify the connection.";
+    case "failing":
+      return data.lastDiscoverError
+        ? `Discovery failed: ${data.lastDiscoverError}. Reconfigure or test again.`
+        : "Discovery failed. Reconfigure or test again.";
+    case "not_configured":
+      return "No OpenEMS backend connected yet.";
+  }
+}
+
+export function SetupSubNav({
+  microgridId,
+  openemsBackendHealth,
+}: {
+  microgridId: string;
+  openemsBackendHealth?: OpenemsBackendChipData;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const base = `/microgrids/${microgridId}/setup`;
@@ -81,6 +116,8 @@ export function SetupSubNav({ microgridId }: { microgridId: string }) {
       {TABS.map((tab, i) => {
         const isActive = i === activeIndex;
         const href = `${base}/${tab.segment}`;
+        const chipData =
+          tab.segment === "openems-backend" ? openemsBackendHealth : undefined;
         return (
           <a
             key={tab.segment}
@@ -92,13 +129,21 @@ export function SetupSubNav({ microgridId }: { microgridId: string }) {
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               isActive
                 ? "bg-card text-foreground font-semibold shadow-elev-1"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab.label}
+            <span>{tab.label}</span>
+            {chipData && (
+              <StatusChip
+                kind="openemsBackendHealth"
+                status={chipData.status}
+                size="sm"
+                tooltip={tooltipFor(chipData)}
+              />
+            )}
           </a>
         );
       })}
