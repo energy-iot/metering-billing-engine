@@ -164,12 +164,11 @@ export async function PUT(
   }
 
   if (closedCount > 0) {
-    // Branch (b) — type-to-confirm. Proceed only if confirmed_name matches.
-    const confirmed =
-      typeof body.confirmed_name === "string" &&
-      body.confirmed_name.trim() === mgRow.name.trim();
-
-    if (!confirmed) {
+    // Branch (b) — type-to-confirm gate (two sub-cases).
+    //   • confirmed_name absent (or not a string) → 409 prompting the user to type.
+    //   • confirmed_name present but wrong → 400 explicit mismatch error.
+    //   • confirmed_name matches → fall through to save + discover.
+    if (typeof body.confirmed_name !== "string") {
       return NextResponse.json(
         {
           error: `This microgrid has ${closedCount} closed billing period${closedCount === 1 ? "" : "s"}. Changing the OpenEMS backend may affect historical invoice verification if edge IDs differ after rediscovery. Type the microgrid name to confirm.`,
@@ -181,12 +180,7 @@ export async function PUT(
       );
     }
 
-    if (
-      typeof body.confirmed_name === "string" &&
-      body.confirmed_name.trim() !== mgRow.name.trim()
-    ) {
-      // Defensive: above branch catches mismatch, but a race could send
-      // confirmed_name through a stale UI. Return 400 on a real mismatch.
+    if (body.confirmed_name.trim() !== mgRow.name.trim()) {
       return NextResponse.json(
         { error: "Confirmed name does not match the microgrid name." },
         { status: 400 }

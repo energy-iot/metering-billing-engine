@@ -267,6 +267,24 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(json.edges).toHaveLength(1);
   });
 
+  it("Branch (b) retry with mismatched confirmed_name → 400 with mismatch error", async () => {
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+    registerFrom(billingPeriodsHandler([{ id: "bp-1", status: "closed" }]));
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        type: "direct_url",
+        backendUrl: "http://localhost:8075",
+        confirmed_name: "WrongName",
+      }),
+      { params: Promise.resolve({ id: MG_ID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("does not match");
+  });
+
   it("Branch (c): no periods → save + discover succeeds (direct_url)", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(billingPeriodsHandler([]));
