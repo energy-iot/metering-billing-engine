@@ -898,6 +898,69 @@ describe("RLS: user_roles", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+// UX4a (#76) — write-path denial cases for entity CRUD endpoints
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Each test impersonates a user via the Supabase JS client (RLS applies) and
+// attempts the write that the corresponding /api/* endpoint would perform.
+// The API layer adds a role check + RLS backstop; these tests verify the
+// backstop is intact at the DB level.
+
+describe("UX4a (#76) entity CRUD write-path denials", () => {
+  // (a) non-super_admin POST to /api/organizations → RLS blocks INSERT
+  it("User A (org_manager) cannot INSERT a brand-new organization", async () => {
+    if (skipIfRequested()) return;
+    await expectWriteDenied(userA.client, "organizations", {
+      id: "cccccccc-test-0076-0000-000000000001",
+      name: "Cross-org Org via UX4a",
+    });
+  });
+
+  it("User C (no role) cannot INSERT an organization", async () => {
+    if (skipIfRequested()) return;
+    await expectWriteDenied(userC.client, "organizations", {
+      id: "cccccccc-test-0076-0000-000000000002",
+      name: "No-role Org",
+    });
+  });
+
+  // (b) org_manager in Org A posts /api/communities with org_id = Org B → denied
+  it("User A (org_manager of Org A) cannot INSERT a community under Org B", async () => {
+    if (skipIfRequested()) return;
+    await expectWriteDenied(userA.client, "communities", {
+      org_id: FIXTURE.orgB,
+      name: "Cross-org community via UX4a",
+    });
+  });
+
+  // (c) org_manager POST /api/microgrids with community_id outside their org → denied
+  it("User A (org_manager of Org A) cannot INSERT a microgrid under Community B", async () => {
+    if (skipIfRequested()) return;
+    await expectWriteDenied(userA.client, "microgrids", {
+      community_id: FIXTURE.communityB,
+      name: "Cross-org microgrid via UX4a",
+      currency: "UGX",
+    });
+  });
+
+  // Sanity: super_admin CAN insert through the same table
+  it("User D (super_admin) CAN INSERT a temporary organization", async () => {
+    if (skipIfRequested()) return;
+    const tmpId = "cccccccc-test-0076-0000-000000000003";
+    const { data, error } = await userD.client
+      .from("organizations")
+      .insert({ id: tmpId, name: "UX4a super_admin sanity" })
+      .select("id");
+    expect(error).toBeNull();
+    expect(data?.[0]?.id).toBe(tmpId);
+
+    // Cleanup
+    const svc = await serviceClient();
+    await svc.from("organizations").delete().eq("id", tmpId);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 // 11. Helper function contract tests
 // ══════════════════════════════════════════════════════════════════════════
 

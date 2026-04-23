@@ -53,6 +53,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Next.js provides `server-only` as a compiler-level virtual module.
+      // In vitest (no Next compiler) we alias to an empty stub so modules
+      // guarded by `import 'server-only'` can be exercised in tests.
+      "server-only": path.resolve(__dirname, "./src/test/server-only-stub.ts"),
     },
   },
 });
