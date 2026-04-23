@@ -80,16 +80,19 @@ beforeAll(async () => {
     }),
   ]);
 
-  // Seed user_profiles rows via service role (RLS INSERT is WITH CHECK
-  // FALSE — direct INSERT bypasses the RLS since service role skips
-  // policy evaluation entirely; this is the only seed path for tests).
+  // Seed user_profiles rows via service role. Migration 00017 adds an AFTER
+  // INSERT trigger on auth.users that auto-creates an empty profile row, so
+  // the rows already exist by the time we get here. Use upsert (ON CONFLICT
+  // DO UPDATE) to overwrite the empty trigger-created rows with test values.
   const users = [A, B, C, D];
   const firstNames = ["Alice", "Bob", "Cara", "Dana"];
   const rows = users.map((u, i) => ({
     user_id: u.userId,
     first_name: firstNames[i],
   }));
-  const { error: pErr } = await svc.from("user_profiles").insert(rows);
+  const { error: pErr } = await svc
+    .from("user_profiles")
+    .upsert(rows, { onConflict: "user_id" });
   if (pErr) throw new Error(`[fixture] user_profiles: ${pErr.message}`);
 }, 60_000);
 
