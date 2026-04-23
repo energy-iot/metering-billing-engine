@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * POST /api/devices
  *
@@ -54,6 +57,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (typeof edgeId !== "string" || !edgeId.trim()) {
     return NextResponse.json(
       { error: "edgeId must be a non-empty string" },
+      { status: 400 }
+    );
+  }
+
+  if (!UUID_RE.test(edgeId)) {
+    return NextResponse.json(
+      { error: "Invalid edgeId — expected UUID." },
       { status: 400 }
     );
   }
