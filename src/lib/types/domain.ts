@@ -37,6 +37,16 @@ export type BillingLineItem = Omit<
   "tier_breakdown"
 > & { tier_breakdown: TierBreakdown[] };
 export type UserRoleRecord = Database["public"]["Tables"]["user_roles"]["Row"];
+export type UserProfile = Database["public"]["Tables"]["user_profiles"]["Row"];
+
+/**
+ * user_directory row — the joined VIEW over auth.users × user_profiles ×
+ * user_roles. Defined in migration 00013 with security_invoker = true.
+ * Column nullability mirrors the LEFT JOINs: a user with no profile or
+ * no role row surfaces with NULL columns.
+ */
+export type UserDirectoryRow =
+  Database["public"]["Views"]["user_directory"]["Row"];
 
 // ── Views ─────────────────────────────────────────────────────────────────────
 

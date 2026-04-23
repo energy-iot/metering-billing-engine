@@ -17,6 +17,20 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  // UX5 (#79) — gate revoked users. A logged-in auth.users row with no
+  // user_roles rows has had their access revoked (or was never granted).
+  // Send them to /no-access (outside this route group) so they get a
+  // clear message + logout action instead of a broken sidebar. The
+  // user_roles "Users can view their own roles" SELECT policy lets the
+  // caller see their own rows, so this COUNT is accurate.
+  const { count: roleCount } = await supabase
+    .from("user_roles")
+    .select("id", { head: true, count: "exact" })
+    .eq("user_id", user.id);
+  if ((roleCount ?? 0) === 0) {
+    redirect("/no-access");
+  }
+
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
