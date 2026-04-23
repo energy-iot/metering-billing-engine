@@ -39,6 +39,15 @@ export default defineConfig({
           fileParallelism: false,
         },
       },
+      {
+        extends: true,
+        test: {
+          name: "app",
+          // Server-component tests (node environment) co-located with page files.
+          include: ["src/app/**/*.test.{ts,tsx}"],
+          environment: "node",
+        },
+      },
     ],
   },
   resolve: {
