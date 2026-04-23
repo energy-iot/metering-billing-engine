@@ -1,4 +1,4 @@
-import type { TierConfig, TierBreakdown } from "@/lib/types/database";
+import type { TierConfig, TierBreakdown } from "@/lib/types/domain";
 
 export type BillingCalculation = {
   tierBreakdown: TierBreakdown[];

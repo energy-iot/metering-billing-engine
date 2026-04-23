@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import type { RateSchedule } from "@/lib/types/database";
+import type { RateSchedule } from "@/lib/types/domain";
 import { TierEditor } from "@/components/TierEditor";
 
 export default async function RatesPage({

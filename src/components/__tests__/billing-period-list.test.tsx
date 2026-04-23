@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { LocaleProvider } from "../format/locale-context";
-import type { BillingPeriod } from "@/lib/types/database";
+import type { BillingPeriod } from "@/lib/types/domain";
 
 // Mock next/navigation BEFORE any component imports that use it
 const pushSpy = vi.fn();

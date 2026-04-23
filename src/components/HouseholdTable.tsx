@@ -3,17 +3,20 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import type { Meter, Tenant } from "@/lib/types/database";
+import type { Device, Household } from "@/lib/types/domain";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
-export function TenantTable({
+export function HouseholdTable({
   microgridId,
-  tenants,
-  meters,
+  households,
+  devices,
+  primaryDeviceAssignments,
 }: {
   microgridId: string;
-  tenants: Tenant[];
-  meters: Meter[];
+  households: Household[];
+  devices: Device[];
+  /** Map of household_id → device_id for primary_consumption_meter rows */
+  primaryDeviceAssignments: Record<string, string>;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -35,29 +38,18 @@ export function TenantTable({
   const [editSaving, setEditSaving] = useState(false);
 
   // Delete dialog state
-  const [tenantToDelete, setTenantToDelete] = useState<Tenant | null>(null);
+  const [householdToDelete, setHouseholdToDelete] = useState<Household | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
-  // Compute which meters are shared (assigned to multiple tenants)
-  const meterAssignmentCounts = new Map<string, number>();
-  for (const tenant of tenants) {
-    if (tenant.meter_id) {
-      meterAssignmentCounts.set(
-        tenant.meter_id,
-        (meterAssignmentCounts.get(tenant.meter_id) ?? 0) + 1
-      );
-    }
-  }
+  // Optimistic device assignment overlay (household_id → device_id)
+  const [localAssignments, setLocalAssignments] = useState<Record<string, string>>(
+    primaryDeviceAssignments
+  );
 
-  function isSharedMeter(meterId: string | null): boolean {
-    if (!meterId) return false;
-    return (meterAssignmentCounts.get(meterId) ?? 0) > 1;
-  }
-
-  function getMeterName(meterId: string | null): string {
-    if (!meterId) return "Unassigned";
-    const meter = meters.find((m) => m.id === meterId);
-    return meter?.name ?? "Unknown meter";
+  function getDeviceName(deviceId: string | undefined): string {
+    if (!deviceId) return "Unassigned";
+    const device = devices.find((d) => d.id === deviceId);
+    return device?.name ?? "Unknown device";
   }
 
   async function handleAdd(e: React.FormEvent) {
@@ -71,12 +63,11 @@ export function TenantTable({
 
     setAddSaving(true);
 
-    const { error: insertError } = await supabase.from("tenants").insert({
+    const { error: insertError } = await supabase.from("households").insert({
       microgrid_id: microgridId,
-      name: newName.trim(),
-      phone: newPhone.trim() || null,
-      email: newEmail.trim() || null,
-      meter_id: null,
+      display_name: newName.trim(),
+      primary_phone: newPhone.trim() || null,
+      primary_email: newEmail.trim() || null,
     });
 
     if (insertError) {
@@ -93,18 +84,18 @@ export function TenantTable({
     router.refresh();
   }
 
-  function startEdit(tenant: Tenant) {
-    setEditingId(tenant.id);
-    setEditName(tenant.name);
-    setEditPhone(tenant.phone ?? "");
-    setEditEmail(tenant.email ?? "");
+  function startEdit(household: Household) {
+    setEditingId(household.id);
+    setEditName(household.display_name);
+    setEditPhone(household.primary_phone ?? "");
+    setEditEmail(household.primary_email ?? "");
   }
 
   function cancelEdit() {
     setEditingId(null);
   }
 
-  async function handleEditSave(tenantId: string) {
+  async function handleEditSave(householdId: string) {
     setError(null);
 
     if (!editName.trim()) {
@@ -115,13 +106,13 @@ export function TenantTable({
     setEditSaving(true);
 
     const { error: updateError } = await supabase
-      .from("tenants")
+      .from("households")
       .update({
-        name: editName.trim(),
-        phone: editPhone.trim() || null,
-        email: editEmail.trim() || null,
+        display_name: editName.trim(),
+        primary_phone: editPhone.trim() || null,
+        primary_email: editEmail.trim() || null,
       })
-      .eq("id", tenantId);
+      .eq("id", householdId);
 
     if (updateError) {
       setError(updateError.message);
@@ -134,17 +125,17 @@ export function TenantTable({
     router.refresh();
   }
 
-  function openDeleteDialog(tenant: Tenant) {
-    setTenantToDelete(tenant);
+  function openDeleteDialog(household: Household) {
+    setHouseholdToDelete(household);
     setDeleteDialogOpen(true);
   }
 
   async function handleDelete() {
-    if (!tenantToDelete) return;
+    if (!householdToDelete) return;
     const { error: deleteError } = await supabase
-      .from("tenants")
+      .from("households")
       .delete()
-      .eq("id", tenantToDelete.id);
+      .eq("id", householdToDelete.id);
 
     if (deleteError) {
       throw new Error(deleteError.message);
@@ -153,17 +144,54 @@ export function TenantTable({
     router.refresh();
   }
 
-  async function handleMeterChange(tenantId: string, meterId: string) {
+  /**
+   * Assign a primary-consumption-meter device to a household via the
+   * household_devices join table (delete + insert pattern).
+   *
+   * The partial unique index (household_one_primary_consumption_meter) ensures
+   * at most one primary_consumption_meter per household. We delete any existing
+   * row for this household+role pair, then insert the new assignment.
+   */
+  async function handleDeviceChange(householdId: string, deviceId: string) {
     setError(null);
 
-    const { error: updateError } = await supabase
-      .from("tenants")
-      .update({ meter_id: meterId || null })
-      .eq("id", tenantId);
+    // Optimistic update
+    setLocalAssignments((prev) => {
+      const next = { ...prev };
+      if (deviceId) {
+        next[householdId] = deviceId;
+      } else {
+        delete next[householdId];
+      }
+      return next;
+    });
 
-    if (updateError) {
-      setError(updateError.message);
+    // Remove existing primary_consumption_meter row for this household
+    const { error: deleteError } = await supabase
+      .from("household_devices")
+      .delete()
+      .eq("household_id", householdId)
+      .eq("role", "primary_consumption_meter");
+
+    if (deleteError) {
+      setError(deleteError.message);
       return;
+    }
+
+    if (deviceId) {
+      // Insert new assignment
+      const { error: insertError } = await supabase
+        .from("household_devices")
+        .insert({
+          household_id: householdId,
+          device_id: deviceId,
+          role: "primary_consumption_meter",
+        });
+
+      if (insertError) {
+        setError(insertError.message);
+        return;
+      }
     }
 
     router.refresh();
@@ -171,14 +199,14 @@ export function TenantTable({
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
-      {/* Delete Tenant ConfirmDialog */}
+      {/* Delete Household ConfirmDialog */}
       <ConfirmDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        title="Delete tenant?"
+        title="Delete household?"
         description={
-          tenantToDelete
-            ? `Are you sure you want to delete "${tenantToDelete.name}"?`
+          householdToDelete
+            ? `Are you sure you want to delete "${householdToDelete.display_name}"?`
             : undefined
         }
         confirmLabel="Delete"
@@ -187,12 +215,12 @@ export function TenantTable({
       />
 
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-foreground">Tenants</h2>
+        <h2 className="text-lg font-semibold text-foreground">Households</h2>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
           className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
         >
-          {showAddForm ? "Cancel" : "Add Tenant"}
+          {showAddForm ? "Cancel" : "Add Household"}
         </button>
       </div>
 
@@ -217,7 +245,7 @@ export function TenantTable({
               onChange={(e) => setNewName(e.target.value)}
               required
               className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
-              placeholder="Tenant name"
+              placeholder="Household name"
             />
           </div>
           <div>
@@ -249,14 +277,14 @@ export function TenantTable({
             disabled={addSaving}
             className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {addSaving ? "Adding..." : "Add Tenant"}
+            {addSaving ? "Adding..." : "Add Household"}
           </button>
         </form>
       )}
 
-      {tenants.length === 0 ? (
+      {households.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No tenants yet. Add a tenant to get started.
+          No households yet. Add a household to get started.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -267,15 +295,15 @@ export function TenantTable({
                 <th className="pb-2 pr-4 font-medium text-muted-foreground">Phone</th>
                 <th className="pb-2 pr-4 font-medium text-muted-foreground">Email</th>
                 <th className="pb-2 pr-4 font-medium text-muted-foreground">
-                  Assigned Meter
+                  Billing Device
                 </th>
                 <th className="pb-2 font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {tenants.map((tenant) => (
-                <tr key={tenant.id} className="border-b border-border">
-                  {editingId === tenant.id ? (
+              {households.map((household) => (
+                <tr key={household.id} className="border-b border-border">
+                  {editingId === household.id ? (
                     <>
                       <td className="py-3 pr-4">
                         <input
@@ -304,13 +332,13 @@ export function TenantTable({
                       </td>
                       <td className="py-3 pr-4">
                         <span className="text-muted-foreground">
-                          {getMeterName(tenant.meter_id)}
+                          {getDeviceName(localAssignments[household.id])}
                         </span>
                       </td>
                       <td className="py-3">
                         <div className="flex gap-2">
                           <button
-                            onClick={() => handleEditSave(tenant.id)}
+                            onClick={() => handleEditSave(household.id)}
                             disabled={editSaving}
                             className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent disabled:opacity-50"
                           >
@@ -328,50 +356,45 @@ export function TenantTable({
                   ) : (
                     <>
                       <td className="py-3 pr-4 text-foreground">
-                        {tenant.name}
+                        {household.display_name}
                       </td>
                       <td className="py-3 pr-4 text-muted-foreground">
-                        {tenant.phone ?? "-"}
+                        {household.primary_phone ?? "-"}
                       </td>
                       <td className="py-3 pr-4 text-muted-foreground">
-                        {tenant.email ?? "-"}
+                        {household.primary_email ?? "-"}
                       </td>
                       <td className="py-3 pr-4">
                         <div>
                           <select
-                            value={tenant.meter_id ?? ""}
+                            value={localAssignments[household.id] ?? ""}
                             onChange={(e) =>
-                              handleMeterChange(tenant.id, e.target.value)
+                              handleDeviceChange(household.id, e.target.value)
                             }
                             className="rounded-md border border-border px-2 py-1 text-sm text-foreground focus:outline-none"
                           >
                             <option value="">Unassigned</option>
-                            {meters.map((meter) => (
-                              <option key={meter.id} value={meter.id}>
-                                {meter.meter_type ? `[${meter.meter_type}] ` : ""}{meter.name}
+                            {devices.map((device) => (
+                              <option key={device.id} value={device.id}>
+                                [{device.device_type}] {device.name}
                               </option>
                             ))}
                           </select>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Assign a CONSUMPTION meter to bill this tenant for their electricity usage.
+                            Assign a consumption_meter device to bill this household.
                           </p>
-                          {isSharedMeter(tenant.meter_id) && (
-                            <p className="mt-1 text-xs text-warning-fg">
-                              Shared with another tenant
-                            </p>
-                          )}
                         </div>
                       </td>
                       <td className="py-3">
                         <div className="flex gap-2">
                           <button
-                            onClick={() => startEdit(tenant)}
+                            onClick={() => startEdit(household)}
                             className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
                           >
                             Edit
                           </button>
                           <button
-                            onClick={() => openDeleteDialog(tenant)}
+                            onClick={() => openDeleteDialog(household)}
                             className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted"
                           >
                             Delete

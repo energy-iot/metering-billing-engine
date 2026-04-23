@@ -3,10 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import type {
   BillingLineItem,
   BillingPeriod,
+  Household,
   Microgrid,
   RateSchedule,
-  Tenant,
-} from "@/lib/types/database";
+} from "@/lib/types/domain";
 import { BillingTable } from "@/components/BillingTable";
 
 export default async function BillingPeriodDetailPage({
@@ -20,7 +20,7 @@ export default async function BillingPeriodDetailPage({
   const [
     { data: period, error: periodError },
     { data: lineItems, error: lineItemsError },
-    { data: tenants, error: tenantsError },
+    { data: households, error: householdsError },
     { data: schedule, error: scheduleError },
     { data: microgrid, error: microgridError },
   ] = await Promise.all([
@@ -37,11 +37,11 @@ export default async function BillingPeriodDetailPage({
       .eq("billing_period_id", periodId)
       .returns<BillingLineItem[]>(),
     supabase
-      .from("tenants")
+      .from("households")
       .select("*")
       .eq("microgrid_id", id)
-      .order("name")
-      .returns<Tenant[]>(),
+      .order("display_name")
+      .returns<Household[]>(),
     supabase
       .from("rate_schedules")
       .select("*")
@@ -70,10 +70,10 @@ export default async function BillingPeriodDetailPage({
     );
   }
 
-  if (tenantsError) {
+  if (householdsError) {
     return (
       <div className="rounded-md bg-destructive-muted p-4 text-sm text-destructive-fg">
-        Error loading tenants: {tenantsError.message}
+        Error loading households: {householdsError.message}
       </div>
     );
   }
@@ -99,8 +99,8 @@ export default async function BillingPeriodDetailPage({
       microgridId={id}
       period={period}
       lineItems={lineItems ?? []}
-      tenants={tenants ?? []}
-      tiers={schedule?.tiers ?? []}
+      households={households ?? []}
+      tiers={(schedule?.tiers ?? []) as { label: string; min_kwh: number; max_kwh: number | null; rate_per_kwh: number }[]}
       currency={microgrid.currency}
     />
   );

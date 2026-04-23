@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type {
-  DiscoveredMeter,
+  DiscoveredDevice,
   EdgeDiscoveryResult,
-  MeterType,
 } from "@/lib/openems/types";
 
 const METER_NATURE_ID = "io.openems.edge.meter.api.ElectricityMeter";
 
-function classifyMeterType(factoryId: string): MeterType {
+function classifyDeviceType(factoryId: string): string {
   if (/GridMeter|\.Grid\./i.test(factoryId)) return "GRID";
   if (/ProductionMeter|\.Production\./i.test(factoryId)) return "PRODUCTION";
   if (/NRCMeter|\.Nrc\.|ConsumptionMeter/i.test(factoryId))
@@ -52,7 +51,7 @@ export async function GET(request: NextRequest) {
 
         try {
           const config = await client.getEdgeConfig(edgeId);
-          const meters: DiscoveredMeter[] = [];
+          const devices: DiscoveredDevice[] = [];
 
           for (const [componentId, component] of Object.entries(
             config.components
@@ -61,19 +60,19 @@ export async function GET(request: NextRequest) {
             if (!factory) continue;
 
             if (factory.natureIds.includes(METER_NATURE_ID)) {
-              meters.push({
+              devices.push({
                 componentId,
                 alias: component.alias,
-                meterType: classifyMeterType(component.factoryId),
+                deviceType: classifyDeviceType(component.factoryId),
                 channelAddress: `${componentId}/ActiveConsumptionEnergy`,
               });
             }
           }
 
-          return { edgeId, online, meters };
+          return { edgeId, online, devices };
         } catch {
-          // If edge config fails (e.g. edge is offline), return empty meters
-          return { edgeId, online: false, meters: [] };
+          // If edge config fails (e.g. edge is offline), return empty devices
+          return { edgeId, online: false, devices: [] };
         }
       })
     );
@@ -87,7 +86,7 @@ export async function GET(request: NextRequest) {
       );
     }
     return NextResponse.json(
-      { error: "Unexpected error discovering meters" },
+      { error: "Unexpected error discovering devices" },
       { status: 500 }
     );
   }

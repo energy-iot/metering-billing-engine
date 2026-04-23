@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpenEmsClient } from "../client";
 import { BasicAuth } from "../auth";
 import { OpenEmsError } from "../errors";
-import type { MeterConfig } from "@/lib/adapters/types";
+import type { DeviceConfig } from "@/lib/adapters/types";
 
 // Helper to create a mock Response
 function mockResponse(body: unknown, status = 200): Response {
@@ -24,6 +24,21 @@ function mockResponse(body: unknown, status = 200): Response {
     text: () => Promise.resolve(JSON.stringify(body)),
     bytes: () => Promise.resolve(new Uint8Array()),
   } as Response;
+}
+
+// Helper to build a DeviceConfig fixture
+function makeDeviceConfig(
+  id: string,
+  edgeOpenemsId: string,
+  componentId: string
+): DeviceConfig {
+  return {
+    id,
+    dataSourceType: "openems",
+    edgeOpenemsId,
+    componentId,
+    openems_backend_url: "http://localhost:8075",
+  };
 }
 
 describe("OpenEmsClient", () => {
@@ -196,26 +211,18 @@ describe("OpenEmsClient", () => {
     });
   });
 
-  describe("getReadings (MeterDataAdapter interface)", () => {
-    it("groups meters by edgeId and makes batched calls", async () => {
-      // Two meters on edge0, one on edge1
-      const meters: MeterConfig[] = [
-        {
-          id: "meter-uuid-1",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0", channelAddress: "meter0/ActiveConsumptionEnergy" },
-        },
-        {
-          id: "meter-uuid-2",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0", channelAddress: "meter1/ActiveConsumptionEnergy" },
-        },
-        {
-          id: "meter-uuid-3",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge1", channelAddress: "meter0/ActiveConsumptionEnergy" },
-        },
+  describe("getReadings (DeviceDataAdapter interface)", () => {
+    it("groups devices by edgeOpenemsId and makes batched calls", async () => {
+      // Two devices on edge0, one on edge1
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
+        makeDeviceConfig("device-uuid-2", "edge0", "meter1"),
+        makeDeviceConfig("device-uuid-3", "edge1", "meter0"),
       ];
+
+      // Channel addresses derived as: ${componentId}/ActiveConsumptionEnergy
+      // edge0 channels: meter0/ActiveConsumptionEnergy, meter1/ActiveConsumptionEnergy
+      // edge1 channels: meter0/ActiveConsumptionEnergy
 
       // Mock responses for two edge queries
       fetchSpy
@@ -255,7 +262,7 @@ describe("OpenEmsClient", () => {
           })
         );
 
-      const readings = await client.getReadings(meters, "2026-03-01", "2026-03-10");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-10");
 
       // Should have made exactly 2 fetch calls (one per edge)
       expect(fetchSpy).toHaveBeenCalledTimes(2);
@@ -263,25 +270,21 @@ describe("OpenEmsClient", () => {
       // Verify Wh to kWh conversion
       expect(readings).toHaveLength(3);
 
-      const reading1 = readings.find((r) => r.meterId === "meter-uuid-1");
+      const reading1 = readings.find((r) => r.deviceId === "device-uuid-1");
       expect(reading1?.usageKwh).toBe(10);
       expect(reading1?.startDate).toBe("2026-03-01");
       expect(reading1?.endDate).toBe("2026-03-10");
 
-      const reading2 = readings.find((r) => r.meterId === "meter-uuid-2");
+      const reading2 = readings.find((r) => r.deviceId === "device-uuid-2");
       expect(reading2?.usageKwh).toBe(20);
 
-      const reading3 = readings.find((r) => r.meterId === "meter-uuid-3");
+      const reading3 = readings.find((r) => r.deviceId === "device-uuid-3");
       expect(reading3?.usageKwh).toBe(30);
     });
 
     it("converts Wh to kWh correctly", async () => {
-      const meters: MeterConfig[] = [
-        {
-          id: "meter-uuid-1",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0", channelAddress: "meter0/ActiveConsumptionEnergy" },
-        },
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
       ];
 
       fetchSpy.mockResolvedValue(
@@ -302,17 +305,13 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(meters, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
       expect(readings[0].usageKwh).toBe(1.5);
     });
 
     it("returns null usageKwh when energy value is null", async () => {
-      const meters: MeterConfig[] = [
-        {
-          id: "meter-uuid-1",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0", channelAddress: "meter0/NonExistent" },
-        },
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
       ];
 
       fetchSpy.mockResolvedValue(
@@ -325,7 +324,7 @@ describe("OpenEmsClient", () => {
               id: "id",
               result: {
                 data: {
-                  "meter0/NonExistent": null,
+                  "meter0/ActiveConsumptionEnergy": null,
                 },
               },
             },
@@ -333,17 +332,13 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(meters, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
       expect(readings[0].usageKwh).toBeNull();
     });
 
     it("returns null usageKwh when channel is missing from response entirely", async () => {
-      const meters: MeterConfig[] = [
-        {
-          id: "meter-uuid-1",
-          dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0", channelAddress: "meter0/NotInResponse" },
-        },
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter99"),
       ];
 
       fetchSpy.mockResolvedValue(
@@ -362,40 +357,158 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(meters, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
       expect(readings[0].usageKwh).toBeNull();
     });
 
-    it("throws METER_INVALID_DATA_SOURCE for missing edgeId", async () => {
-      const meters: MeterConfig[] = [
+    it("throws DEVICE_INVALID_DATA_SOURCE for missing edgeOpenemsId", async () => {
+      const devices: DeviceConfig[] = [
         {
-          id: "meter-uuid-1",
+          id: "device-uuid-1",
           dataSourceType: "openems",
-          dataSourceConfig: { channelAddress: "meter0/ActiveConsumptionEnergy" },
+          edgeOpenemsId: "", // invalid — empty string
+          componentId: "meter0",
+          openems_backend_url: "http://localhost:8075",
         },
       ];
 
       await expect(
-        client.getReadings(meters, "2026-03-01", "2026-03-02")
+        client.getReadings(devices, "2026-03-01", "2026-03-02")
       ).rejects.toThrow(OpenEmsError);
 
       await expect(
-        client.getReadings(meters, "2026-03-01", "2026-03-02")
-      ).rejects.toMatchObject({ code: "METER_INVALID_DATA_SOURCE" });
+        client.getReadings(devices, "2026-03-01", "2026-03-02")
+      ).rejects.toMatchObject({ code: "DEVICE_INVALID_DATA_SOURCE" });
     });
 
-    it("throws METER_INVALID_DATA_SOURCE for missing channelAddress", async () => {
-      const meters: MeterConfig[] = [
+    it("throws DEVICE_INVALID_DATA_SOURCE for missing componentId", async () => {
+      const devices: DeviceConfig[] = [
         {
-          id: "meter-uuid-1",
+          id: "device-uuid-1",
           dataSourceType: "openems",
-          dataSourceConfig: { edgeId: "edge0" },
+          edgeOpenemsId: "edge0",
+          componentId: "", // invalid — empty string
+          openems_backend_url: "http://localhost:8075",
         },
       ];
 
       await expect(
-        client.getReadings(meters, "2026-03-01", "2026-03-02")
-      ).rejects.toMatchObject({ code: "METER_INVALID_DATA_SOURCE" });
+        client.getReadings(devices, "2026-03-01", "2026-03-02")
+      ).rejects.toMatchObject({ code: "DEVICE_INVALID_DATA_SOURCE" });
+    });
+  });
+
+  describe("getDeviceEnergy (formerly getMeterEnergy)", () => {
+    it("returns DeviceEnergyResult with both Wh and kWh values", async () => {
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
+      ];
+
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: {
+            payload: {
+              jsonrpc: "2.0",
+              id: "id",
+              result: {
+                data: {
+                  "meter0/ActiveConsumptionEnergy": 5000, // 5 kWh
+                },
+              },
+            },
+          },
+        })
+      );
+
+      const results = await client.getDeviceEnergy(
+        devices,
+        "2026-03-01",
+        "2026-03-10"
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0].deviceId).toBe("device-uuid-1");
+      expect(results[0].edgeId).toBe("edge0");
+      expect(results[0].channelAddress).toBe("meter0/ActiveConsumptionEnergy");
+      expect(results[0].energyWh).toBe(5000);
+      expect(results[0].energyKwh).toBe(5);
+    });
+
+    it("returns null Wh and kWh when channel value is null", async () => {
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
+      ];
+
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: {
+            payload: {
+              jsonrpc: "2.0",
+              id: "id",
+              result: {
+                data: {
+                  "meter0/ActiveConsumptionEnergy": null,
+                },
+              },
+            },
+          },
+        })
+      );
+
+      const results = await client.getDeviceEnergy(
+        devices,
+        "2026-03-01",
+        "2026-03-10"
+      );
+
+      expect(results[0].energyWh).toBeNull();
+      expect(results[0].energyKwh).toBeNull();
+    });
+
+    it("groups devices by edgeOpenemsId and batches queries", async () => {
+      const devices: DeviceConfig[] = [
+        makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
+        makeDeviceConfig("device-uuid-2", "edge0", "meter1"),
+      ];
+
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: {
+            payload: {
+              jsonrpc: "2.0",
+              id: "id",
+              result: {
+                data: {
+                  "meter0/ActiveConsumptionEnergy": 10000,
+                  "meter1/ActiveConsumptionEnergy": 20000,
+                },
+              },
+            },
+          },
+        })
+      );
+
+      const results = await client.getDeviceEnergy(
+        devices,
+        "2026-03-01",
+        "2026-03-10"
+      );
+
+      // Both devices on the same edge → single fetch call
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(results).toHaveLength(2);
+
+      const r1 = results.find((r) => r.deviceId === "device-uuid-1");
+      expect(r1?.energyKwh).toBe(10);
+
+      const r2 = results.find((r) => r.deviceId === "device-uuid-2");
+      expect(r2?.energyKwh).toBe(20);
     });
   });
 
@@ -548,7 +661,7 @@ describe("OpenEmsClient", () => {
     });
   });
 
-  describe("getStatus (MeterDataAdapter interface)", () => {
+  describe("getStatus (DeviceDataAdapter interface)", () => {
     it("returns record keyed by edgeId", async () => {
       fetchSpy.mockResolvedValue(
         mockResponse({

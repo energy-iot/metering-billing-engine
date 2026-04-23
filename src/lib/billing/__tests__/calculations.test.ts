@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { calculateTieredCost } from "../calculations";
-import type { TierConfig } from "@/lib/types/database";
+import type { TierConfig } from "@/lib/types/domain";
 
 // Seed tiers matching the real-world Uganda pricing structure
 const seedTiers: TierConfig[] = [
