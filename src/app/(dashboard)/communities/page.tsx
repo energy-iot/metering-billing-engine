@@ -2,26 +2,37 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { AddEntityButton } from "@/components/forms/AddEntityButton";
+import { EditEntityButton } from "@/components/forms/EditEntityButton";
+import type { Community } from "@/lib/types/domain";
 
-type CommunityRow = {
-  id: string;
-  name: string;
-  address_city: string | null;
-  address_country: string | null;
+type CommunityRow = Community & {
   microgrids: { count: number }[];
 };
 
 export default async function CommunitiesPage() {
   const supabase = await createClient();
 
-  const [{ data: communities, error }, levels] = await Promise.all([
-    supabase
-      .from("communities")
-      .select("id, name, address_city, address_country, microgrids(count)")
-      .order("name")
-      .returns<CommunityRow[]>(),
-    getHierarchyLevels(supabase, { kind: "communities" }),
-  ]);
+  const [{ data: communities, error }, { data: accessibleOrgs }, levels] =
+    await Promise.all([
+      supabase
+        .from("communities")
+        .select("*, microgrids(count)")
+        .order("name")
+        .returns<CommunityRow[]>(),
+      supabase
+        .from("organizations")
+        .select("id")
+        .order("name")
+        .returns<{ id: string }[]>(),
+      getHierarchyLevels(supabase, { kind: "communities" }),
+    ]);
+
+  // If the user can see exactly one org (the org_manager case), we can offer
+  // "+ Add Community" inline. Super_admin typically creates via the org
+  // detail page; we still allow inline add when there's only one org in view.
+  const singleAccessibleOrgId =
+    accessibleOrgs && accessibleOrgs.length === 1 ? accessibleOrgs[0].id : null;
 
   if (error) {
     return (
@@ -35,12 +46,28 @@ export default async function CommunitiesPage() {
     return (
       <div>
         <HierarchyNav levels={levels} className="mb-4" />
-        <h1 className="mb-6 text-2xl font-semibold text-foreground">
-          Communities
-        </h1>
-        <div className="rounded-md border border-border bg-card p-8 text-center text-muted-foreground">
-          No communities found. Communities are configured by your system
-          administrator.
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-semibold text-foreground">
+            Communities
+          </h1>
+        </div>
+        <div className="rounded-md border border-border bg-card p-8 text-center">
+          {singleAccessibleOrgId ? (
+            <>
+              <p className="mb-4 text-muted-foreground">
+                No communities yet.
+              </p>
+              <AddEntityButton
+                entity="community"
+                parentOrgId={singleAccessibleOrgId}
+                label="+ Add the first Community"
+              />
+            </>
+          ) : (
+            <p className="text-muted-foreground">
+              No communities visible. Add one from the organization detail page.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -49,9 +76,15 @@ export default async function CommunitiesPage() {
   return (
     <div>
       <HierarchyNav levels={levels} className="mb-4" />
-      <h1 className="mb-6 text-2xl font-semibold text-foreground">
-        Communities
-      </h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-foreground">Communities</h1>
+        {singleAccessibleOrgId && (
+          <AddEntityButton
+            entity="community"
+            parentOrgId={singleAccessibleOrgId}
+          />
+        )}
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {communities.map((community) => {
           const locationParts = [
@@ -67,21 +100,34 @@ export default async function CommunitiesPage() {
               : 0;
 
           return (
-            <Link
+            <div
               key={community.id}
-              href={`/microgrids?community=${community.id}`}
-              className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted"
+              className="flex flex-col rounded-lg border border-border bg-card p-6 transition-colors hover:border-border"
             >
-              <h2 className="font-medium text-foreground">{community.name}</h2>
-              {locationLabel && (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {locationLabel}
-                </p>
-              )}
-              <div className="mt-3 text-sm text-muted-foreground">
-                {microgridCount} microgrid{microgridCount !== 1 ? "s" : ""}
+              <Link
+                href={`/microgrids?community=${community.id}`}
+                className="flex-1"
+              >
+                <h2 className="font-medium text-foreground">
+                  {community.name}
+                </h2>
+                {locationLabel && (
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {locationLabel}
+                  </p>
+                )}
+                <div className="mt-3 text-sm text-muted-foreground">
+                  {microgridCount} microgrid
+                  {microgridCount !== 1 ? "s" : ""}
+                </div>
+              </Link>
+              <div className="mt-4 flex justify-end">
+                <EditEntityButton
+                  entity="community"
+                  initialValues={community}
+                />
               </div>
-            </Link>
+            </div>
           );
         })}
       </div>

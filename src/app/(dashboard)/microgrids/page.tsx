@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { Microgrid } from "@/lib/types/domain";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { AddEntityButton } from "@/components/forms/AddEntityButton";
 
 type MicrogridWithHouseholdCount = Microgrid & {
   household_count: number;
@@ -70,12 +71,32 @@ export default async function MicrogridsPage({
     return (
       <div>
         <HierarchyNav levels={levels} className="mb-4" />
-        <h1 className="mb-6 text-2xl font-semibold text-foreground">
-          {heading}
-        </h1>
-        <div className="rounded-md border border-border bg-card p-8 text-center text-muted-foreground">
-          No microgrids found. Microgrids are configured by your system
-          administrator.
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-semibold text-foreground">{heading}</h1>
+          {communityId && (
+            <AddEntityButton
+              entity="microgrid"
+              parentCommunityId={communityId}
+            />
+          )}
+        </div>
+        <div className="rounded-md border border-border bg-card p-8 text-center">
+          {communityId ? (
+            <>
+              <p className="mb-4 text-muted-foreground">
+                No microgrids in this community yet.
+              </p>
+              <AddEntityButton
+                entity="microgrid"
+                parentCommunityId={communityId}
+                label="+ Add the first Microgrid"
+              />
+            </>
+          ) : (
+            <p className="text-muted-foreground">
+              No microgrids visible. Open a community to add one.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -97,7 +118,15 @@ export default async function MicrogridsPage({
   return (
     <div>
       <HierarchyNav levels={levels} className="mb-4" />
-      <h1 className="mb-6 text-2xl font-semibold text-foreground">{heading}</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-foreground">{heading}</h1>
+        {communityId && (
+          <AddEntityButton
+            entity="microgrid"
+            parentCommunityId={communityId}
+          />
+        )}
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {microgridsWithCounts.map((mg) => {
           const locationParts = [mg.address_city, mg.address_country].filter(Boolean);
