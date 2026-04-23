@@ -87,29 +87,17 @@ export async function PATCH(
   // RLS SELECT filter may return zero rows even when the UPDATE itself
   // succeeded — but in practice the UPDATE policy is stricter than the
   // SELECT policy, so 0 rows here means "not authorized or no profile row".
-  // Distinguish "no profile row yet" (self-edit path) from "not yours to edit":
-  // if the caller is trying to update their own row and no row exists,
-  // auto-create it. This is the typical first-save path for a freshly
-  // invited user who hasn't filled in a profile yet.
+  //
+  // Migration 00017 adds a backfill + AFTER INSERT trigger that guarantees a
+  // user_profiles row exists for every auth.users row. Reaching this branch
+  // post-migration indicates a genuine data integrity problem (trigger failure,
+  // manual deletion, etc.) — return a generic 500 rather than a misleading
+  // re-invite message. The "not yours to edit" 403 is handled by the RLS
+  // policy error path above (code 42501).
   if (!data || data.length === 0) {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.id === id) {
-      // Profile auto-creation deferred — invite RPC creates the row.
-      // INSERT policy is WITH CHECK (FALSE), so direct inserts are blocked.
-      // Return 403 with a clear message explaining why.
-      return NextResponse.json(
-        {
-          error:
-            "No profile row exists to update. An administrator must (re-)invite you.",
-        },
-        { status: 403 }
-      );
-    }
     return NextResponse.json(
-      { error: "Not authorized to update this profile." },
-      { status: 403 }
+      { error: "Internal error. Please contact an administrator." },
+      { status: 500 }
     );
   }
 
