@@ -1,12 +1,11 @@
-// Setup > Edges listing — server component test (D2 / #53).
+// Setup > Edges listing — server component test (D2 / #53; updated post-#101).
 //
 // Strategy:
 //   - Mock @/lib/supabase/server so the edges query returns fixture rows.
-//   - Mock @/lib/openems so getEdgesStatus yields deterministic online/offline
-//     without touching a real backend.
-//   - Call SetupEdgesPage() directly (async server component) and serialize
-//     the returned JSX to HTML.
-//   - Assert edge name, OpenEMS id, and status chip rendering.
+//   - Mock @/lib/openems so createOpenEmsClient yields deterministic
+//     online/offline without touching a real backend.
+//   - Mock @/lib/openems/config so we bypass the microgrid config fetch.
+//   - Call SetupEdgesPage() directly and serialize returned JSX to HTML.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -25,9 +24,15 @@ vi.mock("@/lib/openems", async () => {
   );
   return {
     ...actual,
-    getOpenEmsClient: () => ({ getEdgesStatus: getEdgesStatusMock }),
+    createOpenEmsClient: () => ({ getEdgesStatus: getEdgesStatusMock }),
   };
 });
+
+vi.mock("@/lib/openems/config", () => ({
+  getMicrogridEmsConfig: vi
+    .fn()
+    .mockResolvedValue({ type: "direct_url", url: "http://localhost:8075" }),
+}));
 
 // Stub getHierarchyLevels so page tests don't need a full Supabase mock chain.
 vi.mock("@/lib/hierarchy", () => ({
@@ -77,9 +82,7 @@ describe("SetupEdgesPage", () => {
         {
           id: "edge-1",
           name: "Metering Pi",
-          data_source_type: "openems",
           openems_edge_id: "edge0",
-          openems_backend_url: "http://openems",
           role: "metering",
         },
       ]),
@@ -116,9 +119,7 @@ describe("SetupEdgesPage", () => {
         {
           id: "edge-1",
           name: "Metering Pi",
-          data_source_type: "openems",
           openems_edge_id: "edge0",
-          openems_backend_url: "http://openems",
           role: null,
         },
       ]),

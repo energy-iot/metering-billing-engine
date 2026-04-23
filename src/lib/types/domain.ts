@@ -57,14 +57,19 @@ export type MicrogridRecentActivityRow =
 
 // ── Enum runtime values ───────────────────────────────────────────────────────
 
-/** Runtime tuple of all valid edge_data_source enum values (Postgres enum order). */
-export const EDGE_DATA_SOURCE_VALUES = Constants.public.Enums.edge_data_source;
+/** Runtime tuple of all valid microgrid_ems_type enum values (Postgres enum order). */
+export const MICROGRID_EMS_TYPE_VALUES = Constants.public.Enums.microgrid_ems_type;
 
 // ── Enums (literal-union types) ───────────────────────────────────────────────
 
 export type UserRole = Database["public"]["Enums"]["user_role"];
 export type RoleScopeType = Database["public"]["Enums"]["role_scope_type"];
-export type EdgeDataSource = Database["public"]["Enums"]["edge_data_source"];
+/**
+ * Microgrid-level OpenEMS backend type. Introduced in #101 when OpenEMS became
+ * the only supported edge-data source; the former `edge_data_source` enum
+ * (openems / modbus_direct / mqtt / rest_api) was dropped.
+ */
+export type MicrogridEmsType = Database["public"]["Enums"]["microgrid_ems_type"];
 export type DeviceType = Database["public"]["Enums"]["device_type"];
 export type HouseholdDeviceRole =
   Database["public"]["Enums"]["household_device_role"];

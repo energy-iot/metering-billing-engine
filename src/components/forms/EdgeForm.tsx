@@ -1,20 +1,22 @@
 "use client";
 
 /**
- * EdgeForm — Add / Edit an Edge.
+ * EdgeForm — Edit an Edge (post-#101).
  *
- * Modal via Radix Dialog. Fields: name, data_source_type (RadioCard tiles),
- * conditional OpenEMS fields (openems_backend_url, openems_edge_id), role.
+ * Modal via Radix Dialog. Fields: name, openems_edge_id, role.
  *
- * Props:
- *   mode='create'  → requires parentMicrogridId
- *   mode='edit'    → requires edge (the full Edge row to pre-fill)
+ * Post-#101 product decisions:
+ *   - `data_source_type` is gone (OpenEMS is the only type).
+ *   - `openems_backend_url` moved to microgrids.ems_backend_url — configure it
+ *     on the OpenEMS Backend tab (shipping in #102/#103).
+ *   - Manual create path is retired: new edges come from the Discover flow
+ *     (POST /api/microgrids/[id]/edges/register via the Add Edge dialog,
+ *     shipping in #103). This form is therefore edit-only for now; the
+ *     create branch is retained as a structural placeholder until the
+ *     Discover dialog lands, and will raise a clear "use Discover" message
+ *     if someone hits it.
  *
- * Posts to /api/edges (POST) or /api/edges/[id] (PATCH).
- * Never writes to Supabase directly from the browser.
- *
- * Error surface: <Banner> at top for server errors (403/409/422);
- * field-level "required" state handled by disabled Save button.
+ * Posts to /api/edges/[id] (PATCH).
  */
 
 import * as React from "react";
@@ -22,41 +24,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { RadioGroup } from "@/components/ui/radio-group";
-import { RadioCard } from "@/components/ui/radio-card";
 import { Banner } from "@/components/ui/banner";
-import type { Edge, EdgeDataSource } from "@/lib/types/domain";
-import { EDGE_DATA_SOURCE_VALUES } from "@/lib/types/domain";
-
-// ── Enum-derived options ──────────────────────────────────────────────────
-// Labels/descriptions keyed by enum value. For any value not listed here,
-// the render loop falls back to a titleized form of the enum value.
-const DATA_SOURCE_LABELS: Record<string, { title: string; description: string }> = {
-  openems: {
-    title: "OpenEMS",
-    description:
-      "Connect via the OpenEMS Backend WebSocket. Requires backend URL and edge ID.",
-  },
-  modbus_direct: {
-    title: "Modbus Direct",
-    description:
-      "Poll meters directly over Modbus TCP/RTU. Useful for CHINT meters and similar.",
-  },
-  mqtt: {
-    title: "MQTT",
-    description: "Subscribe to meter telemetry published on an MQTT broker.",
-  },
-  rest_api: {
-    title: "REST API",
-    description: "Pull readings from a custom HTTP/REST endpoint.",
-  },
-};
-
-/** Fallback title for enum values not present in DATA_SOURCE_LABELS. */
-function titleize(value: string): string {
-  const spaced = value.replace(/_/g, " ");
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
+import type { Edge } from "@/lib/types/domain";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -81,23 +50,13 @@ export type EdgeFormProps = (CreateProps | EditProps) & {
 
 // ── Component ─────────────────────────────────────────────────────────────
 
-export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }: EdgeFormProps) {
+export function EdgeForm({ mode, edge, onSuccess, onCancel }: EdgeFormProps) {
   const router = useRouter();
 
   // Form state
   const [name, setName] = React.useState(mode === "edit" ? (edge.name ?? "") : "");
-  const [dataSourceType, setDataSourceType] = React.useState<EdgeDataSource>(
-    mode === "edit" ? edge.data_source_type : "openems"
-  );
-  const [openemsBackendUrl, setOpenemsBackendUrl] = React.useState(
-    mode === "edit" && edge.data_source_type === "openems"
-      ? (edge.openems_backend_url ?? "")
-      : ""
-  );
   const [openemsEdgeId, setOpenemsEdgeId] = React.useState(
-    mode === "edit" && edge.data_source_type === "openems"
-      ? (edge.openems_edge_id ?? "")
-      : ""
+    mode === "edit" ? (edge.openems_edge_id ?? "") : ""
   );
   const [role, setRole] = React.useState(mode === "edit" ? (edge.role ?? "") : "");
 
@@ -106,41 +65,22 @@ export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }:
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
 
-  const isOpenEms = dataSourceType === "openems";
-
-  // When data_source_type changes away from openems, clear OpenEMS fields.
-  function handleDataSourceChange(next: string) {
-    const value = next as EdgeDataSource;
-    setDataSourceType(value);
-    if (value !== "openems") {
-      setOpenemsBackendUrl("");
-      setOpenemsEdgeId("");
-    }
-    // Clear field-level errors for the OpenEMS fields when toggling away.
-    setFieldErrors((prev) => {
-      const updated = { ...prev };
-      delete updated.openems_backend_url;
-      delete updated.openems_edge_id;
-      return updated;
-    });
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setServerError(null);
     setFieldErrors({});
 
-    // Client-side field validation before network call.
+    if (mode === "create") {
+      // Post-#101: manual create is retired — direct users to Discover.
+      setServerError(
+        "Manual edge creation is retired. Open the Discover Edges dialog from the Edges tab (shipping in #103)."
+      );
+      return;
+    }
+
     const errors: Record<string, string> = {};
     if (!name.trim()) errors.name = "Name is required.";
-    if (isOpenEms) {
-      if (!openemsBackendUrl.trim()) {
-        errors.openems_backend_url = "Backend URL is required for OpenEMS edges.";
-      }
-      if (!openemsEdgeId.trim()) {
-        errors.openems_edge_id = "Edge ID is required for OpenEMS edges.";
-      }
-    }
+    if (!openemsEdgeId.trim()) errors.openems_edge_id = "OpenEMS edge ID is required.";
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       return;
@@ -148,29 +88,14 @@ export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }:
 
     const body: Record<string, unknown> = {
       name: name.trim(),
-      data_source_type: dataSourceType,
+      openems_edge_id: openemsEdgeId.trim(),
       role: role.trim() || null,
     };
 
-    if (isOpenEms) {
-      body.openems_backend_url = openemsBackendUrl.trim();
-      body.openems_edge_id = openemsEdgeId.trim();
-    } else {
-      body.openems_backend_url = null;
-      body.openems_edge_id = null;
-    }
-
-    if (mode === "create") {
-      body.microgrid_id = parentMicrogridId;
-    }
-
-    const url = mode === "create" ? "/api/edges" : `/api/edges/${edge.id}`;
-    const method = mode === "create" ? "POST" : "PATCH";
-
     setSaving(true);
     try {
-      const res = await fetch(url, {
-        method,
+      const res = await fetch(`/api/edges/${edge.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -196,9 +121,7 @@ export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }:
     }
   }
 
-  const canSave =
-    name.trim().length > 0 &&
-    (!isOpenEms || (openemsBackendUrl.trim().length > 0 && openemsEdgeId.trim().length > 0));
+  const canSave = name.trim().length > 0 && openemsEdgeId.trim().length > 0;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -233,102 +156,35 @@ export function EdgeForm({ mode, edge, parentMicrogridId, onSuccess, onCancel }:
         )}
       </div>
 
-      {/* Data source type */}
+      {/* OpenEMS Edge ID */}
       <div>
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Data source type <span aria-hidden="true">*</span>
-        </p>
-        <RadioGroup
-          value={dataSourceType}
-          onValueChange={handleDataSourceChange}
-          className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-          aria-label="Data source type"
+        <label
+          htmlFor="edge-openems-edge-id"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
         >
-          {EDGE_DATA_SOURCE_VALUES.map((value) => {
-            const label = DATA_SOURCE_LABELS[value];
-            const title = label?.title ?? titleize(value);
-            const description = label?.description ?? "";
-            return (
-              <RadioCard
-                key={value}
-                value={value}
-                title={title}
-                description={description}
-              />
-            );
-          })}
-        </RadioGroup>
-      </div>
-
-      {/* Conditional OpenEMS fields — rendered only when data_source_type='openems' */}
-      {isOpenEms && (
-        <div className="space-y-3 rounded-md border border-border bg-muted p-4">
-          <p className="text-xs text-muted-foreground">
-            Find these in the OpenEMS Backend admin UI under Edges.
+          OpenEMS Edge ID <span aria-hidden="true">*</span>
+        </label>
+        <Input
+          id="edge-openems-edge-id"
+          value={openemsEdgeId}
+          onChange={(e) => setOpenemsEdgeId(e.target.value)}
+          placeholder="edge0"
+          required
+          aria-required="true"
+          aria-describedby={
+            fieldErrors.openems_edge_id ? "edge-openems-edge-id-error" : undefined
+          }
+        />
+        {fieldErrors.openems_edge_id && (
+          <p
+            id="edge-openems-edge-id-error"
+            role="alert"
+            className="mt-1 text-xs text-destructive-fg"
+          >
+            {fieldErrors.openems_edge_id}
           </p>
-
-          {/* OpenEMS Backend URL */}
-          <div>
-            <label
-              htmlFor="edge-openems-url"
-              className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              OpenEMS Backend URL <span aria-hidden="true">*</span>
-            </label>
-            <Input
-              id="edge-openems-url"
-              type="url"
-              value={openemsBackendUrl}
-              onChange={(e) => setOpenemsBackendUrl(e.target.value)}
-              placeholder="https://openems.example.com"
-              required
-              aria-required="true"
-              aria-describedby={
-                fieldErrors.openems_backend_url ? "edge-openems-url-error" : undefined
-              }
-            />
-            {fieldErrors.openems_backend_url && (
-              <p
-                id="edge-openems-url-error"
-                role="alert"
-                className="mt-1 text-xs text-destructive-fg"
-              >
-                {fieldErrors.openems_backend_url}
-              </p>
-            )}
-          </div>
-
-          {/* OpenEMS Edge ID */}
-          <div>
-            <label
-              htmlFor="edge-openems-edge-id"
-              className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              OpenEMS Edge ID <span aria-hidden="true">*</span>
-            </label>
-            <Input
-              id="edge-openems-edge-id"
-              value={openemsEdgeId}
-              onChange={(e) => setOpenemsEdgeId(e.target.value)}
-              placeholder="edge0"
-              required
-              aria-required="true"
-              aria-describedby={
-                fieldErrors.openems_edge_id ? "edge-openems-edge-id-error" : undefined
-              }
-            />
-            {fieldErrors.openems_edge_id && (
-              <p
-                id="edge-openems-edge-id-error"
-                role="alert"
-                className="mt-1 text-xs text-destructive-fg"
-              >
-                {fieldErrors.openems_edge_id}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Role (optional, free-form) */}
       <div>
@@ -383,8 +239,8 @@ export function EdgeFormModal({ open, onOpenChange, ...formProps }: EdgeFormModa
   const title = formProps.mode === "create" ? "Add edge" : "Edit edge";
   const description =
     formProps.mode === "create"
-      ? "Register a new gateway device for this microgrid."
-      : "Update the edge configuration. Changing the data source type is blocked when devices are linked.";
+      ? "Manual creation is retired — use the Discover Edges dialog instead (shipping in #103)."
+      : "Update the edge configuration.";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import type { EdgeDataSource } from "@/lib/types/domain";
-import { EDGE_DATA_SOURCE_VALUES } from "@/lib/types/domain";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { countEntityDescendants } from "@/lib/entity-descendants";
 import {
@@ -12,56 +10,19 @@ import {
   type EntityDeleteLogPayload,
 } from "@/lib/entity-deletion/shared";
 
-// Derive valid enum values at runtime from the generated DB constants.
-const VALID_DATA_SOURCE_TYPES = EDGE_DATA_SOURCE_VALUES;
-
-function isValidDataSource(v: unknown): v is EdgeDataSource {
-  return VALID_DATA_SOURCE_TYPES.includes(v as EdgeDataSource);
-}
-
-/**
- * Validates and parses a URL string.
- * Returns null if valid, or an error message string if invalid.
- */
-function validateUrl(raw: string): string | null {
-  if (raw !== raw.trim()) {
-    return "URL must not have leading or trailing spaces.";
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return "Invalid URL format.";
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "URL must use http or https protocol.";
-  }
-  if (parsed.username || parsed.password) {
-    return "URL must not contain embedded credentials.";
-  }
-  return null;
-}
-
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * PATCH /api/edges/[id]
  *
- * Updates an existing edge row. Authorization enforced by RLS on `edges`.
- * Postgres `42501` → HTTP 403.
+ * Post-#101: the body no longer accepts `data_source_type` or
+ * `openems_backend_url` — those have been retired. Supported fields:
+ *   - name (string)
+ *   - openems_edge_id (string)
+ *   - role (string | null)
  *
- * Special rule: if request changes `data_source_type` AND ≥1 child device
- * exists, reject with 409 so the operator removes/reassigns them first.
- *
- * Request body (all fields optional):
- * {
- *   name?: string;
- *   data_source_type?: EdgeDataSource;
- *   openems_backend_url?: string | null;
- *   openems_edge_id?: string | null;
- *   role?: string | null;
- * }
+ * Authorization enforced by RLS on `edges`. Postgres `42501` → HTTP 403.
  */
 export async function PATCH(
   request: NextRequest,
@@ -84,46 +45,48 @@ export async function PATCH(
     return NextResponse.json({ error: "Request body must be an object" }, { status: 400 });
   }
 
-  const {
-    name,
-    data_source_type,
-    openems_backend_url,
-    openems_edge_id,
-    role,
-  } = body as Record<string, unknown>;
+  const { name, openems_edge_id, role } = body as Record<string, unknown>;
 
-  // At least one field must be provided
+  // Reject legacy fields BEFORE the "no fields provided" check so clients
+  // passing ONLY legacy fields get the correct pointer message.
+  const legacyFields = ["data_source_type", "openems_backend_url"].filter(
+    (f) => (body as Record<string, unknown>)[f] !== undefined
+  );
+  if (legacyFields.length > 0) {
+    return NextResponse.json(
+      {
+        error: `Legacy fields are no longer accepted: ${legacyFields.join(", ")}. OpenEMS is the only supported type and backend URL lives on the microgrid (see PUT /api/microgrids/[id]/openems-backend).`,
+      },
+      { status: 400 }
+    );
+  }
+
+  // At least one supported field must be provided.
   const hasName = name !== undefined;
-  const hasDataSource = data_source_type !== undefined;
-  const hasUrl = openems_backend_url !== undefined;
   const hasEdgeId = openems_edge_id !== undefined;
   const hasRole = role !== undefined;
 
-  if (!hasName && !hasDataSource && !hasUrl && !hasEdgeId && !hasRole) {
+  if (!hasName && !hasEdgeId && !hasRole) {
     return NextResponse.json({ error: "No fields provided to update" }, { status: 400 });
   }
 
-  // Validate fields if provided
+  // Validate fields if provided.
   if (hasName && (typeof name !== "string" || !name.trim())) {
     return NextResponse.json({ error: "name must be a non-empty string" }, { status: 422 });
   }
-
-  if (hasDataSource && !isValidDataSource(data_source_type)) {
+  if (hasEdgeId && (typeof openems_edge_id !== "string" || !openems_edge_id.trim())) {
     return NextResponse.json(
-      { error: `data_source_type must be one of: ${VALID_DATA_SOURCE_TYPES.join(", ")}` },
+      { error: "openems_edge_id must be a non-empty string" },
       { status: 422 }
     );
   }
 
   const supabase = await createClient();
 
-  // Fetch the current edge row — needed to:
-  //   (a) detect data_source_type change
-  //   (b) validate OpenEMS fields against the effective data_source_type
-  // RLS on edges applies here: if user can't read it, they can't update it.
+  // Fetch current row (RLS-filtered) for 404 semantics.
   const { data: currentEdge, error: fetchError } = await supabase
     .from("edges")
-    .select("id, data_source_type, name")
+    .select("id, name")
     .eq("id", id)
     .single();
 
@@ -137,84 +100,12 @@ export async function PATCH(
     );
   }
 
-  // Effective data_source_type after the patch
-  const effectiveDataSource: EdgeDataSource = hasDataSource
-    ? (data_source_type as EdgeDataSource)
-    : (currentEdge.data_source_type as EdgeDataSource);
-
-  // Validate OpenEMS fields against effective data source
-  if (effectiveDataSource === "openems") {
-    // If the patch sets openems_backend_url to something, validate it
-    if (hasUrl && openems_backend_url !== null) {
-      if (typeof openems_backend_url !== "string" || !openems_backend_url.trim()) {
-        return NextResponse.json(
-          { error: "openems_backend_url must be a non-empty string or null" },
-          { status: 422 }
-        );
-      }
-      const urlError = validateUrl(openems_backend_url.trim());
-      if (urlError) {
-        return NextResponse.json(
-          { error: `openems_backend_url: ${urlError}` },
-          { status: 422 }
-        );
-      }
-    }
-  }
-
-  // Check for re-classification with child devices
-  const isChangingDataSource =
-    hasDataSource &&
-    (data_source_type as EdgeDataSource) !== currentEdge.data_source_type;
-
-  if (isChangingDataSource) {
-    const { count, error: countError } = await supabase
-      .from("devices")
-      .select("id", { count: "exact", head: true })
-      .eq("edge_id", id);
-
-    if (countError) {
-      return NextResponse.json(
-        { error: `Failed to check devices: ${countError.message}` },
-        { status: 500 }
-      );
-    }
-
-    const deviceCount = count ?? 0;
-    if (deviceCount > 0) {
-      return NextResponse.json(
-        {
-          error: `Cannot change data source: ${deviceCount} device${deviceCount === 1 ? "" : "s"} are linked. Remove or reassign them first.`,
-        },
-        { status: 409 }
-      );
-    }
-  }
-
-  // Build the update payload — only include fields that were provided
+  // Build the update payload — only include fields that were provided.
   const updateRow: Record<string, unknown> = {};
 
   if (hasName && typeof name === "string") updateRow.name = name.trim();
-  if (hasDataSource) updateRow.data_source_type = data_source_type;
-
-  if (hasUrl) {
-    updateRow.openems_backend_url =
-      openems_backend_url === null || (typeof openems_backend_url === "string" && !openems_backend_url.trim())
-        ? null
-        : typeof openems_backend_url === "string"
-        ? openems_backend_url.trim()
-        : null;
-  }
-
-  if (hasEdgeId) {
-    updateRow.openems_edge_id =
-      openems_edge_id === null || (typeof openems_edge_id === "string" && !openems_edge_id.trim())
-        ? null
-        : typeof openems_edge_id === "string"
-        ? openems_edge_id.trim()
-        : null;
-  }
-
+  if (hasEdgeId && typeof openems_edge_id === "string")
+    updateRow.openems_edge_id = openems_edge_id.trim();
   if (hasRole) {
     updateRow.role =
       role === null || (typeof role === "string" && !role.trim())
@@ -228,7 +119,7 @@ export async function PATCH(
     .from("edges")
     .update(updateRow)
     .eq("id", id)
-    .select("id, name, data_source_type, openems_edge_id, openems_backend_url, role, microgrid_id, created_at")
+    .select("id, name, openems_edge_id, role, microgrid_id, created_at")
     .single();
 
   if (error) {
@@ -275,22 +166,7 @@ export async function PATCH(
 // ══════════════════════════════════════════════════════════════════════════
 
 /**
- * DELETE /api/edges/[id] — delete an edge (#89).
- *
- * Authorization: super_admin OR org_manager with access to the edge's
- * microgrid's parent org (AC-ROUTE-2 step 2). We resolve
- * `edge.microgrid_id` then delegate to `currentUserCanAccessMicrogrid`.
- *
- * Cascade policy (trust-preview per AC-ROUTE-6): see organization DELETE
- * header. For edges specifically, note that `billing_line_items.device_id`
- * is ON DELETE SET NULL (not CASCADE) — the descendant counts helper
- * surfaces this as `billing_line_items_nulled` and the UI labels it as
- * "lose device linkage" rather than "destroyed."
- *
- * Idempotency: first-delete wins, repeats 404 (AC-ROUTE-7).
- *
- * Revalidation (AC-UI-6): the microgrid's edges tab + its layout-level
- * listings are busted.
+ * DELETE /api/edges/[id] — delete an edge (#89). Unchanged from the original.
  */
 export async function DELETE(
   _request: NextRequest,
@@ -306,7 +182,6 @@ export async function DELETE(
 
   const supabase = await createClient();
 
-  // Load edge first so we know its microgrid_id for both authz and redirect.
   const { data: edge, error: fetchErr } = await supabase
     .from("edges")
     .select("id, name, microgrid_id")
@@ -318,10 +193,6 @@ export async function DELETE(
     return NextResponse.json(errorBody(mapped.message), { status: mapped.status });
   }
   if (!edge) {
-    // Authz ambiguity: RLS may have hidden a real row. We deliberately
-    // return 404 here to match #79's "can't see it? it doesn't exist"
-    // pattern — probing the authorization surface with a 403 vs 404
-    // discriminator would leak existence info.
     return NextResponse.json(errorBody("Edge not found."), { status: 404 });
   }
 

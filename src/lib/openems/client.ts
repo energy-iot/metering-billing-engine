@@ -215,7 +215,10 @@ export class OpenEmsClient implements DeviceDataAdapter {
       edgeGroups.set(device.edgeOpenemsId, group);
     }
 
-    // Query each edge in parallel
+    // Query each edge in parallel.
+    // (Each DeviceConfig doesn't carry a URL anymore — the client was
+    // constructed with a microgrid-scoped URL, applied to every edge
+    // under that microgrid.)
     const results: DeviceReading[] = [];
     const edgeQueries = Array.from(edgeGroups.entries()).map(
       async ([edgeId, deviceInfos]) => {
