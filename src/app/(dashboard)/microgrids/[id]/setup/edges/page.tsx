@@ -7,6 +7,7 @@ import { getOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EdgesCRUDShell } from "./edges-crud-shell";
+import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 
 // Setup > Edges (D2 / #53, #77).
 // Lists every edge attached to this microgrid. Rows link to edge detail.
@@ -40,10 +41,13 @@ async function fetchEdgeOnlineMap(
 
 export default async function SetupEdgesPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const sp = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
 
   const levels = await getHierarchyLevels(supabase, {
@@ -75,6 +79,7 @@ export default async function SetupEdgesPage({
 
   return (
     <div className="space-y-4">
+      <DeletedSuccessBanner searchParams={sp} />
       <HierarchyNav levels={levels} className="mb-2" />
       <div className="flex items-end justify-between gap-4">
         <div>

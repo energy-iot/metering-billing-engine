@@ -42,6 +42,14 @@ vi.mock("@/lib/hierarchy", () => ({
   getHierarchyLevels: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("@/lib/auth/access", () => ({
+  currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("@/components/forms/DeleteEntityButton", () => ({
+  DeleteEntityButton: () => null,
+}));
+
 vi.mock("next/link", () => ({
   default: ({
     href,

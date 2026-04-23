@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { EdgeDataSource } from "@/lib/types/domain";
 import { EDGE_DATA_SOURCE_VALUES } from "@/lib/types/domain";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { countEntityDescendants } from "@/lib/entity-descendants";
+import {
+  errorBody,
+  mapPgError,
+  resolveActorRole,
+  type EntityDeleteLogPayload,
+} from "@/lib/entity-deletion/shared";
 
 // Derive valid enum values at runtime from the generated DB constants.
 const VALID_DATA_SOURCE_TYPES = EDGE_DATA_SOURCE_VALUES;
@@ -259,4 +268,116 @@ export async function PATCH(
   }
 
   return NextResponse.json({ edge: data }, { status: 200 });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Entity deletion (#89) — see ./delete-preview/route.ts for the preview GET.
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * DELETE /api/edges/[id] — delete an edge (#89).
+ *
+ * Authorization: super_admin OR org_manager with access to the edge's
+ * microgrid's parent org (AC-ROUTE-2 step 2). We resolve
+ * `edge.microgrid_id` then delegate to `currentUserCanAccessMicrogrid`.
+ *
+ * Cascade policy (trust-preview per AC-ROUTE-6): see organization DELETE
+ * header. For edges specifically, note that `billing_line_items.device_id`
+ * is ON DELETE SET NULL (not CASCADE) — the descendant counts helper
+ * surfaces this as `billing_line_items_nulled` and the UI labels it as
+ * "lose device linkage" rather than "destroyed."
+ *
+ * Idempotency: first-delete wins, repeats 404 (AC-ROUTE-7).
+ *
+ * Revalidation (AC-UI-6): the microgrid's edges tab + its layout-level
+ * listings are busted.
+ */
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+): Promise<NextResponse> {
+  const { id } = await params;
+
+  if (!UUID_RE.test(id)) {
+    return NextResponse.json(errorBody("Invalid edge id — expected UUID."), {
+      status: 400,
+    });
+  }
+
+  const supabase = await createClient();
+
+  // Load edge first so we know its microgrid_id for both authz and redirect.
+  const { data: edge, error: fetchErr } = await supabase
+    .from("edges")
+    .select("id, name, microgrid_id")
+    .eq("id", id)
+    .maybeSingle<{ id: string; name: string; microgrid_id: string }>();
+
+  if (fetchErr) {
+    const mapped = mapPgError(fetchErr, "edge");
+    return NextResponse.json(errorBody(mapped.message), { status: mapped.status });
+  }
+  if (!edge) {
+    // Authz ambiguity: RLS may have hidden a real row. We deliberately
+    // return 404 here to match #79's "can't see it? it doesn't exist"
+    // pattern — probing the authorization surface with a 403 vs 404
+    // discriminator would leak existence info.
+    return NextResponse.json(errorBody("Edge not found."), { status: 404 });
+  }
+
+  if (!(await currentUserCanAccessMicrogrid(supabase, edge.microgrid_id))) {
+    return NextResponse.json(
+      errorBody("You do not have permission to delete this edge."),
+      { status: 403 }
+    );
+  }
+
+  if (!edge.name || !edge.name.trim()) {
+    return NextResponse.json(
+      errorBody("Unnamed entity cannot be typed-to-confirm."),
+      { status: 409 }
+    );
+  }
+
+  const descendantCounts = await countEntityDescendants(supabase, "edge", id);
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const actorRole = await resolveActorRole(supabase);
+  if (!user || !actorRole) {
+    return NextResponse.json(
+      errorBody("You do not have permission to delete this edge."),
+      { status: 403 }
+    );
+  }
+
+  const { data: rowsDeleted, error: delErr } = await supabase.rpc(
+    "fn_entity_delete_edge",
+    { p_id: id }
+  );
+
+  if (delErr) {
+    const mapped = mapPgError(delErr, "edge");
+    return NextResponse.json(errorBody(mapped.message), { status: mapped.status });
+  }
+  if ((rowsDeleted ?? 0) === 0) {
+    return NextResponse.json(errorBody("Edge not found."), { status: 404 });
+  }
+
+  const payload: EntityDeleteLogPayload = {
+    event: "entity.delete",
+    entity_kind: "edge",
+    entity_id: id,
+    entity_name: edge.name,
+    actor_user_id: user.id,
+    actor_role: actorRole,
+    descendant_counts: descendantCounts,
+    at: new Date().toISOString(),
+  };
+  console.info(JSON.stringify(payload));
+
+  revalidatePath(`/microgrids/${edge.microgrid_id}`, "layout");
+
+  return new NextResponse(null, { status: 204 });
 }

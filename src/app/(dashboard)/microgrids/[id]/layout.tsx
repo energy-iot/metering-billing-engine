@@ -49,7 +49,9 @@ export default async function MicrogridLayout({
               </p>
             )}
           </div>
-          <EditEntityButton entity="microgrid" initialValues={microgrid} />
+          <div className="flex items-center gap-2">
+            <EditEntityButton entity="microgrid" initialValues={microgrid} />
+          </div>
         </div>
         <TabNav microgridId={id} />
         <div className="mt-6">{children}</div>

@@ -82,6 +82,7 @@ export default function ComponentsDevPage() {
   const [closePeriodOpen, setClosePeriodOpen] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [confirmNeutralOpen, setConfirmNeutralOpen] = React.useState(false);
+  const [confirmTypedOpen, setConfirmTypedOpen] = React.useState(false);
   const [currentPeriodId, setCurrentPeriodId] = React.useState("1");
 
   return (
@@ -193,6 +194,39 @@ export default function ComponentsDevPage() {
             confirmLabel="Delete"
             tone="destructive"
             onConfirm={() => new Promise((res) => setTimeout(res, 1000))}
+          />
+        </Section>
+
+        {/* ── ConfirmDialog (destructive + type-to-confirm + body) ── */}
+        <Section title="ConfirmDialog — destructive with type-to-confirm + blast-radius body">
+          <button
+            onClick={() => setConfirmTypedOpen(true)}
+            className="inline-flex h-8 items-center rounded-md border border-destructive bg-destructive-muted px-3.5 text-[13px] font-medium text-destructive-fg hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Delete Microgrid (opens dialog)
+          </button>
+          <ConfirmDialog
+            open={confirmTypedOpen}
+            onOpenChange={setConfirmTypedOpen}
+            title="Delete microgrid “Kisakye Main”?"
+            description={`This cannot be undone. Type “Kisakye Main” to confirm.`}
+            body={
+              <ul className="my-2 list-disc space-y-0.5 pl-5">
+                <li>1 edge</li>
+                <li>10 devices</li>
+                <li>10 households</li>
+                <li>1 draft billing period (in progress — unfinalized readings will be lost)</li>
+                <li>2 closed billing periods</li>
+                <li>47 billing line items</li>
+              </ul>
+            }
+            confirmLabel="Delete microgrid"
+            tone="destructive"
+            requireTypedConfirmation={{
+              label: "Type microgrid name to confirm",
+              expected: "Kisakye Main",
+            }}
+            onConfirm={() => new Promise((res) => setTimeout(res, 800))}
           />
         </Section>
 

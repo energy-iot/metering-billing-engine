@@ -623,6 +623,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "user_roles_scope_org_fkey"
+            columns: ["scope_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "user_roles_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
@@ -683,7 +690,15 @@ export type Database = {
           scope_type: Database["public"]["Enums"]["role_scope_type"] | null
           user_id: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_scope_org_fkey"
+            columns: ["scope_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -708,6 +723,10 @@ export type Database = {
         }
         Returns: string
       }
+      fn_entity_delete_community: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_edge: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_microgrid: { Args: { p_id: string }; Returns: number }
+      fn_entity_delete_org: { Args: { p_id: string }; Returns: number }
       fn_finalize_user_invitation: {
         Args: {
           p_first_name: string

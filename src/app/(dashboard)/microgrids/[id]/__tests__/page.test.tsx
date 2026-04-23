@@ -38,6 +38,14 @@ vi.mock("@/lib/hierarchy", () => ({
   getHierarchyLevels: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("@/lib/auth/access", () => ({
+  currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("@/components/forms/DeleteEntityButton", () => ({
+  DeleteEntityButton: () => null,
+}));
+
 vi.mock("next/link", () => ({
   default: ({
     href,
@@ -92,10 +100,12 @@ function buildBillingPeriodsQuery(data: unknown) {
 function makeFrom(
   edgeRows: unknown,
   periodRows: unknown = [],
+  microgridRow: unknown = { id: "mg-1", name: "Test Microgrid" },
 ) {
   return (table: string) => {
     if (table === "edges") return buildEdgesQuery(edgeRows);
     if (table === "billing_periods") return buildBillingPeriodsQuery(periodRows);
+    if (table === "microgrids") return buildQuery(microgridRow);
     // All other tables (households, billing_line_items, microgrid_recent_activity)
     // return empty arrays so the page renders without widget data.
     return buildQuery([]);

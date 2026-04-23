@@ -15,6 +15,8 @@ import { OpenPeriodSummary } from "@/components/dashboard/OpenPeriodSummary";
 import { TopHouseholdsLeaderboard, type LeaderboardEntry } from "@/components/dashboard/TopHouseholdsLeaderboard";
 import { ConsumptionCalendarWidget } from "@/components/dashboard/ConsumptionCalendarWidget";
 import { ActivityLog, type ActivityEvent } from "@/components/dashboard/ActivityLog";
+import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 
 // Microgrid Dashboard landing (D2 / #53, UX1a / #72, UX1b / #73).
 //
@@ -122,6 +124,12 @@ export default async function MicrogridDashboardPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+
+  // ── Microgrid metadata + access check (for Delete button, AC-UI-2) ──────
+  const [{ data: microgridData }, canManage] = await Promise.all([
+    supabase.from("microgrids").select("id, name").eq("id", id).single(),
+    currentUserCanAccessMicrogrid(supabase, id),
+  ]);
 
   // ── Query 1: Edges (+ devices for OpenEMS channels) ─────────────────────
   const { data: edgesRaw } = await supabase
@@ -343,7 +351,16 @@ export default async function MicrogridDashboardPage({
 
   return (
     <div className="space-y-4">
-      <HierarchyNav levels={levels} className="mb-2" />
+      <div className="flex items-center justify-between">
+        <HierarchyNav levels={levels} className="mb-2" />
+        {canManage && microgridData && (
+          <DeleteEntityButton
+            entity="microgrid"
+            id={microgridData.id}
+            name={microgridData.name}
+          />
+        )}
+      </div>
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
       {allEdges.length === 0 && (

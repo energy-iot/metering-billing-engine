@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserIsSuperAdmin } from "@/lib/auth/access";
 import { AddEntityButton } from "@/components/forms/AddEntityButton";
+import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import type { Organization } from "@/lib/types/domain";
 
 /**
@@ -15,7 +16,12 @@ import type { Organization } from "@/lib/types/domain";
  * diverges: super_admin gets a CTA; org_manager with zero visible orgs gets a
  * pointer to contact their administrator.
  */
-export default async function OrganizationsPage() {
+export default async function OrganizationsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
 
   const [isSuperAdmin, orgsResult] = await Promise.all([
@@ -41,7 +47,8 @@ export default async function OrganizationsPage() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <DeletedSuccessBanner searchParams={sp} />
+      <div className="mb-6 mt-4 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-foreground">
           Organizations
         </h1>

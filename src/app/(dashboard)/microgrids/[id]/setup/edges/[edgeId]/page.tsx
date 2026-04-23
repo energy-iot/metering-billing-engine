@@ -7,6 +7,8 @@ import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { DiscoverDevices } from "@/components/DiscoverDevices";
 import { EdgeDetailConfigureButton } from "./edge-detail-configure-button";
+import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 
 // Setup > Edges > [edgeId] — edge detail (D2 / #53, #77).
 // Lists devices on this edge. For each device, shows the linked household
@@ -46,6 +48,8 @@ export default async function EdgeDetailPage({
   if (edgeError || !edge) {
     notFound();
   }
+
+  const canManage = await currentUserCanAccessMicrogrid(supabase, id);
 
   const { data: devices, error: devicesError } = await supabase
     .from("devices")
@@ -106,6 +110,9 @@ export default async function EdgeDetailPage({
           <StatusChip kind="edgeSource" status={edge.data_source_type} />
           {/* Client shell: Configure… button opens EdgeFormModal in edit mode */}
           <EdgeDetailConfigureButton edge={edge} />
+          {canManage && (
+            <DeleteEntityButton entity="edge" id={edge.id} name={edge.name} />
+          )}
         </div>
         {edge.data_source_type === "openems" && (
           <p className="mt-1 font-mono text-xs text-muted-foreground">
