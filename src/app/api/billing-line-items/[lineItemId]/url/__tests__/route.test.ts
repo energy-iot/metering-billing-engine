@@ -157,11 +157,19 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
 
   // ─── (1) Happy path ───────────────────────────────────────────────────────
   it("(1) returns 200 with redirectUrl/orderTrackingId/merchantReference on success", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
     const { POST } = await import("../route");
     const res = await POST(makeReq(), {
       params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
     });
     expect(res.status).toBe(200);
+
+    // Log emits synchronously before the response is consumed.
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"payment.generate_link"'));
+    // Eager resolution: auth.getUser() called exactly once per request.
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
+
     const body = await res.json();
     expect(body).toEqual({
       redirectUrl: GOOD_RESULT.redirectUrl,
@@ -173,6 +181,8 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     const call = generatePaymentLinkMock.mock.calls[0][0];
     expect(call.orderId).toMatch(new RegExp(`^INV-${LINE_ITEM_ID}-\\d+$`));
     expect(call.currency).toBe("UGX");
+
+    infoSpy.mockRestore();
   });
 
   // ─── (2) Not configured ────────────────────────────────────────────────────
