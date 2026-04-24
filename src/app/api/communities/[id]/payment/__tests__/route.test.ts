@@ -1,0 +1,365 @@
+/**
+ * PUT /api/communities/[id]/payment — unit tests (#119 AC-ROUTE-*).
+ *
+ * Supabase + auth helpers + PesapalClient are mocked. Covers:
+ *   (1) Happy path (new config) → 200, encrypts secret, writes all 4 columns
+ *   (2) Happy path (reconfigure w/ blank secret) → secret-preserve skips encrypt
+ *   (3) Permission: non-super_admin (org_manager) → 403
+ *   (4) Permission: cannot access org → 403
+ *   (5) RLS-hidden / missing community → 404
+ *   (6) Pesapal auth fail → 503 { reason: "auth_failed" }, no DB write
+ *   (7) Pesapal unreachable → 503 { reason: "unreachable" }, no DB write
+ *   (8) Malformed body → 400
+ *   (9) First-configuration with blank secret → 400
+ *  (10) base_url is server-derived from sandbox (NOT taken from body)
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NextRequest } from "next/server";
+
+const COMMUNITY_ID = "550e8400-e29b-41d4-a716-446655440010";
+const ORG_ID = "550e8400-e29b-41d4-a716-446655440020";
+
+// ─── Mocks ──────────────────────────────────────────────────────────────────
+
+const getAccessTokenMock = vi.fn();
+
+vi.mock("@/lib/payments/pesapal/client", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/payments/pesapal/client")
+  >("@/lib/payments/pesapal/client");
+  class PesapalClientMock {
+    constructor(public cfg: unknown) {}
+    getAccessToken = getAccessTokenMock;
+  }
+  return {
+    ...actual,
+    PesapalClient: PesapalClientMock,
+  };
+});
+
+let canAccessOrgReturn = true;
+let isSuperAdminReturn = true;
+
+vi.mock("@/lib/auth/access", () => ({
+  currentUserCanAccessOrg: async () => canAccessOrgReturn,
+  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
+}));
+
+// ─── Supabase mock — sequenced from() handlers, shared mockRpc ─────────────
+//
+// Route's from() sequence (success path):
+//   1. communities.select(... payment_provider_secret_encrypted).eq(id).maybeSingle()
+//   2. communities.select(payment_provider_config).eq(id).maybeSingle()     ← pre-update read
+//   3. communities.update(payload).eq(id)
+//
+// Plus: mockRpc is used for fn_get_community_payment_secret (preserve path)
+// and fn_ems_encrypt_secret.
+
+let communitySelectResp: { data: unknown; error: unknown } = {
+  data: {
+    id: COMMUNITY_ID,
+    org_id: ORG_ID,
+    payment_provider_secret_encrypted: null,
+  },
+  error: null,
+};
+let existingCfgSelectResp: { data: unknown; error: unknown } = {
+  data: { payment_provider_config: null },
+  error: null,
+};
+let updateError: unknown = null;
+let updatePayloadCapture: Record<string, unknown> | null = null;
+let fromCallIndex = 0;
+
+const mockFrom = vi.fn();
+const mockRpc = vi.fn();
+const mockGetUser = vi
+  .fn()
+  .mockResolvedValue({ data: { user: { id: "actor-user-1" } } });
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    from: mockFrom,
+    rpc: mockRpc,
+    auth: { getUser: mockGetUser },
+  }),
+}));
+
+function makePutRequest(body: unknown): NextRequest {
+  return new NextRequest(
+    `http://localhost/api/communities/${COMMUNITY_ID}/payment`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+describe("PUT /api/communities/[id]/payment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fromCallIndex = 0;
+    canAccessOrgReturn = true;
+    isSuperAdminReturn = true;
+    communitySelectResp = {
+      data: {
+        id: COMMUNITY_ID,
+        org_id: ORG_ID,
+        payment_provider_secret_encrypted: null,
+      },
+      error: null,
+    };
+    existingCfgSelectResp = {
+      data: { payment_provider_config: null },
+      error: null,
+    };
+    updateError = null;
+    updatePayloadCapture = null;
+
+    mockFrom.mockImplementation(() => {
+      const idx = fromCallIndex++;
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () => {
+              if (idx === 0) return Promise.resolve(communitySelectResp);
+              return Promise.resolve(existingCfgSelectResp);
+            },
+          }),
+        }),
+        update: (payload: Record<string, unknown>) => {
+          updatePayloadCapture = payload;
+          return {
+            eq: () => Promise.resolve({ error: updateError }),
+          };
+        },
+      };
+    });
+
+    mockRpc.mockImplementation((name: string) => {
+      if (name === "fn_get_community_payment_secret") {
+        return Promise.resolve({ data: "DECRYPTED_SECRET_VALUE_X", error: null });
+      }
+      if (name === "fn_ems_encrypt_secret") {
+        return Promise.resolve({ data: "\\x0a0b0c0d", error: null });
+      }
+      return Promise.resolve({ data: null, error: { message: "unexpected rpc" } });
+    });
+
+    getAccessTokenMock.mockResolvedValue("fake-token");
+  });
+
+  // ─── (1) Happy path ────────────────────────────────────────────────────
+  it("(1) happy path writes all 4 columns and returns 200 success", async () => {
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("success");
+    expect(getAccessTokenMock).toHaveBeenCalledTimes(1);
+    expect(updatePayloadCapture).toBeTruthy();
+    const payload = updatePayloadCapture!;
+    expect(payload.payment_provider).toBe("pesapal");
+    expect(payload.payment_provider_config).toMatchObject({
+      consumer_key: "ck_live_abc",
+      base_url: "https://pay.pesapal.com/v3",
+      sandbox: false,
+    });
+    expect(payload.payment_provider_secret_encrypted).toBe("\\x0a0b0c0d");
+    expect(payload.payment_last_configured_at).toEqual(expect.any(String));
+  });
+
+  // ─── (2) Reconfigure with blank secret preserves ciphertext ────────────
+  it("(2) secret-preserve: blank secret + existing ciphertext → no re-encrypt, column omitted", async () => {
+    communitySelectResp = {
+      data: {
+        id: COMMUNITY_ID,
+        org_id: ORG_ID,
+        payment_provider_secret_encrypted: "\\xdeadbeef",
+      },
+      error: null,
+    };
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: true },
+        // no secret_access_key
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(200);
+    // fn_get_community_payment_secret is the preserve-path decrypt.
+    const rpcNames = mockRpc.mock.calls.map((c) => c[0]);
+    expect(rpcNames).toContain("fn_get_community_payment_secret");
+    expect(rpcNames).not.toContain("fn_ems_encrypt_secret");
+    expect(updatePayloadCapture).toBeTruthy();
+    expect(
+      "payment_provider_secret_encrypted" in (updatePayloadCapture as object),
+    ).toBe(false);
+    // Server derived base_url from sandbox=true.
+    expect(
+      (
+        updatePayloadCapture!.payment_provider_config as Record<
+          string,
+          unknown
+        >
+      ).base_url,
+    ).toBe("https://cybqa.pesapal.com/pesapalv3");
+  });
+
+  // ─── (3) org_manager → 403 ─────────────────────────────────────────────
+  it("(3) non-super_admin → 403 before any DB write", async () => {
+    isSuperAdminReturn = false;
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(403);
+    expect(getAccessTokenMock).not.toHaveBeenCalled();
+    expect(updatePayloadCapture).toBeNull();
+  });
+
+  // ─── (4) cross-org → 403 ───────────────────────────────────────────────
+  it("(4) currentUserCanAccessOrg=false → 403", async () => {
+    canAccessOrgReturn = false;
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(403);
+    expect(updatePayloadCapture).toBeNull();
+  });
+
+  // ─── (5) RLS-hidden / missing community → 404 ─────────────────────────
+  it("(5) community not found / RLS-hidden → 404", async () => {
+    communitySelectResp = { data: null, error: null };
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  // ─── (6) Pesapal auth fail → 503 no write ─────────────────────────────
+  it("(6) Pesapal auth failure → 503 auth_failed, no DB persist", async () => {
+    const { PesapalError } = await import("@/lib/payments/pesapal/errors");
+    getAccessTokenMock.mockRejectedValueOnce(
+      new PesapalError("auth nope", "PESAPAL_AUTH_FAILED", 401),
+    );
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.reason).toBe("auth_failed");
+    expect(updatePayloadCapture).toBeNull();
+  });
+
+  // ─── (7) Pesapal unreachable → 503 no write ───────────────────────────
+  it("(7) Pesapal unreachable → 503 unreachable, no DB persist", async () => {
+    const { PesapalError } = await import("@/lib/payments/pesapal/errors");
+    getAccessTokenMock.mockRejectedValueOnce(
+      new PesapalError("net down", "PESAPAL_UNREACHABLE", 503),
+    );
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.reason).toBe("unreachable");
+    expect(updatePayloadCapture).toBeNull();
+  });
+
+  // ─── (8) Malformed body → 400 ─────────────────────────────────────────
+  it("(8) malformed body → 400", async () => {
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({ provider: "not-a-provider" }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  // ─── (9) First configure with blank secret → 400 ──────────────────────
+  it("(9) first configuration with blank secret → 400", async () => {
+    // default communitySelectResp has payment_provider_secret_encrypted: null
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        // no secret
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(400);
+    expect(getAccessTokenMock).not.toHaveBeenCalled();
+  });
+
+  // ─── (10) base_url is server-derived from sandbox ─────────────────────
+  it("(10) base_url is server-derived (sandbox=true → cybqa host)", async () => {
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        // Body sends bogus base_url — should be IGNORED by the server.
+        config: {
+          consumer_key: "ck_live_abc",
+          sandbox: true,
+          base_url: "https://evil.example.com/",
+        } as unknown as Record<string, unknown>,
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(200);
+    const stored = (updatePayloadCapture!.payment_provider_config as Record<
+      string,
+      unknown
+    >).base_url;
+    expect(stored).toBe("https://cybqa.pesapal.com/pesapalv3");
+  });
+});
