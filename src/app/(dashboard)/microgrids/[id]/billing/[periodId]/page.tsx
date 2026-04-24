@@ -46,7 +46,7 @@ export default async function BillingPeriodDetailPage({
       .then((res) => ({ ...res, data: res.data as BillingPeriod | null })),
     supabase
       .from("billing_line_items")
-      .select("*")
+      .select("*, payment_status, paid_at, paid_by_user_id, payment_notes")
       .eq("billing_period_id", periodId)
       .returns<BillingLineItem[]>(),
     supabase

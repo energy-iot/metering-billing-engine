@@ -142,6 +142,55 @@ describe("StatusChip — openemsBackendHealth kind", () => {
   });
 });
 
+// #124 — Billing line item payment status chip (4 states).
+describe("StatusChip — billingLineItemPaymentStatus kind", () => {
+  it("renders 'unpaid' with neutral background + NO dot", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemPaymentStatus" status="unpaid" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-muted");
+    const dot = chip?.querySelector(
+      "span.bg-success, span.bg-warning, span.bg-destructive, span.bg-muted-foreground",
+    );
+    expect(dot).toBeNull();
+    expect(container.textContent).toContain("Unpaid");
+  });
+
+  it("renders 'paid' with success background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemPaymentStatus" status="paid" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-success-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-success");
+    expect(container.textContent).toContain("Paid");
+  });
+
+  it("renders 'failed' with alert background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemPaymentStatus" status="failed" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-destructive-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-destructive");
+    expect(container.textContent).toContain("Failed");
+  });
+
+  it("renders 'refunded' with neutral background + NO dot", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemPaymentStatus" status="refunded" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-muted");
+    const dot = chip?.querySelector(
+      "span.bg-success, span.bg-warning, span.bg-destructive, span.bg-muted-foreground",
+    );
+    expect(dot).toBeNull();
+    expect(container.textContent).toContain("Refunded");
+  });
+});
+
 // #119 — Community Payment-provider health chip (4 states).
 describe("StatusChip — paymentHealth kind", () => {
   it("renders 'healthy' with success background + dot", () => {

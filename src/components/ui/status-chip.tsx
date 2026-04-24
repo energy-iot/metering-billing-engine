@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 type Kind =
   | "billingPeriod"
+  | "billingLineItemPaymentStatus"
   | "edge"
   | "edgeSource"
   | "deviceType"
@@ -27,6 +28,20 @@ type Kind =
 type StatusMap = Record<string, { label: string; tone: ChipProps["tone"]; dot?: boolean }>;
 
 const MAPS: Record<Kind, StatusMap> = {
+  // Billing line item payment status — maps the billing_line_item_payment_status
+  // enum (migration 00021) to chip tones for the manual mark-paid UI (#124).
+  //
+  // Tone rationale (per Designer §3 evaluation lens, existing token set):
+  //   unpaid   → neutral  (resting state — no action taken yet)
+  //   paid     → success  (money received — positive outcome)
+  //   failed   → alert    (payment failed — attention required; dot marker)
+  //   refunded → info     (resolves to neutral — terminal, informational)
+  billingLineItemPaymentStatus: {
+    unpaid:   { label: "Unpaid",   tone: "neutral"                   },
+    paid:     { label: "Paid",     tone: "success", dot: true        },
+    failed:   { label: "Failed",   tone: "alert",   dot: true        },
+    refunded: { label: "Refunded", tone: "neutral"                   },
+  },
   billingPeriod: {
     draft:  { label: "Draft",  tone: "warn",    dot: true },
     closed: { label: "Closed", tone: "success", dot: true },

@@ -123,6 +123,11 @@ const lineItems: BillingLineItem[] = [
     ],
     total_amount: 49000,
     created_at: "2026-04-01T00:00:00Z",
+    // payment status columns (migration 00021)
+    payment_status: "unpaid",
+    paid_at: null,
+    paid_by_user_id: null,
+    payment_notes: null,
   },
   {
     id: "li-2",
@@ -138,6 +143,10 @@ const lineItems: BillingLineItem[] = [
     ],
     total_amount: 22500,
     created_at: "2026-04-01T00:00:00Z",
+    payment_status: "unpaid",
+    paid_at: null,
+    paid_by_user_id: null,
+    payment_notes: null,
   },
   {
     id: "li-3",
@@ -153,6 +162,10 @@ const lineItems: BillingLineItem[] = [
     ],
     total_amount: 73000,
     created_at: "2026-04-01T00:00:00Z",
+    payment_status: "unpaid",
+    paid_at: null,
+    paid_by_user_id: null,
+    payment_notes: null,
   },
 ];
 
