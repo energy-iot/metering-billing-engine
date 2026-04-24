@@ -1712,3 +1712,154 @@ describe("RLS: OpenEMS Backend (#101)", () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// RLS: Community payment provider (#115)
+// Exercises the fn_get_community_payment_secret truth table + encryption
+// round-trip via fn_ems_encrypt_secret (shared DEK).
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("RLS: Community payment provider (#115)", () => {
+  const PAYMENT_SECRET_PLAINTEXT = "cs_live_abcdefghijklmnopqrstuvwxyz";
+
+  async function setupPaymentConfig() {
+    const svc = await serviceClient();
+    const { data: encrypted } = await svc.rpc("fn_ems_encrypt_secret", {
+      p_plaintext: PAYMENT_SECRET_PLAINTEXT,
+    });
+    await svc
+      .from("communities")
+      .update({
+        payment_provider: "pesapal",
+        payment_provider_config: {
+          consumer_key: "ck_live_xyz",
+          base_url: "https://pay.pesapal.com/v3",
+          ipn_id: "ipn-abc",
+        },
+        payment_provider_secret_encrypted: encrypted,
+        payment_last_configured_at: new Date().toISOString(),
+      })
+      .eq("id", FIXTURE.communityA);
+  }
+
+  async function clearPaymentConfig() {
+    const svc = await serviceClient();
+    // CHECK constraint requires the four fields to be NULLed together.
+    await svc
+      .from("communities")
+      .update({
+        payment_provider: null,
+        payment_provider_config: null,
+        payment_provider_secret_encrypted: null,
+        payment_last_configured_at: null,
+      })
+      .eq("id", FIXTURE.communityA);
+  }
+
+  it("AC: encryption round-trip — setup + fn_get_community_payment_secret as super_admin returns plaintext", async () => {
+    if (skipIfRequested()) return;
+    await setupPaymentConfig();
+    try {
+      const { data, error } = await userD.client.rpc(
+        "fn_get_community_payment_secret",
+        { _community_id: FIXTURE.communityA }
+      );
+      expect(error).toBeNull();
+      expect(data).toBe(PAYMENT_SECRET_PLAINTEXT);
+    } finally {
+      await clearPaymentConfig();
+    }
+  });
+
+  it("AC: CHECK constraint rejects payment_provider set with NULL last_configured_at", async () => {
+    if (skipIfRequested()) return;
+    const svc = await serviceClient();
+    const { error } = await svc
+      .from("communities")
+      .update({
+        payment_provider: "pesapal",
+        payment_provider_config: { consumer_key: "k", base_url: "u", ipn_id: "i" },
+        payment_provider_secret_encrypted: null,
+        payment_last_configured_at: null,
+      })
+      .eq("id", FIXTURE.communityA);
+    expect(error).not.toBeNull();
+    expect(error?.message ?? "").toMatch(
+      /communities_payment_fields_required|check constraint/i
+    );
+  });
+
+  describe("fn_get_community_payment_secret truth table", () => {
+    it("super_admin gets NULL when secret is not set", async () => {
+      if (skipIfRequested()) return;
+      await clearPaymentConfig();
+      const { data, error } = await userD.client.rpc(
+        "fn_get_community_payment_secret",
+        { _community_id: FIXTURE.communityA }
+      );
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    });
+
+    it("org_manager (owner org) gets NULL — redacted", async () => {
+      if (skipIfRequested()) return;
+      await setupPaymentConfig();
+      try {
+        const { data, error } = await userA.client.rpc(
+          "fn_get_community_payment_secret",
+          { _community_id: FIXTURE.communityA }
+        );
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearPaymentConfig();
+      }
+    });
+
+    it("org_manager (different org) gets NULL — redacted by helper", async () => {
+      if (skipIfRequested()) return;
+      await setupPaymentConfig();
+      try {
+        const { data, error } = await userB.client.rpc(
+          "fn_get_community_payment_secret",
+          { _community_id: FIXTURE.communityA }
+        );
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearPaymentConfig();
+      }
+    });
+
+    it("service_role gets plaintext (server-side path)", async () => {
+      if (skipIfRequested()) return;
+      await setupPaymentConfig();
+      try {
+        const svc = await serviceClient();
+        const { data, error } = await svc.rpc(
+          "fn_get_community_payment_secret",
+          { _community_id: FIXTURE.communityA }
+        );
+        expect(error).toBeNull();
+        expect(data).toBe(PAYMENT_SECRET_PLAINTEXT);
+      } finally {
+        await clearPaymentConfig();
+      }
+    });
+
+    it("userC (no role) gets NULL", async () => {
+      if (skipIfRequested()) return;
+      await setupPaymentConfig();
+      try {
+        const { data, error } = await userC.client.rpc(
+          "fn_get_community_payment_secret",
+          { _community_id: FIXTURE.communityA }
+        );
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearPaymentConfig();
+      }
+    });
+  });
+});

@@ -153,6 +153,12 @@ export type Database = {
           id: string
           name: string
           org_id: string
+          payment_last_configured_at: string | null
+          payment_provider:
+            | Database["public"]["Enums"]["payment_provider_type"]
+            | null
+          payment_provider_config: Json | null
+          payment_provider_secret_encrypted: string | null
         }
         Insert: {
           address_city?: string | null
@@ -166,6 +172,12 @@ export type Database = {
           id?: string
           name: string
           org_id: string
+          payment_last_configured_at?: string | null
+          payment_provider?:
+            | Database["public"]["Enums"]["payment_provider_type"]
+            | null
+          payment_provider_config?: Json | null
+          payment_provider_secret_encrypted?: string | null
         }
         Update: {
           address_city?: string | null
@@ -179,6 +191,12 @@ export type Database = {
           id?: string
           name?: string
           org_id?: string
+          payment_last_configured_at?: string | null
+          payment_provider?:
+            | Database["public"]["Enums"]["payment_provider_type"]
+            | null
+          payment_provider_config?: Json | null
+          payment_provider_secret_encrypted?: string | null
         }
         Relationships: [
           {
@@ -765,6 +783,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      fn_get_community_payment_secret: {
+        Args: { _community_id: string }
+        Returns: string
+      }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
       is_super_admin: { Args: never; Returns: boolean }
       user_can_access_microgrid: {
@@ -795,6 +817,7 @@ export type Database = {
         | "ev_charger"
         | "other"
       microgrid_ems_type: "cloud_aws" | "direct_url"
+      payment_provider_type: "pesapal"
       role_scope_type: "org"
       user_role: "super_admin" | "org_manager"
     }
@@ -946,6 +969,7 @@ export const Constants = {
         "other",
       ],
       microgrid_ems_type: ["cloud_aws", "direct_url"],
+      payment_provider_type: ["pesapal"],
       role_scope_type: ["org"],
       user_role: ["super_admin", "org_manager"],
     },
