@@ -132,6 +132,17 @@ export async function POST(
   const microgridId = period.microgrid_id;
   const communityId = microgrid.community_id;
 
+  // Eager-resolve the authenticated user once so logPaymentEvent is synchronous.
+  let actorUserId: string | null = null;
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    actorUserId = user?.id ?? null;
+  } catch {
+    actorUserId = null;
+  }
+
   // 2. Permission gate. org_manager + super_admin both allowed; secret access
   //    is filtered by fn_get_community_payment_secret (org_manager → null →
   //    PAYMENT_FORBIDDEN below).
@@ -152,12 +163,11 @@ export async function POST(
       communityId,
       microgridId,
       lineItemId,
-      actorUserId: null,
+      actorUserId,
       provider: null,
       status: mapped.reason,
       durationMs: Date.now() - startedAt,
       sensitive: [],
-      supabase,
     });
     return NextResponse.json(
       { error: mapped.message, reason: mapped.reason },
@@ -170,12 +180,11 @@ export async function POST(
       communityId,
       microgridId,
       lineItemId,
-      actorUserId: null,
+      actorUserId,
       provider: null,
       status: "not_configured",
       durationMs: Date.now() - startedAt,
       sensitive: [],
-      supabase,
     });
     return NextResponse.json(
       {
@@ -196,12 +205,11 @@ export async function POST(
       communityId,
       microgridId,
       lineItemId,
-      actorUserId: null,
+      actorUserId,
       provider: paymentConfig.provider,
       status: mapped.reason,
       durationMs: Date.now() - startedAt,
       sensitive: [paymentConfig.secret],
-      supabase,
     });
     return NextResponse.json(
       { error: mapped.message, reason: mapped.reason },
@@ -245,12 +253,11 @@ export async function POST(
       communityId,
       microgridId,
       lineItemId,
-      actorUserId: null,
+      actorUserId,
       provider: paymentConfig.provider,
       status: mapped.reason,
       durationMs: Date.now() - startedAt,
       sensitive: [paymentConfig.secret],
-      supabase,
     });
     return NextResponse.json(
       { error: mapped.message, reason: mapped.reason },
@@ -262,12 +269,11 @@ export async function POST(
     communityId,
     microgridId,
     lineItemId,
-    actorUserId: null,
+    actorUserId,
     provider: paymentConfig.provider,
     status: "success",
     durationMs: Date.now() - startedAt,
     sensitive: [paymentConfig.secret, result.redirectUrl, result.providerOrderId],
-    supabase,
   });
 
   return NextResponse.json({
@@ -333,7 +339,7 @@ function mapPaymentError(err: unknown): MappedError {
   }
 }
 
-async function logPaymentEvent(args: {
+function logPaymentEvent(args: {
   communityId: string;
   microgridId: string;
   lineItemId: string;
@@ -342,26 +348,13 @@ async function logPaymentEvent(args: {
   status: string;
   durationMs: number;
   sensitive: string[];
-  supabase: Awaited<ReturnType<typeof createClient>>;
-}): Promise<void> {
-  let actor = args.actorUserId;
-  if (!actor) {
-    try {
-      const {
-        data: { user },
-      } = await args.supabase.auth.getUser();
-      actor = user?.id ?? null;
-    } catch {
-      actor = null;
-    }
-  }
-
+}): void {
   const payload = {
     event: "payment.generate_link",
     community_id: args.communityId,
     microgrid_id: args.microgridId,
     line_item_id: args.lineItemId,
-    actor_user_id: actor,
+    actor_user_id: args.actorUserId,
     provider: args.provider,
     status: args.status,
     duration_ms: args.durationMs,
