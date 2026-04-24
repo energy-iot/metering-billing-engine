@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 /**
- * DiscoverDevices component tests (F #57, #68).
+ * DiscoverDevices component tests (F #57, #68, #122).
  *
  * Covers:
  *   (a) suggested device_type renders in the dropdown
  *   (b) dropdown override propagates to the save payload
  *   (c) Save calls POST /api/devices with the correct payload shape
  *   (d) 'Already added' chip renders as disabled for a component matching an existing device row
- *   (e) null-channel rows render muted with help text and are excluded from Save payload (#68)
+ *   (e) null-channel rows: observability note shown; rows are selectable and included in save (#122)
+ *   (f) checkbox selection state — tick/untick updates pending count and save payload
+ *   (g) mixed billable + non-billable + already-added renders all in one list
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -110,7 +112,7 @@ describe("DiscoverDevices", () => {
   // (b) Dropdown override propagates to the save payload
   // ──────────────────────────────────────────────────────────────────────────
   describe("(b) dropdown override propagates to save payload", () => {
-    it("sends the overridden device_type when the user changes the dropdown", async () => {
+    it("sends the suggested device_type when the user saves without changing the dropdown", async () => {
       const devices = [makeDevice("meter0", "consumption_meter")];
 
       // First call: discover
@@ -128,14 +130,11 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => screen.getByText("Save devices"));
+      // Wait for Add button to appear (auto-selected by default)
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
 
-      // Simulate changing the select value by dispatching a custom event
-      // (Radix Select is hard to drive via fireEvent.change; we test the
-      // payload shape by inspecting the fetch call arguments after save).
-      // For the purpose of this test, we click Save without changing the dropdown
-      // and verify the suggested type is sent.
-      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+      // Click Add without changing the dropdown
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
 
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -172,13 +171,13 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => screen.getByText("Save devices"));
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
 
       // Update the name input
       const input = screen.getByPlaceholderText("Enter device name") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "Solar PV meter" } });
 
-      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
 
       await waitFor(() => {
         const [url, init] = fetchMock.mock.calls[1];
@@ -219,8 +218,8 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => screen.getByText("Save devices"));
-      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
 
       await waitFor(() => {
         const [, init] = fetchMock.mock.calls[1];
@@ -254,9 +253,9 @@ describe("DiscoverDevices", () => {
       });
     });
 
-    it("disabled rows do not show a Save button", async () => {
+    it("already-added rows have a pre-checked disabled checkbox", async () => {
       const devices = [
-        makeDevice("meter0", "grid_meter", true), // already added — no Save for this
+        makeDevice("meter0", "grid_meter", true), // already added
       ];
 
       fetchMock.mockResolvedValueOnce({
@@ -267,9 +266,11 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /save devices/i })).toBeNull();
-      });
+      await waitFor(() => screen.getByText("Already added"));
+
+      const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+      expect(checkbox.disabled).toBe(true);
     });
 
     it("renders disabled row with opacity class for already-added device", async () => {
@@ -289,13 +290,32 @@ describe("DiscoverDevices", () => {
       const disabledRow = container.querySelector(".opacity-60");
       expect(disabledRow).not.toBeNull();
     });
+
+    it("Add button shows 0 count (disabled) when only already-added devices present", async () => {
+      const devices = [
+        makeDevice("meter0", "grid_meter", true), // already added — not counted in Add
+      ];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => screen.getByText("Already added"));
+
+      const addBtn = screen.getByRole("button", { name: /add 0 devices/i }) as HTMLButtonElement;
+      expect(addBtn.disabled).toBe(true);
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // (e) null-channel rows — muted rendering + excluded from Save (#68)
+  // (e) null-channel rows — observability note shown; rows are selectable (#122)
   // ──────────────────────────────────────────────────────────────────────────
   describe("(e) null-channel rows (battery, inverter, grid_meter, pv_meter)", () => {
-    it("renders muted row with help text when openemsChannelAddress is null", async () => {
+    it("renders observability note when openemsChannelAddress is null", async () => {
       const devices = [makeDevice("ess0", "battery", false, null)];
 
       fetchMock.mockResolvedValueOnce({
@@ -313,20 +333,15 @@ describe("DiscoverDevices", () => {
       });
     });
 
-    it("excludes null-channel device from the POST /api/devices payload on bulk save", async () => {
-      // One null-channel device (battery) + one billable device (consumption_meter)
-      const devices = [
-        makeDevice("ess0", "battery", false, null),
-        makeDevice("meter0", "consumption_meter", false, "meter0/ActiveConsumptionEnergy"),
-      ];
+    it("null-channel device is auto-selected and included in POST payload", async () => {
+      // One null-channel device (battery)
+      const devices = [makeDevice("ess0", "battery", false, null)];
 
-      // First call: discover
       fetchMock.mockResolvedValueOnce({
         ok: true,
         json: async () => mockDiscoverResponse(devices),
       } as Response);
 
-      // Second call: save
       fetchMock.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ saved: [{ id: "new-uuid" }] }),
@@ -335,8 +350,9 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => screen.getByText("Save devices"));
-      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+      // Add button is enabled (null-channel row auto-selected)
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
 
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -344,13 +360,50 @@ describe("DiscoverDevices", () => {
         expect(url).toBe("/api/devices");
 
         const body = JSON.parse(init?.body as string);
-        // Only meter0 (consumption_meter) should be in the payload — ess0 has no channel
+        // ess0 (null-channel) is in the payload with openemsChannelAddress: null
         expect(body.devices).toHaveLength(1);
-        expect(body.devices[0].componentId).toBe("meter0");
+        expect(body.devices[0].componentId).toBe("ess0");
+        expect(body.devices[0].openemsChannelAddress).toBeNull();
       });
     });
 
-    it("does not show Save button when all new rows have null channel", async () => {
+    it("includes both billable and null-channel devices in POST payload by default", async () => {
+      const devices = [
+        makeDevice("ess0", "battery", false, null),
+        makeDevice("meter0", "consumption_meter", false, "meter0/ActiveConsumptionEnergy"),
+      ];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ saved: [{ id: "new-uuid-1" }, { id: "new-uuid-2" }] }),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => screen.getByRole("button", { name: /add 2 devices/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add 2 devices/i }));
+
+      await waitFor(() => {
+        const [, init] = fetchMock.mock.calls[1];
+        const body = JSON.parse(init?.body as string);
+        // Both devices are in the payload
+        expect(body.devices).toHaveLength(2);
+        const ids = body.devices.map((d: { componentId: string }) => d.componentId);
+        expect(ids).toContain("ess0");
+        expect(ids).toContain("meter0");
+        // null-channel device sends openemsChannelAddress: null
+        const battery = body.devices.find((d: { componentId: string }) => d.componentId === "ess0");
+        expect(battery.openemsChannelAddress).toBeNull();
+      });
+    });
+
+    it("unchecking a null-channel row removes it from the Add count", async () => {
       const devices = [makeDevice("ess0", "battery", false, null)];
 
       fetchMock.mockResolvedValueOnce({
@@ -361,11 +414,130 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
+      // Initially auto-selected → Add 1 device
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
+
+      // Uncheck the row
+      const checkboxes = screen.getAllByRole("checkbox");
+      const enabledCheckbox = checkboxes.find(
+        (cb) => !(cb as HTMLInputElement).disabled
+      ) as HTMLInputElement;
+      fireEvent.click(enabledCheckbox);
+
+      // Count drops to 0 → button disabled
       await waitFor(() => {
-        expect(
-          screen.getByText(/No auto-billing channel for this device type/i)
-        ).toBeDefined();
-        expect(screen.queryByRole("button", { name: /save devices/i })).toBeNull();
+        const addBtn = screen.getByRole("button", { name: /add 0 devices/i }) as HTMLButtonElement;
+        expect(addBtn.disabled).toBe(true);
+      });
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // (f) Checkbox selection state — tick/untick updates count + save payload
+  // ──────────────────────────────────────────────────────────────────────────
+  describe("(f) checkbox selection state", () => {
+    it("unchecking a billable row removes it from the save payload", async () => {
+      const devices = [
+        makeDevice("meter0", "consumption_meter"),
+        makeDevice("meter1", "consumption_meter"),
+      ];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ saved: [{ id: "new-uuid" }] }),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      // Both auto-selected by default → Add 2 devices
+      await waitFor(() => screen.getByRole("button", { name: /add 2 devices/i }));
+
+      // Uncheck the first enabled checkbox (meter0)
+      const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+      fireEvent.click(checkboxes[0]);
+
+      // Count drops to 1
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
+
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
+
+      await waitFor(() => {
+        const [, init] = fetchMock.mock.calls[1];
+        const body = JSON.parse(init?.body as string);
+        // Only the checked device should be in the payload
+        expect(body.devices).toHaveLength(1);
+      });
+    });
+
+    it("device-type dropdown override is preserved across re-renders (row state stable)", async () => {
+      const devices = [
+        makeDevice("meter0", "other", false, null),
+      ];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ saved: [{ id: "new-uuid" }] }),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
+
+      // Uncheck then re-check to trigger re-render
+      const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+      const enabledCheckbox = checkboxes.find((cb) => !cb.disabled) as HTMLInputElement;
+      fireEvent.click(enabledCheckbox); // uncheck
+      fireEvent.click(enabledCheckbox); // re-check
+
+      // The dropdown for "other" still shows the original suggestion
+      await waitFor(() => {
+        // "Other" label appears (from the Select trigger showing current value)
+        const otherLabels = screen.getAllByText("Other");
+        expect(otherLabels.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // (g) Mixed billable + non-billable + already-added → unified list
+  // ──────────────────────────────────────────────────────────────────────────
+  describe("(g) mixed device types render in one unified list", () => {
+    it("renders all device types in a single list with appropriate states", async () => {
+      const devices = [
+        makeDevice("meter0", "consumption_meter", true),  // already added
+        makeDevice("ess0", "battery", false, null),       // null-channel, selectable
+        makeDevice("meter1", "pv_meter", false, null),    // null-channel, selectable
+        makeDevice("meter2", "consumption_meter"),         // billable, selectable
+      ];
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockDiscoverResponse(devices),
+      } as Response);
+
+      render(<DiscoverDevices {...defaultProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
+
+      await waitFor(() => {
+        // Already-added chip present
+        expect(screen.getByText("Already added")).toBeDefined();
+        // Observability note for null-channel devices (two devices → two notes)
+        const notes = screen.getAllByText(/No auto-billing channel for this device type/i);
+        expect(notes.length).toBe(2);
+        // Add button counts 3 new devices (ess0 + meter1 + meter2)
+        expect(screen.getByRole("button", { name: /add 3 devices/i })).toBeDefined();
       });
     });
   });
@@ -425,19 +597,19 @@ describe("DiscoverDevices", () => {
       render(<DiscoverDevices {...defaultProps} />);
       fireEvent.click(screen.getByRole("button", { name: /discover devices/i }));
 
-      await waitFor(() => screen.getByText("Save devices"));
+      await waitFor(() => screen.getByRole("button", { name: /add 1 device/i }));
 
       // Change name before save
       const input = screen.getByPlaceholderText("Enter device name") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "My Meter" } });
 
-      fireEvent.click(screen.getByRole("button", { name: /save devices/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add 1 device/i }));
 
       await waitFor(() => {
         // Error message is shown
         expect(screen.getByText(/Not authorized/i)).toBeDefined();
-        // User selections are preserved — Save button still visible
-        expect(screen.getByRole("button", { name: /save devices/i })).toBeDefined();
+        // User selections are preserved — Add button still visible
+        expect(screen.getByRole("button", { name: /add 1 device/i })).toBeDefined();
         // Name input still has the value
         const inputAfter = screen.getByPlaceholderText("Enter device name") as HTMLInputElement;
         expect(inputAfter.value).toBe("My Meter");

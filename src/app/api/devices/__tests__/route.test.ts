@@ -129,4 +129,35 @@ describe("POST /api/devices", () => {
       expect.objectContaining({ onConflict: "edge_id,openems_component_id" })
     );
   });
+
+  // (f) openemsChannelAddress: null is accepted — non-billable devices registered for observability
+  it("(f) returns 200 when openemsChannelAddress is null (non-billable device)", async () => {
+    const savedRow = {
+      id: "device-uuid-2",
+      name: "Main Battery",
+      device_type: "battery",
+      openems_component_id: "ess0",
+    };
+
+    mockSelect.mockResolvedValueOnce({ data: [savedRow], error: null });
+
+    const { POST } = await import("../route");
+    const req = makeRequest({
+      edgeId: VALID_UUID,
+      devices: [
+        {
+          componentId: "ess0",
+          factoryId: "io.openems.edge.ess.generic.ManagedSymmetricEss",
+          openemsChannelAddress: null,
+          deviceType: "battery",
+          name: "Main Battery",
+        },
+      ],
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ saved: [savedRow] });
+  });
 });
