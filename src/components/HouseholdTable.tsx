@@ -6,18 +6,25 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Device, Household } from "@/lib/types/domain";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export function HouseholdTable({
   microgridId,
   households,
   devices,
   primaryDeviceAssignments,
+  canManage = false,
+  onAdd,
 }: {
   microgridId: string;
   households: Household[];
   devices: Device[];
   /** Map of household_id → device_id for primary_consumption_meter rows */
   primaryDeviceAssignments: Record<string, string>;
+  /** Whether the current user can manage households. Defaults to false. */
+  canManage?: boolean;
+  /** Called when the user clicks the "Add household" CTA in the empty state. */
+  onAdd?: () => void;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -284,9 +291,33 @@ export function HouseholdTable({
       )}
 
       {households.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No households yet. Add a household to get started.
-        </p>
+        <EmptyState
+          eyebrow="Households"
+          title="Add the first household"
+          body={
+            <>
+              Households are the customers on this microgrid. Each gets their
+              own bill. Add them now; link their meter later.
+            </>
+          }
+          cta={
+            canManage && onAdd ? (
+              <button
+                type="button"
+                onClick={onAdd}
+                className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              >
+                + Add household
+              </button>
+            ) : undefined
+          }
+          footnote={
+            !canManage
+              ? "Ask a super admin to add households for this microgrid."
+              : undefined
+          }
+          className="border-0 shadow-none bg-transparent p-0"
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">

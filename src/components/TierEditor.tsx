@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Banner } from "@/components/ui/banner";
 import { Input } from "@/components/ui/input";
 import { Currency } from "@/components/format/currency";
+import { EmptyState } from "@/components/ui/empty-state";
 import { calculateTieredCost } from "@/lib/billing/calculations";
 
 const SAMPLE_USAGE_KWH = 100;
@@ -15,10 +16,13 @@ export function TierEditor({
   microgridId,
   currency,
   initialSchedule,
+  canManage = false,
 }: {
   microgridId: string;
   currency: string;
   initialSchedule: RateSchedule | null;
+  /** Whether the current user can manage the rate schedule. Defaults to false. */
+  canManage?: boolean;
 }) {
   const router = useRouter();
 
@@ -266,9 +270,37 @@ export function TierEditor({
         )}
 
         {tiers.length === 0 ? (
-          <p className="mb-6 text-sm text-muted-foreground">
-            No tiers configured. Add a tier to define the rate schedule.
-          </p>
+          <div className="mb-6">
+            <EmptyState
+              tone="warn"
+              eyebrow="Rate schedule"
+              title="Set up the rate schedule"
+              body={
+                <>
+                  Tiers define the kWh price bands — e.g. the first 50 kWh at
+                  one rate, the next 100 at a higher rate. Without tiers, bills
+                  come out zero.
+                </>
+              }
+              cta={
+                canManage ? (
+                  <button
+                    type="button"
+                    onClick={addTier}
+                    className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+                  >
+                    + Add first tier
+                  </button>
+                ) : undefined
+              }
+              footnote={
+                !canManage
+                  ? "Ask a super admin to configure the rate schedule for this microgrid."
+                  : undefined
+              }
+              className="border-0 shadow-none bg-transparent p-0"
+            />
+          </div>
         ) : (
           <div className="mb-6 overflow-x-auto">
             <table className="w-full text-left text-sm">

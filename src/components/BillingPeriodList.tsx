@@ -11,6 +11,7 @@ import { Kwh } from "@/components/format/kwh";
 import { LocalDate } from "@/components/format/local-date";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PeriodPicker, type PeriodOption } from "@/components/ui/period-picker";
+import { EmptyState } from "@/components/ui/empty-state";
 
 function toPeriodOption(
   period: BillingPeriod,
@@ -43,11 +44,14 @@ export function BillingPeriodList({
   periods,
   summaries,
   currency,
+  canManage = false,
 }: {
   microgridId: string;
   periods: BillingPeriod[];
   summaries: Record<string, { totalKwh: number; totalAmount: number } | undefined>;
   currency: string;
+  /** Whether the current user can manage billing periods. Defaults to false. */
+  canManage?: boolean;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -196,9 +200,35 @@ export function BillingPeriodList({
       )}
 
       {periods.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No billing periods yet. Create a new period to get started.
-        </p>
+        <EmptyState
+          eyebrow="Billing periods"
+          title="Create the first billing period"
+          body={
+            <>
+              A billing period defines the start and end dates you&apos;re
+              invoicing for — typically one calendar month. When you close it,
+              MBE snapshots meter readings and generates line items for every
+              household.
+            </>
+          }
+          cta={
+            canManage ? (
+              <button
+                type="button"
+                onClick={() => setShowCreateForm(true)}
+                className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              >
+                + Create period
+              </button>
+            ) : undefined
+          }
+          footnote={
+            !canManage
+              ? "Ask a super admin to create the first billing period."
+              : "You'll be able to edit the date range up until you Close the period."
+          }
+          className="border-0 shadow-none bg-transparent p-0"
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
