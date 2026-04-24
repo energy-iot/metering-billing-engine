@@ -61,9 +61,10 @@ async function fetchOrgLevel(
     };
   }
 
-  const current =
-    (currentOrgId ? orgList.find((o) => o.id === currentOrgId) : undefined) ??
-    orgList[0];
+  // Resolve the "current" org only when a valid ID was provided.
+  const current = currentOrgId
+    ? orgList.find((o) => o.id === currentOrgId)
+    : undefined;
 
   const siblingHref = (id: string) =>
     currentListingPath ? `${currentListingPath}?org=${id}` : `/?org=${id}`;
@@ -72,16 +73,36 @@ async function fetchOrgLevel(
   // on the listing (without a filter) so the user can navigate "up" to all orgs.
   const orgHref = currentListingPath ?? "/";
 
+  // No currentOrgId (or invalid ID) with multiple accessible orgs:
+  // show a neutral "All organizations" label so the nav doesn't falsely imply
+  // a filter is in effect.
+  if (!current && orgList.length > 1) {
+    return {
+      kind: "Organization",
+      label: "All organizations",
+      count: orgList.length,
+      href: orgHref,
+      active: false,
+      siblings: orgList.map((o) => ({
+        label: o.name ?? o.id,
+        href: siblingHref(o.id),
+      })),
+    };
+  }
+
+  // Single-org (no filter needed) or a matched currentOrgId.
+  const resolved = current ?? orgList[0];
+
   return {
     kind: "Organization",
-    label: current?.name ?? "Organization",
+    label: resolved?.name ?? "Organization",
     count: orgList.length,
     href: orgHref,
     active: false,
     siblings:
       orgList.length > 1
         ? orgList
-            .filter((o) => o.id !== current?.id)
+            .filter((o) => o.id !== resolved?.id)
             .map((o) => ({ label: o.name ?? o.id, href: siblingHref(o.id) }))
         : undefined,
   };
