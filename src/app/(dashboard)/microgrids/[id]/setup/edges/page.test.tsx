@@ -7,9 +7,9 @@
 //   - Mock @/lib/openems/config so we bypass the microgrid config fetch.
 //   - Call SetupEdgesPage() directly and serialize returned JSX to HTML.
 
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type React from "react";
 
 const mockFrom = vi.fn();
 
@@ -47,10 +47,7 @@ vi.mock("./edges-crud-shell", () => ({
 // Stub EdgeEmptyState — client component (uses useState + AddEdgeDialog which
 // uses useRouter — both unavailable in server-component renderToStaticMarkup tests).
 vi.mock("./edge-empty-state", () => ({
-  EdgeEmptyState: () => {
-    const React = require("react");
-    return React.createElement("p", null, "No edges configured");
-  },
+  EdgeEmptyState: () => React.createElement("p", null, "No edges configured"),
 }));
 
 // Stub EdgeRowActions — client component that uses useRouter + Radix DropdownMenu.
