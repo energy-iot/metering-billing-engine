@@ -9,12 +9,32 @@ import { DiscoverDevices } from "@/components/DiscoverDevices";
 import { EdgeDetailConfigureButton } from "./edge-detail-configure-button";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { EmptyState } from "@/components/ui/empty-state";
+import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { getMicrogridEmsConfig } from "@/lib/openems/config";
+import type { OpenEmsClientConfig } from "@/lib/openems";
 
 // Setup > Edges > [edgeId] — edge detail (D2 / #53, #77).
 // Lists devices on this edge. For each device, shows the linked household
 // (via household_devices) if any.
 //
 // #77 adds: "Configure…" button in the header (via client shell component).
+// #139 adds: edge-online fetch for the empty-state tone (warn if offline).
+
+async function fetchEdgeOnlineStatus(
+  emsConfig: OpenEmsClientConfig | null,
+  openemsEdgeId: string | null,
+): Promise<boolean> {
+  if (!emsConfig || !openemsEdgeId) return false;
+  try {
+    const client = createOpenEmsClient(emsConfig);
+    const statuses = await client.getEdgesStatus([openemsEdgeId]);
+    return statuses.find((s) => s.edgeId === openemsEdgeId)?.online === true;
+  } catch (err) {
+    void err; // treat fetch error as offline
+    return false;
+  }
+}
 
 type DeviceRow = Pick<
   Device,
@@ -50,6 +70,16 @@ export default async function EdgeDetailPage({
   }
 
   const canManage = await currentUserCanAccessMicrogrid(supabase, id);
+
+  // Fetch edge online status for the devices empty-state tone (#139 P6).
+  // Treat emsConfig fetch failure or missing openems_edge_id as offline.
+  let emsConfig: OpenEmsClientConfig | null = null;
+  try {
+    emsConfig = await getMicrogridEmsConfig(supabase, id);
+  } catch {
+    emsConfig = null;
+  }
+  const edgeOnline = await fetchEdgeOnlineStatus(emsConfig, edge.openems_edge_id ?? null);
 
   const { data: devices, error: devicesError } = await supabase
     .from("devices")
@@ -131,9 +161,37 @@ export default async function EdgeDetailPage({
       )}
 
       {(!devices || devices.length === 0) ? (
-        <p className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
-          No devices configured on this edge.
-        </p>
+        edgeOnline ? (
+          <EmptyState
+            eyebrow="Devices"
+            title="Run discovery to see meters"
+            body={
+              <>
+                MBE pulls meters from this edge&apos;s OpenEMS backend. Make
+                sure the edge is online, then click Discover.
+              </>
+            }
+            footnote={
+              canManage
+                ? "The Discover devices card is above this section."
+                : "Ask a super admin to run discovery on this edge."
+            }
+          />
+        ) : (
+          <EmptyState
+            tone="warn"
+            eyebrow="Devices"
+            title="Edge is offline — can't discover yet"
+            body={
+              <>
+                MBE pulls meters from this edge&apos;s OpenEMS backend. Bring{" "}
+                <span className="font-medium text-foreground">{edge.name}</span>{" "}
+                online, then run discovery.
+              </>
+            }
+            footnote="Tip: check the edge hardware and confirm it's reporting to OpenEMS Backend."
+          />
+        )
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           <table className="w-full text-left text-sm">
