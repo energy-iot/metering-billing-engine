@@ -467,9 +467,11 @@ describe("getHierarchyLevels — #134: listing-path sibling hrefs + orgId thread
     });
     const orgLevel = levels.find((l) => l.kind === "Organization");
     expect(orgLevel!.siblings).toBeDefined();
-    const siblingHref = orgLevel!.siblings![0].href;
-    // Must point to the communities listing, not the dashboard root.
-    expect(siblingHref).toBe("/communities?org=org-b");
+    // With no orgId, all orgs appear in the siblings list.
+    // Verify each href uses the listing path format (not /?org=).
+    const siblingHrefs = orgLevel!.siblings!.map((s) => s.href);
+    expect(siblingHrefs.every((h) => h.startsWith("/communities?org="))).toBe(true);
+    expect(siblingHrefs).toContain("/communities?org=org-b");
   });
 
   it("communities scope: org href points to /communities (clear filter)", async () => {
@@ -486,8 +488,11 @@ describe("getHierarchyLevels — #134: listing-path sibling hrefs + orgId thread
     });
     const orgLevel = levels.find((l) => l.kind === "Organization");
     expect(orgLevel!.siblings).toBeDefined();
-    const siblingHref = orgLevel!.siblings![0].href;
-    expect(siblingHref).toBe("/microgrids?org=org-b");
+    // With no orgId, all orgs appear in the siblings list.
+    // Verify each href uses the listing path format (not /?org=).
+    const siblingHrefs = orgLevel!.siblings!.map((s) => s.href);
+    expect(siblingHrefs.every((h) => h.startsWith("/microgrids?org="))).toBe(true);
+    expect(siblingHrefs).toContain("/microgrids?org=org-b");
   });
 
   it("communities scope: orgId param controls current label (not first-alphabetical)", async () => {
@@ -511,14 +516,17 @@ describe("getHierarchyLevels — #134: listing-path sibling hrefs + orgId thread
     expect(orgLevel!.label).toBe("Second Org");
   });
 
-  it("communities scope: invalid orgId falls back to first-alphabetical", async () => {
+  it("communities scope: invalid orgId falls back to 'All organizations' (not first-alphabetical)", async () => {
     const levels = await getHierarchyLevels(multiOrgSupabase, {
       kind: "communities",
       orgId: "org-does-not-exist",
     });
     const orgLevel = levels.find((l) => l.kind === "Organization");
-    // Falls back to first alphabetically: ORG_A = "Nearly Free Energy".
-    expect(orgLevel!.label).toBe("Nearly Free Energy");
+    // Invalid ID → undefined path → multi-org → "All organizations".
+    expect(orgLevel!.label).toBe("All organizations");
+    expect(orgLevel!.count).toBe(2);
+    // Full siblings list (no filtering-out — there is no "current").
+    expect(orgLevel!.siblings).toHaveLength(2);
   });
 
   it("non-listing scopes (microgrid detail) still use /?org=<id> format", async () => {
@@ -531,5 +539,87 @@ describe("getHierarchyLevels — #134: listing-path sibling hrefs + orgId thread
     const siblingHref = orgLevel!.siblings![0].href;
     // Detail pages use the original dashboard-root format.
     expect(siblingHref).toBe("/?org=org-b");
+  });
+});
+
+// ── #136: "All organizations" when no ?org= filter ────────────────────────────
+
+describe("getHierarchyLevels — #136: All organizations label when no org filter", () => {
+  const ORG_B = { id: "org-b", name: "Second Org" };
+
+  const multiOrgSupabase = makeMockSupabase({
+    organizations: [ORG_A, ORG_B],
+    communities: [COMMUNITY_K],
+    microgrids: [MICROGRID_1],
+    edges: [],
+    households: [],
+  });
+
+  const singleOrgSupabase = makeMockSupabase({
+    organizations: [ORG_A],
+    communities: [COMMUNITY_K],
+    microgrids: [MICROGRID_1],
+    edges: [],
+    households: [],
+  });
+
+  it("currentOrgId=undefined + multi-org → label 'All organizations', count=N, full siblings list", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+      // no orgId — simulates visiting /microgrids with no ?org= param
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.label).toBe("All organizations");
+    expect(orgLevel!.count).toBe(2);
+    // All orgs appear in the siblings dropdown (no filtering-out).
+    expect(orgLevel!.siblings).toBeDefined();
+    expect(orgLevel!.siblings!).toHaveLength(2);
+    const siblingLabels = orgLevel!.siblings!.map((s) => s.label);
+    expect(siblingLabels).toContain("Nearly Free Energy");
+    expect(siblingLabels).toContain("Second Org");
+  });
+
+  it("currentOrgId=undefined + multi-org → sibling hrefs include ALL orgs with listing path", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    const siblingHrefs = orgLevel!.siblings!.map((s) => s.href);
+    expect(siblingHrefs).toContain("/microgrids?org=org-a");
+    expect(siblingHrefs).toContain("/microgrids?org=org-b");
+  });
+
+  it("currentOrgId=undefined + single-org → label is the org's name, count=1, siblings=undefined", async () => {
+    const levels = await getHierarchyLevels(singleOrgSupabase, {
+      kind: "microgrids",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.label).toBe("Nearly Free Energy");
+    expect(orgLevel!.count).toBe(1);
+    expect(orgLevel!.siblings).toBeUndefined();
+  });
+
+  it("currentOrgId=valid + multi-org → named org is shown, not 'All organizations'", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+      orgId: "org-a",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.label).toBe("Nearly Free Energy");
+    expect(orgLevel!.count).toBe(2);
+    // Siblings list excludes the current org (original behavior preserved).
+    expect(orgLevel!.siblings!).toHaveLength(1);
+    expect(orgLevel!.siblings![0].label).toBe("Second Org");
+  });
+
+  it("currentOrgId=invalid + multi-org → 'All organizations' (not first-alphabetical)", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+      orgId: "org-does-not-exist",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.label).toBe("All organizations");
+    expect(orgLevel!.count).toBe(2);
+    expect(orgLevel!.siblings!).toHaveLength(2);
   });
 });
