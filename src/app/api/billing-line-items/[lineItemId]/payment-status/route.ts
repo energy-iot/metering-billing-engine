@@ -158,6 +158,14 @@ export async function PATCH(
     );
   }
 
+  // 3a. Resolve actor user ONCE — used for both the paid audit trail and the
+  //     structured log. Single fetch avoids the double-getUser() pattern and
+  //     guarantees the same identity is written to the DB and emitted to logs.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const actorUserId: string | null = user?.id ?? null;
+
   // 4. State transition validation.
   const currentStatus = scoped.payment_status as PaymentStatus;
   try {
@@ -182,15 +190,22 @@ export async function PATCH(
   let updatePayload: Record<string, unknown>;
 
   if (parsed.status === "paid") {
-    // Get current user id for the audit trail.
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    // Guard: the DB CHECK constraint (billing_line_items_payment_audit_fields_required)
+    // requires paid_by_user_id to be non-NULL when payment_status = 'paid'.
+    // If auth.getUser() returned null (degraded/expired session), fail fast here
+    // with a user-actionable 401 rather than letting the UPDATE reach the DB and
+    // surface as an opaque 500 invariant_violation.
+    if (!actorUserId) {
+      return NextResponse.json(
+        { error: "Session expired. Please reload and try again.", reason: "session_expired" },
+        { status: 401 },
+      );
+    }
 
     updatePayload = {
       payment_status: "paid",
       paid_at: new Date().toISOString(),
-      paid_by_user_id: user?.id ?? null,
+      paid_by_user_id: actorUserId,
       payment_notes: parsed.notes,
     };
   } else {
@@ -248,17 +263,8 @@ export async function PATCH(
   // No scrubSecretValues needed: this route does not touch any credentials
   // (no payment provider secret, no AWS key). The deliberate omission is
   // documented here so a future reader can verify the decision was conscious.
-
-  // Resolve actor id for the log (already fetched above for paid path).
-  let actorUserId: string | null = null;
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    actorUserId = user?.id ?? null;
-  } catch {
-    // best effort — don't fail the response on log enrichment error
-  }
+  //
+  // actorUserId was resolved once at step 3a — reused here, no second getUser().
 
   console.info(
     JSON.stringify({

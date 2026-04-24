@@ -12,6 +12,11 @@
  *   (h) 404 RLS-hidden line item
  *   (i) 400 invalid body (missing status, notes > 500 chars)
  *   (j) Log record has notes_present bool, NOT raw notes text
+ *   (k) 401 session_expired when auth.getUser() returns null user on paid transition
+ *
+ * Auth pattern: auth.getUser() is resolved ONCE at route entry (after the
+ * permission gate). The mock fires once per request — not twice — matching the
+ * eager-resolve pattern introduced in #129 for the url route.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -461,5 +466,26 @@ describe("PATCH /api/billing-line-items/[lineItemId]/payment-status", () => {
     expect(logRecord.notes_present).toBe(false);
 
     infoSpy.mockRestore();
+  });
+
+  // ─── (k) 401 session_expired when getUser() returns null user ─────────────
+  //
+  // auth.getUser() returning { data: { user: null } } is an edge case (degraded
+  // session) that would otherwise write null to paid_by_user_id, triggering the
+  // billing_line_items_payment_audit_fields_required CHECK constraint and
+  // surfacing as an opaque 500 invariant_violation. The eager null-guard short-
+  // circuits before the UPDATE and returns a user-actionable 401.
+  it("(k) 401 session_expired when auth.getUser() returns null user on paid transition", async () => {
+    mockGetUser.mockResolvedValueOnce({ data: { user: null } });
+
+    const { PATCH } = await import("../route");
+    const res = await PATCH(makeReq({ status: "paid" }), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.reason).toBe("session_expired");
+    expect(typeof body.error).toBe("string");
   });
 });
