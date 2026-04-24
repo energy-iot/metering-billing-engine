@@ -5,7 +5,7 @@
  *
  * Rendered on the edge detail page (Setup > Edges > [edgeId]).
  * Responsible for:
- *   1. Triggering GET /api/openems/discover?edgeId=<openemsEdgeId>
+ *   1. Triggering GET /api/edges/<edgeDbId>/discover-devices
  *   2. Rendering each discovered component with:
  *      - factoryId (small) + alias (pre-filled name input)
  *      - suggestedDeviceType chip (StatusChip kind="deviceType")
@@ -55,6 +55,9 @@ type Props = {
   openemsEdgeId: string;
 };
 
+// openemsEdgeId is retained in the Props interface for future display use;
+// the discover fetch now uses edgeDbId directly.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
   const router = useRouter();
 
@@ -79,7 +82,7 @@ export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
 
     try {
       const res = await fetch(
-        `/api/openems/discover?edgeId=${encodeURIComponent(openemsEdgeId)}`
+        `/api/edges/${encodeURIComponent(edgeDbId)}/discover-devices`
       );
       const data = await res.json();
 
@@ -106,7 +109,7 @@ export function DiscoverDevices({ edgeDbId, openemsEdgeId }: Props) {
       setDiscoverError("Could not reach the server. Check your network connection.");
       setPhase("idle");
     }
-  }, [openemsEdgeId]);
+  }, [edgeDbId]);
 
   const handleSave = useCallback(async () => {
     // Only save rows that are not already added and have a billable channel address.
