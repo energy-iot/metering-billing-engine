@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { CopyButton } from "@/components/CopyButton";
@@ -14,12 +15,16 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/close-period-dialog";
+import { Banner } from "@/components/ui/banner";
+import { PaymentLinkButton } from "@/components/billing/payment-link-button";
 import type {
   BillingLineItem,
   BillingPeriod,
   Household,
   TierConfig,
 } from "@/lib/types/domain";
+
+const GATE_BANNER_ID = "payment-gate-banner";
 
 export function BillingTable({
   microgridId,
@@ -28,6 +33,9 @@ export function BillingTable({
   households,
   tiers,
   currency,
+  isPaymentConfigured = true,
+  isSuperAdmin = false,
+  communityId,
 }: {
   microgridId: string;
   period: BillingPeriod;
@@ -35,6 +43,12 @@ export function BillingTable({
   households: Household[];
   tiers: TierConfig[];
   currency: string;
+  /** Whether the community has a payment provider configured. Default: true (no gate banner). */
+  isPaymentConfigured?: boolean;
+  /** Whether the current user is a super_admin. Controls gate banner copy. Default: false. */
+  isSuperAdmin?: boolean;
+  /** Community id — used for the super_admin "Go to Payment tab" link. */
+  communityId?: string;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -228,6 +242,20 @@ export function BillingTable({
       accessor: (h) => lineItemMap.get(h.id)?.total_amount ?? null,
       format: (v) => (v == null ? "—" : amountFormat(v)),
     },
+    {
+      kind: "action",
+      header: "Payment",
+      render: (h) => {
+        const item = lineItemMap.get(h.id);
+        if (!item) return null;
+        return (
+          <PaymentLinkButton
+            lineItemId={item.id}
+            disabled={!isPaymentConfigured}
+          />
+        );
+      },
+    },
   ];
 
   // Households with line items for the CopyTable (only households that have data)
@@ -355,6 +383,31 @@ export function BillingTable({
           </p>
         ) : (
           <div className="space-y-4">
+            {/* Gate banner: shown when community has no payment provider configured */}
+            {!isPaymentConfigured && (
+              <Banner
+                id={GATE_BANNER_ID}
+                tone="warn"
+                title="No payment provider configured"
+              >
+                {isSuperAdmin ? (
+                  <>
+                    Connect a payment provider to generate payment links.{" "}
+                    {communityId && (
+                      <Link
+                        href={`/communities/${communityId}/payment`}
+                        className="text-sm font-medium text-warning-fg underline"
+                      >
+                        Go to Payment tab
+                      </Link>
+                    )}
+                  </>
+                ) : (
+                  "Ask a super admin to configure Payment for this community."
+                )}
+              </Banner>
+            )}
+
             <CopyTable
               rows={householdsWithItems}
               columns={columns}

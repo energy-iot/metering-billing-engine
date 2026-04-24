@@ -9,6 +9,9 @@
 //     (a) bg-warning-muted in StatusChip for a draft period
 //     (b) <caption> text from CopyTable
 //     (c) <Currency bareNumber> cells do not contain "UGX"
+//     (d) Payment column header present; action button per row
+//     (e) Gate banner rendered when isPaymentConfigured=false with role-branched copy
+//     (f) Gate banner absent when isPaymentConfigured=true
 
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
@@ -40,7 +43,17 @@ vi.mock("@/lib/supabase/client", () => ({
 Object.defineProperty(navigator, "clipboard", {
   value: { writeText: vi.fn().mockResolvedValue(undefined) },
   writable: true,
+  configurable: true,
 });
+
+// Radix Popover uses ResizeObserver in jsdom — stub it.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
 
 // ─── Fixture data ───────────────────────────────────────────────────────────
 
@@ -151,18 +164,20 @@ function Wrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
+const baseProps = {
+  microgridId: "mg-1",
+  period,
+  lineItems,
+  households,
+  tiers,
+  currency: "UGX",
+};
+
 describe("BillingTable", () => {
   it("(a) draft period status chip contains bg-warning-muted", () => {
     const { container } = render(
       <Wrapper>
-        <BillingTable
-          microgridId="mg-1"
-          period={period}
-          lineItems={lineItems}
-          households={households}
-          tiers={tiers}
-          currency="UGX"
-        />
+        <BillingTable {...baseProps} />
       </Wrapper>
     );
 
@@ -174,14 +189,7 @@ describe("BillingTable", () => {
   it("(b) CopyTable renders a <caption> element with period info", () => {
     const { container } = render(
       <Wrapper>
-        <BillingTable
-          microgridId="mg-1"
-          period={period}
-          lineItems={lineItems}
-          households={households}
-          tiers={tiers}
-          currency="UGX"
-        />
+        <BillingTable {...baseProps} />
       </Wrapper>
     );
 
@@ -195,14 +203,7 @@ describe("BillingTable", () => {
   it("(c) Currency bareNumber cells do not contain 'UGX'", () => {
     const { container } = render(
       <Wrapper>
-        <BillingTable
-          microgridId="mg-1"
-          period={period}
-          lineItems={lineItems}
-          households={households}
-          tiers={tiers}
-          currency="UGX"
-        />
+        <BillingTable {...baseProps} />
       </Wrapper>
     );
 
@@ -213,5 +214,102 @@ describe("BillingTable", () => {
     const tdTexts = tds.map((td) => td.textContent ?? "");
     const hasUgxInCell = tdTexts.some((t) => t.includes("UGX"));
     expect(hasUgxInCell).toBe(false);
+  });
+
+  it("(d) Payment column header present; action button rendered for each row with line item", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} isPaymentConfigured={true} />
+      </Wrapper>
+    );
+
+    // Column header "Payment" present
+    const headers = Array.from(container.querySelectorAll("th[scope='col']"));
+    const paymentHeader = headers.find((h) => h.textContent === "Payment");
+    expect(paymentHeader).not.toBeNull();
+
+    // One Payment link button per row with a line item (3 households, all have items)
+    const paymentBtns = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.textContent?.toLowerCase().includes("payment link"),
+    );
+    expect(paymentBtns.length).toBe(3);
+  });
+
+  it("(e) gate banner rendered for super_admin with go-to-payment link when !isPaymentConfigured", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          {...baseProps}
+          isPaymentConfigured={false}
+          isSuperAdmin={true}
+          communityId="comm-1"
+        />
+      </Wrapper>
+    );
+
+    // Gate banner with id="payment-gate-banner" present
+    const banner = container.querySelector("#payment-gate-banner");
+    expect(banner).not.toBeNull();
+
+    // Contains super_admin copy
+    expect(banner?.textContent).toContain("Connect a payment provider");
+
+    // Contains the payment tab link
+    const link = container.querySelector(`a[href='/communities/comm-1/payment']`);
+    expect(link).not.toBeNull();
+  });
+
+  it("(e) gate banner for org_manager shows no link", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          {...baseProps}
+          isPaymentConfigured={false}
+          isSuperAdmin={false}
+          communityId="comm-1"
+        />
+      </Wrapper>
+    );
+
+    const banner = container.querySelector("#payment-gate-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Ask a super admin");
+
+    // No payment tab link for org_manager
+    const link = container.querySelector(`a[href*='/payment']`);
+    expect(link).toBeNull();
+  });
+
+  it("(f) gate banner absent when isPaymentConfigured=true", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} isPaymentConfigured={true} />
+      </Wrapper>
+    );
+
+    const banner = container.querySelector("#payment-gate-banner");
+    expect(banner).toBeNull();
+  });
+
+  it("(f) payment buttons disabled when !isPaymentConfigured", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable
+          {...baseProps}
+          isPaymentConfigured={false}
+          isSuperAdmin={true}
+          communityId="comm-1"
+        />
+      </Wrapper>
+    );
+
+    const paymentBtns = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.textContent?.toLowerCase().includes("payment link"),
+    );
+    expect(paymentBtns.length).toBe(3);
+    paymentBtns.forEach((btn) => {
+      expect((btn as HTMLButtonElement).disabled).toBe(true);
+      expect(btn.getAttribute("aria-describedby")).toBe("payment-gate-banner");
+    });
   });
 });

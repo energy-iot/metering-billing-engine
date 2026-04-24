@@ -10,6 +10,7 @@ import type {
 import { BillingTable } from "@/components/BillingTable";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { currentUserIsSuperAdmin } from "@/lib/auth/access";
 
 export default async function BillingPeriodDetailPage({
   params,
@@ -24,12 +25,17 @@ export default async function BillingPeriodDetailPage({
     microgridId: id,
   });
 
+  type MicrogridWithCommunity = Microgrid & {
+    communities: { id: string; payment_provider: string | null } | null;
+  };
+
   const [
     { data: period, error: periodError },
     { data: lineItems, error: lineItemsError },
     { data: households, error: householdsError },
     { data: schedule, error: scheduleError },
     { data: microgrid, error: microgridError },
+    isSuperAdmin,
   ] = await Promise.all([
     supabase
       .from("billing_periods")
@@ -59,10 +65,11 @@ export default async function BillingPeriodDetailPage({
       .then((res) => ({ ...res, data: res.data as RateSchedule | null })),
     supabase
       .from("microgrids")
-      .select("id, name, currency")
+      .select("id, name, currency, communities!inner(id, payment_provider)")
       .eq("id", id)
       .single()
-      .then((res) => ({ ...res, data: res.data as Microgrid | null })),
+      .then((res) => ({ ...res, data: res.data as MicrogridWithCommunity | null })),
+    currentUserIsSuperAdmin(supabase),
   ]);
 
   if (periodError || !period) {
@@ -101,6 +108,16 @@ export default async function BillingPeriodDetailPage({
     );
   }
 
+  // Normalize PostgREST join (may be array or single object)
+  const community = microgrid.communities
+    ? Array.isArray(microgrid.communities)
+      ? (microgrid.communities as { id: string; payment_provider: string | null }[])[0]
+      : (microgrid.communities as { id: string; payment_provider: string | null })
+    : null;
+
+  const isPaymentConfigured = community?.payment_provider != null;
+  const communityId = community?.id;
+
   return (
     <>
       <HierarchyNav levels={levels} className="mb-4" />
@@ -111,6 +128,9 @@ export default async function BillingPeriodDetailPage({
         households={households ?? []}
         tiers={(schedule?.tiers ?? []) as { label: string; min_kwh: number; max_kwh: number | null; rate_per_kwh: number }[]}
         currency={microgrid.currency}
+        isPaymentConfigured={isPaymentConfigured}
+        isSuperAdmin={isSuperAdmin}
+        communityId={communityId}
       />
     </>
   );
