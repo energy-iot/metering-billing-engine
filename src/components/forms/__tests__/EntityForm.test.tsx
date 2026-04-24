@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 /**
- * EntityForm tests (#76).
+ * EntityForm tests (#76 + #132).
  *
  * Covers:
  *   - Organization: create POSTs to /api/organizations with all fields.
- *   - Community: create includes injected parentOrgId.
- *   - Microgrid: create includes parentCommunityId + currency default.
+ *   - Community: create includes injected parentOrgId (locked mode).
+ *   - Community picker mode (#132): org select required; payload uses selectedOrgId.
+ *   - Microgrid: create includes parentCommunityId + currency default (locked mode).
+ *   - Microgrid picker mode (#132): community select required; payload uses selectedCommunityId.
  *   - Edit mode (microgrid): PATCH payload contains ONLY dirty fields;
  *     untouched fields (name, currency) are NOT sent when only address_city
  *     changes.
@@ -365,6 +367,126 @@ describe("EntityForm", () => {
         name: "Kisakye MG-2",
         address_city: "Entebbe",
       });
+    });
+  });
+
+  // ── Community — picker mode (#132) ───────────────────────────────────────
+  describe("community: picker mode (availableOrgs)", () => {
+    const orgs = [
+      { id: "org-a", name: "Alpha Energy" },
+      { id: "org-b", name: "Beta Power" },
+    ];
+
+    it("renders an Organization select when availableOrgs is provided", () => {
+      render(
+        <EntityForm
+          entity="community"
+          mode="create"
+          availableOrgs={orgs}
+          open={true}
+          onOpenChange={() => {}}
+        />
+      );
+      expect(screen.getByLabelText(/^Organization/i)).toBeTruthy();
+    });
+
+    it("shows a validation error when submitted without selecting an org", async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ community: { id: "c1" } }),
+      } as Response);
+
+      render(
+        <EntityForm
+          entity="community"
+          mode="create"
+          availableOrgs={orgs}
+          open={true}
+          onOpenChange={() => {}}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText(/^Name/i), {
+        target: { value: "Test Community" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /create/i }));
+
+      await waitFor(() => {
+        const alerts = screen.getAllByRole("alert");
+        const orgErr = alerts.find((a) =>
+          /organization is required/i.test(a.textContent ?? "")
+        );
+        expect(orgErr).toBeDefined();
+      });
+      // fetch must NOT have been called — client validation stopped submission.
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Microgrid — picker mode (#132) ───────────────────────────────────────
+  describe("microgrid: picker mode (availableCommunities)", () => {
+    const communities = [
+      { id: "c-a", name: "Kisakye", org_name: "EnergyIoT Uganda" },
+      { id: "c-b", name: "Gulu", org_name: "EnergyIoT Uganda" },
+    ];
+
+    it("renders a Community select when availableCommunities is provided", () => {
+      render(
+        <EntityForm
+          entity="microgrid"
+          mode="create"
+          availableCommunities={communities}
+          open={true}
+          onOpenChange={() => {}}
+        />
+      );
+      expect(screen.getByLabelText(/^Community/i)).toBeTruthy();
+    });
+
+    it("shows validation error when submitted without selecting a community", async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ microgrid: { id: "m1" } }),
+      } as Response);
+
+      render(
+        <EntityForm
+          entity="microgrid"
+          mode="create"
+          availableCommunities={communities}
+          open={true}
+          onOpenChange={() => {}}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText(/^Name/i), {
+        target: { value: "Test MG" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /create/i }));
+
+      await waitFor(() => {
+        const alerts = screen.getAllByRole("alert");
+        const commErr = alerts.find((a) =>
+          /community is required/i.test(a.textContent ?? "")
+        );
+        expect(commErr).toBeDefined();
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does NOT render the community picker in locked (parentCommunityId) mode", () => {
+      render(
+        <EntityForm
+          entity="microgrid"
+          mode="create"
+          parentCommunityId="c-a"
+          open={true}
+          onOpenChange={() => {}}
+        />
+      );
+      expect(screen.queryByLabelText(/^Community/i)).toBeNull();
     });
   });
 });

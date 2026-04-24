@@ -48,6 +48,7 @@ import type {
   Community,
   Microgrid,
 } from "@/lib/types/domain";
+import type { OrgOption, CommunityOption } from "./AddEntityButton";
 
 // ── Props (discriminated union) ──────────────────────────────────────────
 
@@ -67,14 +68,34 @@ export type EntityFormProps = CommonModalProps &
     | {
         entity: "community";
         mode: "create" | "edit";
+        /** Single-parent locked mode. */
         parentOrgId: string;
+        availableOrgs?: never;
         initialValues?: Partial<Community> & { id?: string };
+      }
+    | {
+        entity: "community";
+        mode: "create";
+        /** Multi-parent picker mode. Only valid for create. */
+        availableOrgs: OrgOption[];
+        parentOrgId?: never;
+        initialValues?: never;
       }
     | {
         entity: "microgrid";
         mode: "create" | "edit";
+        /** Single-parent locked mode. */
         parentCommunityId: string;
+        availableCommunities?: never;
         initialValues?: Partial<Microgrid> & { id?: string };
+      }
+    | {
+        entity: "microgrid";
+        mode: "create";
+        /** Multi-parent picker mode. Only valid for create. */
+        availableCommunities: CommunityOption[];
+        parentCommunityId?: never;
+        initialValues?: never;
       }
   );
 
@@ -86,6 +107,10 @@ type FormState = AddressValues & {
   currency?: string;
   lat?: string; // kept as string for input binding
   lng?: string;
+  /** Selected org ID when in community picker mode. */
+  selectedOrgId?: string;
+  /** Selected community ID when in microgrid picker mode. */
+  selectedCommunityId?: string;
 };
 
 type FieldErrors = Partial<Record<string, string>>;
@@ -147,11 +172,13 @@ function buildCreatePayload(
   }
 
   if (props.entity === "community") {
-    payload.org_id = props.parentOrgId;
+    // parentOrgId is set in locked mode; selectedOrgId is used in picker mode.
+    payload.org_id = props.parentOrgId ?? state.selectedOrgId;
     payload.geography_notes = state.geography_notes?.trim() ?? "";
   }
   if (props.entity === "microgrid") {
-    payload.community_id = props.parentCommunityId;
+    // parentCommunityId is set in locked mode; selectedCommunityId is used in picker mode.
+    payload.community_id = props.parentCommunityId ?? state.selectedCommunityId;
     payload.currency = state.currency ?? "UGX";
     payload.lat = state.lat?.trim() ? state.lat.trim() : null;
     payload.lng = state.lng?.trim() ? state.lng.trim() : null;
@@ -285,12 +312,20 @@ export function EntityForm(props: EntityFormProps) {
       if (!(state.address_country ?? "").trim())
         errs.address_country = "Country is required.";
     }
+    if (props.entity === "community" && "availableOrgs" in props && props.availableOrgs) {
+      if (!state.selectedOrgId)
+        errs.selectedOrgId = "Organization is required.";
+    }
     if (props.entity === "microgrid") {
       if (!(state.currency ?? "").trim())
         errs.currency = "Currency is required.";
+      if ("availableCommunities" in props && props.availableCommunities) {
+        if (!state.selectedCommunityId)
+          errs.selectedCommunityId = "Community is required.";
+      }
     }
     return errs;
-  }, [state, props.entity]);
+  }, [state, props]);
 
   const handleSubmit = React.useCallback(
     async (e: React.FormEvent) => {
@@ -396,6 +431,93 @@ export function EntityForm(props: EntityFormProps) {
                 {topError}
               </Banner>
             )}
+
+            {/* Parent picker — community create in multi-org scope */}
+            {props.entity === "community" &&
+              "availableOrgs" in props &&
+              props.availableOrgs && (
+                <div>
+                  <label
+                    htmlFor="entity-parent-org"
+                    className="mb-1 block text-xs font-medium text-muted-foreground"
+                  >
+                    Organization
+                    <span aria-hidden="true" className="ml-0.5 text-destructive-fg">
+                      *
+                    </span>
+                    <span className="sr-only"> (required)</span>
+                  </label>
+                  <Select
+                    value={state.selectedOrgId ?? ""}
+                    onValueChange={(v) => updateField("selectedOrgId", v)}
+                    disabled={submitting}
+                  >
+                    <SelectTrigger id="entity-parent-org" className="w-full">
+                      <SelectValue placeholder="Select an organization…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[...props.availableOrgs]
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((org) => (
+                          <SelectItem key={org.id} value={org.id}>
+                            {org.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  {fieldErrors.selectedOrgId && (
+                    <p role="alert" className="mt-1 text-xs text-destructive-fg">
+                      {fieldErrors.selectedOrgId}
+                    </p>
+                  )}
+                </div>
+              )}
+
+            {/* Parent picker — microgrid create in multi-community scope */}
+            {props.entity === "microgrid" &&
+              "availableCommunities" in props &&
+              props.availableCommunities && (
+                <div>
+                  <label
+                    htmlFor="entity-parent-community"
+                    className="mb-1 block text-xs font-medium text-muted-foreground"
+                  >
+                    Community
+                    <span aria-hidden="true" className="ml-0.5 text-destructive-fg">
+                      *
+                    </span>
+                    <span className="sr-only"> (required)</span>
+                  </label>
+                  <Select
+                    value={state.selectedCommunityId ?? ""}
+                    onValueChange={(v) => updateField("selectedCommunityId", v)}
+                    disabled={submitting}
+                  >
+                    <SelectTrigger id="entity-parent-community" className="w-full">
+                      <SelectValue placeholder="Select a community…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[...props.availableCommunities]
+                        .sort((a, b) => {
+                          const orgCmp = (a.org_name ?? "").localeCompare(b.org_name ?? "");
+                          return orgCmp !== 0 ? orgCmp : a.name.localeCompare(b.name);
+                        })
+                        .map((community) => (
+                          <SelectItem key={community.id} value={community.id}>
+                            {community.org_name
+                              ? `${community.name} (${community.org_name})`
+                              : community.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  {fieldErrors.selectedCommunityId && (
+                    <p role="alert" className="mt-1 text-xs text-destructive-fg">
+                      {fieldErrors.selectedCommunityId}
+                    </p>
+                  )}
+                </div>
+              )}
 
             {/* Name */}
             <div>
