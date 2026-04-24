@@ -3,6 +3,7 @@ import type { RateSchedule } from "@/lib/types/domain";
 import { TierEditor } from "@/components/TierEditor";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 
 export default async function RatesPage({
   params,
@@ -12,10 +13,13 @@ export default async function RatesPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const levels = await getHierarchyLevels(supabase, {
-    kind: "microgrid",
-    microgridId: id,
-  });
+  const [canManage, levels] = await Promise.all([
+    currentUserCanAccessMicrogrid(supabase, id),
+    getHierarchyLevels(supabase, {
+      kind: "microgrid",
+      microgridId: id,
+    }),
+  ]);
 
   const [{ data: schedule, error: scheduleError }, { data: microgrid, error: microgridError }] =
     await Promise.all([
@@ -57,6 +61,7 @@ export default async function RatesPage({
         microgridId={id}
         currency={microgrid.currency}
         initialSchedule={schedule}
+        canManage={canManage}
       />
     </>
   );

@@ -39,6 +39,15 @@ vi.mock("next/link", () => ({
   },
 }));
 
+// ── Auth access mock ──────────────────────────────────────────────────────────
+// Stub so currentUserCanAccessMicrogrid doesn't hit Supabase auth.getUser.
+vi.mock("@/lib/auth/access", () => ({
+  currentUserCanAccessMicrogrid: vi.fn().mockResolvedValue(true),
+  currentUserIsSuperAdmin: vi.fn().mockResolvedValue(true),
+  currentUserCanAccessCommunity: vi.fn().mockResolvedValue(true),
+  currentUserCanAccessOrg: vi.fn().mockResolvedValue(true),
+}));
+
 // ── Supabase mock ────────────────────────────────────────────────────────────
 
 const mockFrom = vi.fn();
@@ -115,6 +124,28 @@ function buildLineItemsQuery(data: unknown) {
   return chain;
 }
 
+/**
+ * Builds a generic flexible query chain that handles the various query
+ * patterns for edges, household_devices, devices (new in #139).
+ * Returns { data: [], error: null } for .select().eq() chains and
+ * { count: 0, error: null } for count queries.
+ */
+function buildFlexQuery(data: unknown[] = [], count = 0) {
+  const chain: Record<string, unknown> = {};
+  const resolve = () => Promise.resolve({ data, count, error: null });
+  chain.select = () => chain;
+  chain.eq = () => chain;
+  chain.in = () => chain;
+  chain.not = () => resolve;
+  chain.returns = () => Promise.resolve({ data, error: null });
+  chain.maybeSingle = () => Promise.resolve({ data: data[0] ?? null, error: null });
+  chain.single = () => Promise.resolve({ data: data[0] ?? null, error: null });
+  // Make chain itself thenable so await on it works (direct .eq() returns promise)
+  (chain as unknown as Promise<unknown>).then = (resolve2: unknown, reject: unknown) =>
+    Promise.resolve({ data, count, error: null }).then(resolve2 as never, reject as never);
+  return chain;
+}
+
 // ── Import page (after mocks) ─────────────────────────────────────────────────
 
 import HouseholdDetailPage from "./page";
@@ -149,7 +180,8 @@ describe("HouseholdDetailPage", () => {
           },
         ]);
       }
-      return buildCountQuery(0);
+      // edges, household_devices, devices queries for P7 hasMetersAvailable
+      return buildFlexQuery([]);
     });
 
     const jsx = await HouseholdDetailPage({
@@ -183,8 +215,8 @@ describe("HouseholdDetailPage", () => {
     expect(html).toContain("2026-03-31");
   });
 
-  // (b) Empty devices: 0 household_devices
-  it("renders empty devices state when no devices are linked", async () => {
+  // (b) Empty devices: 0 household_devices → EmptyState with warn tone (#139 P7)
+  it("renders EmptyState 'Link this household to its meter' when no devices are linked", async () => {
     mockFrom.mockImplementation((table: string) => {
       if (table === "households") {
         return buildHouseholdQuery({
@@ -198,7 +230,8 @@ describe("HouseholdDetailPage", () => {
       if (table === "billing_line_items") {
         return buildLineItemsQuery([]);
       }
-      return buildCountQuery(0);
+      // edges, household_devices, devices queries for P7 hasMetersAvailable
+      return buildFlexQuery([]);
     });
 
     const jsx = await HouseholdDetailPage({
@@ -206,7 +239,8 @@ describe("HouseholdDetailPage", () => {
     });
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
-    expect(html).toContain("No devices linked to this household yet");
+    expect(html).toContain("Link this household to its meter");
+    expect(html).toContain("primary meter get billed");
     // Billing empty state should still appear (0 line items)
     expect(html).toContain("No billing history");
   });
@@ -228,7 +262,7 @@ describe("HouseholdDetailPage", () => {
       if (table === "billing_line_items") {
         return buildLineItemsQuery([]);
       }
-      return buildCountQuery(0);
+      return buildFlexQuery([]);
     });
 
     const jsx = await HouseholdDetailPage({
@@ -250,7 +284,7 @@ describe("HouseholdDetailPage", () => {
           code: "PGRST116",
         });
       }
-      return buildCountQuery(0);
+      return buildFlexQuery([]);
     });
 
     await expect(
@@ -288,7 +322,7 @@ describe("HouseholdDetailPage", () => {
       if (table === "billing_line_items") {
         return buildLineItemsQuery([]);
       }
-      return buildCountQuery(0);
+      return buildFlexQuery([]);
     });
 
     const jsx = await HouseholdDetailPage({

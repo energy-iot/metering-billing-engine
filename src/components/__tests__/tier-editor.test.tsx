@@ -197,3 +197,61 @@ describe("TierEditor", () => {
     expect(screen.getByText(/Example: 100 kWh/)).toBeTruthy();
   });
 });
+
+// ─── EmptyState (#139 P8) ─────────────────────────────────────────────────────
+
+describe("TierEditor — EmptyState (#139)", () => {
+  it("shows EmptyState with title and body when tiers is empty", () => {
+    renderEditor(null);
+    expect(screen.getByText("Set up the rate schedule")).toBeTruthy();
+    expect(screen.getByText(/Tiers define the kWh price bands/)).toBeTruthy();
+  });
+
+  it("shows warn-toned empty state (has border-warning) when tiers empty", () => {
+    const { container } = renderEditor(null);
+    const region = container.querySelector("[role='region']");
+    // border-warning is present from tone="warn"; note: border-l-4 may be merged-out
+    // by the border-0 card-suppression override (tailwind-merge resolves last wins).
+    // The primitive itself is tested for border-l-4 in empty-state.test.tsx.
+    // Here we just verify the warn class is applied and the region is present.
+    expect(region?.className).toContain("border-warning");
+  });
+
+  it("shows '+ Add first tier' CTA when canManage=true and tiers empty", () => {
+    render(
+      <LocaleProvider locale="en-UG" currency="UGX">
+        <TierEditor
+          microgridId={MICROGRID_ID}
+          currency="UGX"
+          initialSchedule={null}
+          canManage={true}
+        />
+      </LocaleProvider>
+    );
+    expect(screen.getByRole("button", { name: /Add first tier/i })).toBeTruthy();
+  });
+
+  it("hides CTA and shows footnote when canManage=false and tiers empty", () => {
+    render(
+      <LocaleProvider locale="en-UG" currency="UGX">
+        <TierEditor
+          microgridId={MICROGRID_ID}
+          currency="UGX"
+          initialSchedule={null}
+          canManage={false}
+        />
+      </LocaleProvider>
+    );
+    expect(
+      screen.queryByRole("button", { name: /Add first tier/i })
+    ).toBeNull();
+    expect(
+      screen.getByText(/Ask a super admin to configure the rate schedule/)
+    ).toBeTruthy();
+  });
+
+  it("does NOT show EmptyState when tiers are present", () => {
+    renderEditor(INITIAL_SCHEDULE);
+    expect(screen.queryByText("Set up the rate schedule")).toBeNull();
+  });
+});

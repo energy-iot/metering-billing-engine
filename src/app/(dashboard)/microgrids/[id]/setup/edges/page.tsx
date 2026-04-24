@@ -10,6 +10,7 @@ import type { OpenEmsClientConfig } from "@/lib/openems";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { EdgesCRUDShell } from "./edges-crud-shell";
+import { EdgeEmptyState } from "./edge-empty-state";
 import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import {
   currentUserCanAccessMicrogrid,
@@ -175,10 +176,11 @@ export default async function SetupEdgesPage({
       )}
 
       {!edges || edges.length === 0 ? (
-        <p className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
-          No edges configured yet. Add an edge to link this microgrid to a
-          metering source.
-        </p>
+        <EdgeEmptyState
+          microgridId={id}
+          canManage={canManage}
+          emsType={emsType}
+        />
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           <table className="w-full text-left text-sm">

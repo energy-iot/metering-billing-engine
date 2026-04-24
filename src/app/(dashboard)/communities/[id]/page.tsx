@@ -7,6 +7,8 @@ import { EditEntityButton } from "@/components/forms/EditEntityButton";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import { currentUserCanAccessCommunity } from "@/lib/auth/access";
+import { EmptyState } from "@/components/ui/empty-state";
+import { AddEntityButton } from "@/components/forms/AddEntityButton";
 import type { Community } from "@/lib/types/domain";
 
 /**
@@ -186,7 +188,29 @@ export default async function CommunityDetailPage({
           Microgrids in this community
         </h2>
         {microgrids.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No microgrids yet.</p>
+          <EmptyState
+            eyebrow="Microgrids"
+            title="Add the first microgrid"
+            body={
+              <>
+                A microgrid is the physical installation that meters and bills
+                electricity in this community. Most start with one.
+              </>
+            }
+            cta={
+              canEdit ? (
+                <AddEntityButton
+                  entity="microgrid"
+                  parentCommunityId={community.id}
+                />
+              ) : undefined
+            }
+            footnote={
+              !canEdit
+                ? "Ask a super admin to add the first microgrid."
+                : undefined
+            }
+          />
         ) : (
           <ul className="space-y-1">
             {microgrids.map((mg) => (

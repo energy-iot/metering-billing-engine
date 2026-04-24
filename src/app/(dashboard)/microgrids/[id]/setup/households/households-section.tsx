@@ -25,6 +25,7 @@ type Props = {
   devices: Device[];
   primaryDeviceAssignments: Record<string, string>;
   availableMeters: AvailableMeter[];
+  canManage?: boolean;
 };
 
 export function HouseholdsSection({
@@ -33,6 +34,7 @@ export function HouseholdsSection({
   devices,
   primaryDeviceAssignments,
   availableMeters,
+  canManage = false,
 }: Props) {
   const [wizardOpen, setWizardOpen] = React.useState(false);
 
@@ -69,6 +71,8 @@ export function HouseholdsSection({
         households={households}
         devices={devices}
         primaryDeviceAssignments={primaryDeviceAssignments}
+        canManage={canManage}
+        onAdd={() => setWizardOpen(true)}
       />
     </div>
   );

@@ -3,6 +3,7 @@ import type { Device, Household } from "@/lib/types/domain";
 import { HouseholdsSection } from "./households-section";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import type { AvailableMeter } from "@/components/forms/HouseholdWizard";
 
 // Setup > Households (D2 / #53, upgraded in UX2 / #74).
@@ -19,10 +20,13 @@ export default async function SetupHouseholdsPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const levels = await getHierarchyLevels(supabase, {
-    kind: "households-listing",
-    microgridId: id,
-  });
+  const [canManage, levels] = await Promise.all([
+    currentUserCanAccessMicrogrid(supabase, id),
+    getHierarchyLevels(supabase, {
+      kind: "households-listing",
+      microgridId: id,
+    }),
+  ]);
 
   const [
     { data: households, error: householdsError },
@@ -117,6 +121,7 @@ export default async function SetupHouseholdsPage({
         devices={devices ?? []}
         primaryDeviceAssignments={primaryDeviceAssignments}
         availableMeters={availableMeters}
+        canManage={canManage}
       />
     </>
   );

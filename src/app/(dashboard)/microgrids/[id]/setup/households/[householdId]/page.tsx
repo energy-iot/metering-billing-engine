@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { StatusChip } from "@/components/ui/status-chip";
 import { Currency } from "@/components/format/currency";
 import { Kwh } from "@/components/format/kwh";
+import { EmptyState } from "@/components/ui/empty-state";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 
 // Setup > Households > [householdId] — Household detail page (D3 / #54).
 //
@@ -101,6 +103,37 @@ export default async function HouseholdDetailPage({
     (li) => li.billing_periods?.status === "closed",
   );
 
+  // Resolve role + available unlinked consumption meters for P7 empty state (#139).
+  const canManage = await currentUserCanAccessMicrogrid(supabase, microgridId);
+
+  // Count unlinked consumption meters on this microgrid (sequential queries kept
+  // simple to avoid dynamic .not("id","in",...) edge cases with empty arrays).
+  const [edgesResult, assignedResult] = await Promise.all([
+    supabase.from("edges").select("id").eq("microgrid_id", microgridId),
+    supabase
+      .from("household_devices")
+      .select("device_id")
+      .eq("role", "primary_consumption_meter"),
+  ]);
+  const microgridEdgeIds = (edgesResult.data ?? []).map((e) => e.id);
+  const assignedDeviceIds = (assignedResult.data ?? []).map((r) => r.device_id);
+
+  let hasMetersAvailable = false;
+  if (microgridEdgeIds.length > 0) {
+    let metersQuery = supabase
+      .from("devices")
+      .select("id", { count: "exact", head: true })
+      .in("edge_id", microgridEdgeIds)
+      .eq("device_type", "consumption_meter");
+
+    if (assignedDeviceIds.length > 0) {
+      metersQuery = metersQuery.not("id", "in", `(${assignedDeviceIds.join(",")})`);
+    }
+
+    const { count } = await metersQuery;
+    hasMetersAvailable = (count ?? 0) > 0;
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -163,9 +196,35 @@ export default async function HouseholdDetailPage({
           Linked devices
         </h4>
         {devices.length === 0 ? (
-          <p className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
-            No devices linked to this household yet
-          </p>
+          <EmptyState
+            tone="warn"
+            eyebrow="Linked devices"
+            title="Link this household to its meter"
+            body={
+              <>
+                Pick a device from this microgrid&apos;s edges and mark it the
+                primary consumption meter. Only households with a primary meter
+                get billed.
+              </>
+            }
+            secondary={
+              canManage ? (
+                <Link
+                  href={`/microgrids/${microgridId}/setup/households`}
+                  className="text-sm font-medium text-foreground underline hover:opacity-80"
+                >
+                  Go to Households listing →
+                </Link>
+              ) : undefined
+            }
+            footnote={
+              !canManage
+                ? `Ask a super admin to link a meter to ${household.display_name ?? "this household"}.`
+                : hasMetersAvailable
+                  ? "Go to Setup › Households and pick this household's primary meter from the row dropdown. A dedicated Link Device dialog is coming soon."
+                  : "No unlinked consumption meters on this microgrid yet — run device discovery on an edge first."
+            }
+          />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">
             <table className="w-full text-left text-sm">

@@ -5,6 +5,8 @@ import { EditEntityButton } from "@/components/forms/EditEntityButton";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { DeletedSuccessBanner } from "@/components/entity-deletion/DeletedSuccessBanner";
 import { currentUserIsSuperAdmin } from "@/lib/auth/access";
+import { EmptyState } from "@/components/ui/empty-state";
+import { AddEntityButton } from "@/components/forms/AddEntityButton";
 import type { Organization } from "@/lib/types/domain";
 
 /**
@@ -92,9 +94,27 @@ export default async function OrganizationDetailPage({
           Communities
         </h2>
         {!communities || communities.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No communities in this organization yet.
-          </p>
+          <EmptyState
+            eyebrow="Communities"
+            title="Add the first community"
+            body={
+              <>
+                A community is a site where your microgrid(s) live — a
+                neighborhood, building complex, or co-op. One organization can
+                have many.
+              </>
+            }
+            cta={
+              isSuperAdmin ? (
+                <AddEntityButton entity="community" parentOrgId={org.id} />
+              ) : undefined
+            }
+            footnote={
+              !isSuperAdmin
+                ? "Ask a super admin to add the first community."
+                : undefined
+            }
+          />
         ) : (
           <ul className="space-y-1">
             {communities.map((c) => {

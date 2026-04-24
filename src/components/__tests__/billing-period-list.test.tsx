@@ -128,3 +128,86 @@ describe("BillingPeriodList", () => {
     );
   });
 });
+
+// ─── EmptyState (#139 P9) ─────────────────────────────────────────────────────
+
+describe("BillingPeriodList — EmptyState (#139)", () => {
+  it("shows EmptyState title and body when periods is empty", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+        />
+      </Wrapper>
+    );
+    expect(screen.getByText("Create the first billing period")).toBeTruthy();
+    expect(screen.getByText(/A billing period defines the start and end dates/)).toBeTruthy();
+  });
+
+  it("shows '+ Create period' CTA when canManage=true and periods empty", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+    expect(screen.getByRole("button", { name: /Create period/i })).toBeTruthy();
+  });
+
+  it("hides CTA and shows role-locked footnote when canManage=false", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={false}
+        />
+      </Wrapper>
+    );
+    expect(screen.queryByRole("button", { name: /Create period/i })).toBeNull();
+    expect(
+      screen.getByText(/Ask a super admin to create the first billing period/)
+    ).toBeTruthy();
+  });
+
+  it("shows canManage=true footnote about editing date range", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+    expect(
+      screen.getByText(/You'll be able to edit the date range/)
+    ).toBeTruthy();
+  });
+
+  it("does NOT show EmptyState when periods are present", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[PERIOD_1, PERIOD_2]}
+          summaries={SUMMARIES}
+          currency="UGX"
+        />
+      </Wrapper>
+    );
+    expect(screen.queryByText("Create the first billing period")).toBeNull();
+  });
+});

@@ -173,8 +173,8 @@ describe("CommunityDetailPage", () => {
     expect(notFoundMock).toHaveBeenCalled();
   });
 
-  // 3. Empty-microgrids community → "No microgrids yet" placeholder.
-  it("renders 'No microgrids yet' placeholder when microgrids array is empty", async () => {
+  // 3. Empty-microgrids community → EmptyState with "Add the first microgrid" (#139 P2).
+  it("renders EmptyState 'Add the first microgrid' when microgrids array is empty", async () => {
     communityData = {
       ...BASE_COMMUNITY,
       microgrids: [],
@@ -186,7 +186,8 @@ describe("CommunityDetailPage", () => {
     });
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
-    expect(html).toContain("No microgrids yet");
+    expect(html).toContain("Add the first microgrid");
+    expect(html).toContain("A microgrid is the physical installation");
     // Stats show zeros
     expect(html).toContain("0");
   });
