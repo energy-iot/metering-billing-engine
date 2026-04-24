@@ -10,7 +10,7 @@ import { EdgeDetailConfigureButton } from "./edge-detail-configure-button";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { EmptyState } from "@/components/ui/empty-state";
-import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
+import { createOpenEmsClient } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import type { OpenEmsClientConfig } from "@/lib/openems";
 

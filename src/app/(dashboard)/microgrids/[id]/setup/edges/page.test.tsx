@@ -44,6 +44,15 @@ vi.mock("./edges-crud-shell", () => ({
   EdgesCRUDShell: () => null,
 }));
 
+// Stub EdgeEmptyState — client component (uses useState + AddEdgeDialog which
+// uses useRouter — both unavailable in server-component renderToStaticMarkup tests).
+vi.mock("./edge-empty-state", () => ({
+  EdgeEmptyState: () => {
+    const React = require("react");
+    return React.createElement("p", null, "No edges configured");
+  },
+}));
+
 // Stub EdgeRowActions — client component that uses useRouter + Radix DropdownMenu.
 vi.mock("./edge-row-actions", () => ({
   EdgeRowActions: () => null,
