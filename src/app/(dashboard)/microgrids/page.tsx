@@ -19,46 +19,20 @@ type CommunityWithOrgRow = {
 export default async function MicrogridsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ community?: string }>;
+  searchParams: Promise<{ community?: string; org?: string }>;
 }) {
-  const { community: communityId } = await searchParams;
+  const { community: communityId, org: orgId } = await searchParams;
   const supabase = await createClient();
 
-  // Resolve breadcrumb levels in parallel with data fetch.
-  const [levelsResult, communityResult, microgridsResult, communitiesResult] =
-    await Promise.all([
-      getHierarchyLevels(supabase, {
-        kind: "microgrids",
-        communityId,
-      }),
-      communityId
-        ? supabase
-            .from("communities")
-            .select("name")
-            .eq("id", communityId)
-            .maybeSingle()
-        : Promise.resolve({ data: null, error: null }),
-      (() => {
-        let query = supabase.from("microgrids").select("*");
-        if (communityId) query = query.eq("community_id", communityId);
-        return query.returns<Microgrid[]>();
-      })(),
-      // Fetch all accessible communities for the Add button parent picker.
-      // RLS scopes this naturally — only communities the user can access are returned.
-      supabase
-        .from("communities")
-        .select("id, name, org_id, organizations!inner(name)")
-        .order("name")
-        .returns<CommunityWithOrgRow[]>(),
-    ]);
+  // Fetch accessible communities for nav + add-button picker.
+  // RLS scopes this naturally — only communities the user can access are returned.
+  const communitiesResult = await supabase
+    .from("communities")
+    .select("id, name, org_id, organizations!inner(name)")
+    .order("name")
+    .returns<CommunityWithOrgRow[]>();
 
-  const levels = levelsResult;
-  const communityName = communityResult.data?.name ?? null;
-  const communityNotFound = communityId != null && !communityResult.data;
-  const { data: microgrids, error } = microgridsResult;
-
-  // Map accessible communities to the CommunityOption shape.
-  const accessibleCommunities: CommunityOption[] = (
+  const allAccessibleCommunities: CommunityOption[] = (
     communitiesResult.data ?? []
   ).map((c) => ({
     id: c.id,
@@ -66,8 +40,76 @@ export default async function MicrogridsPage({
     org_name: c.organizations.name,
   }));
 
+  // Validate the ?org= param.
+  const accessibleOrgIds = new Set(
+    (communitiesResult.data ?? []).map((c) => c.org_id),
+  );
+  const orgValid = orgId != null && accessibleOrgIds.has(orgId);
+  const orgInvalid = orgId != null && !orgValid;
+
+  // When ?org=X valid, narrow the community picker to that org's communities.
+  const accessibleCommunities: CommunityOption[] = orgValid
+    ? allAccessibleCommunities.filter((c) => {
+        const row = (communitiesResult.data ?? []).find((r) => r.id === c.id);
+        return row?.org_id === orgId;
+      })
+    : allAccessibleCommunities;
+
+  // Resolve breadcrumb levels in parallel with data fetch.
+  const [levelsResult, communityResult, microgridsResult] = await Promise.all([
+    getHierarchyLevels(supabase, {
+      kind: "microgrids",
+      communityId,
+      orgId: communityId ? undefined : orgId,
+    }),
+    communityId
+      ? supabase
+          .from("communities")
+          .select("name")
+          .eq("id", communityId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    (() => {
+      let query = supabase.from("microgrids").select("*");
+      if (communityId) {
+        // Community filter is narrower — it wins.
+        query = query.eq("community_id", communityId);
+      } else if (orgValid) {
+        // Org filter: join via communities to filter by org_id.
+        // PostgREST syntax: select from the embedded communities resource.
+        query = supabase
+          .from("microgrids")
+          .select("*, communities!inner(org_id)")
+          .eq("communities.org_id", orgId!);
+      }
+      return query.returns<Microgrid[]>();
+    })(),
+  ]);
+
+  const levels = levelsResult;
+  const communityName = communityResult.data?.name ?? null;
+  const communityNotFound = communityId != null && !communityResult.data;
+  const { data: microgrids, error } = microgridsResult;
+
+  // Banner: both filters present → community wins.
+  const bothFiltersBanner =
+    communityId && orgValid ? (
+      <div className="mb-4 rounded-md bg-warning-muted p-3 text-sm text-warning-fg">
+        Community filter applied — org filter ignored.
+      </div>
+    ) : null;
+
+  // Banner: invalid ?org= param.
+  const invalidOrgBanner = orgInvalid ? (
+    <div className="mb-4 rounded-md bg-warning-muted p-3 text-sm text-warning-fg">
+      Invalid or inaccessible organization filter — showing all.
+    </div>
+  ) : null;
+
   // Resolve which AddEntityButton variant to use:
   //   - In a single-community URL context (?community=...) → locked mode
+  //   - ?org=X valid + exactly 1 community in that org → locked mode
+  //   - ?org=X valid + multiple communities in that org → picker (narrower list)
   //   - Single accessible community → locked mode
   //   - Multiple accessible communities → picker mode
   //   - Zero accessible communities → no button
@@ -75,6 +117,22 @@ export default async function MicrogridsPage({
     if (communityId) {
       return (
         <AddEntityButton entity="microgrid" parentCommunityId={communityId} />
+      );
+    }
+    if (orgValid && accessibleCommunities.length === 1) {
+      return (
+        <AddEntityButton
+          entity="microgrid"
+          parentCommunityId={accessibleCommunities[0].id}
+        />
+      );
+    }
+    if (orgValid && accessibleCommunities.length > 1) {
+      return (
+        <AddEntityButton
+          entity="microgrid"
+          availableCommunities={accessibleCommunities}
+        />
       );
     }
     if (accessibleCommunities.length === 1) {
@@ -103,6 +161,24 @@ export default async function MicrogridsPage({
         <AddEntityButton
           entity="microgrid"
           parentCommunityId={communityId}
+          label="+ Add the first Microgrid"
+        />
+      );
+    }
+    if (orgValid && accessibleCommunities.length === 1) {
+      return (
+        <AddEntityButton
+          entity="microgrid"
+          parentCommunityId={accessibleCommunities[0].id}
+          label="+ Add the first Microgrid"
+        />
+      );
+    }
+    if (orgValid && accessibleCommunities.length > 1) {
+      return (
+        <AddEntityButton
+          entity="microgrid"
+          availableCommunities={accessibleCommunities}
           label="+ Add the first Microgrid"
         />
       );
@@ -158,6 +234,8 @@ export default async function MicrogridsPage({
     return (
       <div>
         <HierarchyNav levels={levels} className="mb-4" />
+        {bothFiltersBanner}
+        {invalidOrgBanner}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-foreground">{heading}</h1>
           {addButton}
@@ -196,6 +274,8 @@ export default async function MicrogridsPage({
   return (
     <div>
       <HierarchyNav levels={levels} className="mb-4" />
+      {bothFiltersBanner}
+      {invalidOrgBanner}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-foreground">{heading}</h1>
         {addButton}

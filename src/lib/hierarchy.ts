@@ -16,9 +16,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { HierarchyLevel } from "@/components/ui/hierarchy-nav";
 
 export type HierarchyScope =
-  | { kind: "communities" }
+  | { kind: "communities"; orgId?: string }
   | { kind: "community"; communityId: string }
-  | { kind: "microgrids"; communityId?: string }
+  | { kind: "microgrids"; communityId?: string; orgId?: string }
   | { kind: "microgrid"; microgridId: string }
   | { kind: "edge"; microgridId: string; edgeId: string }
   | { kind: "edges-listing"; microgridId: string }
@@ -29,10 +29,19 @@ type SiblingRow = { id: string; name: string | null };
 
 // ── Internal fetch helpers ─────────────────────────────────────────────────────
 
-/** Fetch the single accessible org + sibling orgs for a switcher. */
+/** Fetch the single accessible org + sibling orgs for a switcher.
+ *
+ * @param currentOrgId  — org to highlight as "current" in the nav label.
+ *                        Falls back to first-alphabetical if not found.
+ * @param currentListingPath — when set, sibling href becomes
+ *                        `${currentListingPath}?org=<id>` instead of `/?org=<id>`.
+ *                        Pass this from listing pages so the switcher stays on
+ *                        the current listing rather than navigating to the dashboard.
+ */
 async function fetchOrgLevel(
   supabase: SupabaseClient,
   currentOrgId?: string,
+  currentListingPath?: string,
 ): Promise<HierarchyLevel> {
   const { data: orgs } = await supabase
     .from("organizations")
@@ -56,17 +65,24 @@ async function fetchOrgLevel(
     (currentOrgId ? orgList.find((o) => o.id === currentOrgId) : undefined) ??
     orgList[0];
 
+  const siblingHref = (id: string) =>
+    currentListingPath ? `${currentListingPath}?org=${id}` : `/?org=${id}`;
+
+  // Org-level href: when on a listing page, the current-org link should stay
+  // on the listing (without a filter) so the user can navigate "up" to all orgs.
+  const orgHref = currentListingPath ?? "/";
+
   return {
     kind: "Organization",
     label: current?.name ?? "Organization",
     count: orgList.length,
-    href: "/",
+    href: orgHref,
     active: false,
     siblings:
       orgList.length > 1
         ? orgList
             .filter((o) => o.id !== current?.id)
-            .map((o) => ({ label: o.name ?? o.id, href: `/?org=${o.id}` }))
+            .map((o) => ({ label: o.name ?? o.id, href: siblingHref(o.id) }))
         : undefined,
   };
 }
@@ -282,7 +298,7 @@ export async function getHierarchyLevels(
 ): Promise<HierarchyLevel[]> {
   switch (scope.kind) {
     case "communities": {
-      const orgLevel = await fetchOrgLevel(supabase);
+      const orgLevel = await fetchOrgLevel(supabase, scope.orgId, "/communities");
       return [orgLevel];
     }
 
@@ -307,24 +323,24 @@ export async function getHierarchyLevels(
     }
 
     case "microgrids": {
-      let orgId: string | undefined;
+      let resolvedOrgId: string | undefined = scope.orgId;
       let communityLevel: HierarchyLevel | undefined;
 
       if (scope.communityId) {
-        // Resolve community → org chain.
+        // Resolve community → org chain (community-scoped view takes precedence).
         const { data: community } = await supabase
           .from("communities")
           .select("id, name, org_id")
           .eq("id", scope.communityId)
           .single<{ id: string; name: string; org_id: string }>();
 
-        orgId = community?.org_id;
+        resolvedOrgId = community?.org_id;
 
         const cl = await fetchCommunityLevel(supabase, scope.communityId, false);
         if (cl) communityLevel = cl;
       }
 
-      const orgLevel = await fetchOrgLevel(supabase, orgId);
+      const orgLevel = await fetchOrgLevel(supabase, resolvedOrgId, "/microgrids");
 
       // Empty-state: 0 orgs — return just org placeholder.
       if (orgLevel.count === 0) return [orgLevel];

@@ -316,9 +316,12 @@ describe("getHierarchyLevels — href contracts", () => {
     households: [HH_1],
   });
 
-  it("Organization href is /", async () => {
+  it("Organization href is /communities for the communities listing scope (#134)", async () => {
+    // The communities listing scope passes currentListingPath="/communities" to
+    // fetchOrgLevel so the org breadcrumb navigates back to the unfiltered listing,
+    // not the dashboard root.
     const levels = await getHierarchyLevels(supabase, { kind: "communities" });
-    expect(levels[0].href).toBe("/");
+    expect(levels[0].href).toBe("/communities");
   });
 
   it("Community href points to /communities/<id>", async () => {
@@ -442,5 +445,91 @@ describe("getHierarchyLevels — listing scopes", () => {
     expect(levels[3].count).toBe(0);
     expect(levels[3].label).toBe("Edges");
     expect(levels[3].active).toBe(true);
+  });
+});
+
+// ── #134: currentListingPath + orgId threading ─────────────────────────────────
+
+describe("getHierarchyLevels — #134: listing-path sibling hrefs + orgId threading", () => {
+  const ORG_B = { id: "org-b", name: "Second Org" };
+
+  const multiOrgSupabase = makeMockSupabase({
+    organizations: [ORG_A, ORG_B],
+    communities: [COMMUNITY_K],
+    microgrids: [MICROGRID_1],
+    edges: [],
+    households: [],
+  });
+
+  it("communities scope: sibling hrefs use /communities?org=<id>", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "communities",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.siblings).toBeDefined();
+    const siblingHref = orgLevel!.siblings![0].href;
+    // Must point to the communities listing, not the dashboard root.
+    expect(siblingHref).toBe("/communities?org=org-b");
+  });
+
+  it("communities scope: org href points to /communities (clear filter)", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "communities",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.href).toBe("/communities");
+  });
+
+  it("microgrids scope: sibling hrefs use /microgrids?org=<id>", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.siblings).toBeDefined();
+    const siblingHref = orgLevel!.siblings![0].href;
+    expect(siblingHref).toBe("/microgrids?org=org-b");
+  });
+
+  it("communities scope: orgId param controls current label (not first-alphabetical)", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "communities",
+      orgId: "org-b",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    // "Second Org" (org-b) should be the current label.
+    expect(orgLevel!.label).toBe("Second Org");
+    // Sibling should be ORG_A.
+    expect(orgLevel!.siblings![0].label).toBe("Nearly Free Energy");
+  });
+
+  it("microgrids scope: orgId param controls current label", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrids",
+      orgId: "org-b",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.label).toBe("Second Org");
+  });
+
+  it("communities scope: invalid orgId falls back to first-alphabetical", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "communities",
+      orgId: "org-does-not-exist",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    // Falls back to first alphabetically: ORG_A = "Nearly Free Energy".
+    expect(orgLevel!.label).toBe("Nearly Free Energy");
+  });
+
+  it("non-listing scopes (microgrid detail) still use /?org=<id> format", async () => {
+    const levels = await getHierarchyLevels(multiOrgSupabase, {
+      kind: "microgrid",
+      microgridId: "mg-1",
+    });
+    const orgLevel = levels.find((l) => l.kind === "Organization");
+    expect(orgLevel!.siblings).toBeDefined();
+    const siblingHref = orgLevel!.siblings![0].href;
+    // Detail pages use the original dashboard-root format.
+    expect(siblingHref).toBe("/?org=org-b");
   });
 });

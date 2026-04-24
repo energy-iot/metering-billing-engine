@@ -11,35 +11,67 @@ type CommunityRow = Community & {
 
 type OrgRow = { id: string; name: string };
 
-export default async function CommunitiesPage() {
+export default async function CommunitiesPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ org?: string }>;
+}) {
+  const { org: orgId } = (await searchParams) ?? {};
   const supabase = await createClient();
 
-  const [{ data: communities, error }, { data: accessibleOrgs }, levels] =
-    await Promise.all([
-      supabase
-        .from("communities")
-        .select("*, microgrids(count)")
-        .order("name")
-        .returns<CommunityRow[]>(),
-      supabase
-        .from("organizations")
-        .select("id, name")
-        .order("name")
-        .returns<OrgRow[]>(),
-      getHierarchyLevels(supabase, { kind: "communities" }),
-    ]);
+  const [{ data: accessibleOrgs }, levels] = await Promise.all([
+    supabase
+      .from("organizations")
+      .select("id, name")
+      .order("name")
+      .returns<OrgRow[]>(),
+    getHierarchyLevels(supabase, { kind: "communities", orgId }),
+  ]);
 
-  // Resolve which AddEntityButton variant to use:
-  //   - Single accessible org → locked mode (parentOrgId)
-  //   - Multiple accessible orgs → picker mode (availableOrgs)
-  //   - Zero accessible orgs → no button
   const orgs = accessibleOrgs ?? [];
-  const addButton =
-    orgs.length === 1 ? (
-      <AddEntityButton entity="community" parentOrgId={orgs[0].id} />
-    ) : orgs.length > 1 ? (
-      <AddEntityButton entity="community" availableOrgs={orgs} />
-    ) : null;
+
+  // Validate the ?org= param: must be a UUID the user can actually access.
+  const orgValid =
+    orgId != null && orgs.some((o) => o.id === orgId);
+  const orgInvalid = orgId != null && !orgValid;
+
+  // Build the communities query — apply org filter when valid.
+  const communitiesQuery = (() => {
+    let q = supabase
+      .from("communities")
+      .select("*, microgrids(count)")
+      .order("name");
+    if (orgValid) {
+      q = q.eq("org_id", orgId!);
+    }
+    return q.returns<CommunityRow[]>();
+  })();
+
+  const { data: communities, error } = await communitiesQuery;
+
+  // Resolve AddEntityButton variant:
+  //   - ?org=X valid → locked mode with that org (even in multi-org context)
+  //   - single accessible org (no filter) → locked mode
+  //   - multiple accessible orgs (no filter) → picker mode
+  //   - zero accessible orgs → no button
+  const addButton = (() => {
+    if (orgValid) {
+      return <AddEntityButton entity="community" parentOrgId={orgId!} />;
+    }
+    if (orgs.length === 1) {
+      return <AddEntityButton entity="community" parentOrgId={orgs[0].id} />;
+    }
+    if (orgs.length > 1) {
+      return <AddEntityButton entity="community" availableOrgs={orgs} />;
+    }
+    return null;
+  })();
+
+  const invalidBanner = orgInvalid ? (
+    <div className="mb-4 rounded-md bg-warning-muted p-3 text-sm text-warning-fg">
+      Invalid or inaccessible organization filter — showing all.
+    </div>
+  ) : null;
 
   if (error) {
     return (
@@ -53,6 +85,7 @@ export default async function CommunitiesPage() {
     return (
       <div>
         <HierarchyNav levels={levels} className="mb-4" />
+        {invalidBanner}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-foreground">
             Communities
@@ -64,7 +97,13 @@ export default async function CommunitiesPage() {
               <p className="mb-4 text-muted-foreground">
                 No communities yet.
               </p>
-              {orgs.length === 1 ? (
+              {orgValid ? (
+                <AddEntityButton
+                  entity="community"
+                  parentOrgId={orgId!}
+                  label="+ Add the first Community"
+                />
+              ) : orgs.length === 1 ? (
                 <AddEntityButton
                   entity="community"
                   parentOrgId={orgs[0].id}
@@ -91,6 +130,7 @@ export default async function CommunitiesPage() {
   return (
     <div>
       <HierarchyNav levels={levels} className="mb-4" />
+      {invalidBanner}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-foreground">Communities</h1>
         {addButton}

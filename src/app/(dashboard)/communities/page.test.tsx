@@ -9,35 +9,49 @@
 //     (b) Empty state renders when the query returns zero rows.
 //     (c) Add button renders in single-org context (#76 original behaviour).
 //     (d) Add button renders in multi-org context (#132: picker mode).
-//
-// Note: after #76 (UX4a), the listing query selects `*, microgrids(count)` so
-// row rendering receives the full Community row shape. After #132 the gate is
-// lifted — Add renders for any non-zero accessibleOrgs count.
+//     (e) ?org=X → only X's communities queried + rendered (#134).
+//     (f) ?org=X-invalid → banner + unfiltered list (#134).
+//     (g) ?org=X → AddEntityButton locked with parentOrgId=X (#134).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import React from "react";
 
 // ─── Supabase mock ───────────────────────────────────────────────────────────
+//
+// We need a builder that supports .eq() so we can assert the org filter was
+// applied (and to actually filter fixture data in tests).
 
 type MockBuilder = {
   select: (...args: unknown[]) => MockBuilder;
   order: (...args: unknown[]) => MockBuilder;
+  eq: (col: string, val: unknown) => MockBuilder;
   returns: <T>() => Promise<{ data: T | null; error: null }>;
   _data: unknown;
+  _eqs: [string, unknown][];
 };
 
 function makeMockBuilder(data: unknown): MockBuilder {
   const builder: MockBuilder = {
     _data: data,
+    _eqs: [],
     select() {
       return builder;
     },
     order() {
       return builder;
     },
+    eq(col: string, val: unknown) {
+      builder._eqs.push([col, val]);
+      return builder;
+    },
     returns<T>() {
-      return Promise.resolve({ data: builder._data as T, error: null });
+      // Apply any .eq() filters before returning.
+      let rows = (builder._data as Record<string, unknown>[]) ?? [];
+      for (const [col, val] of builder._eqs) {
+        rows = rows.filter((r) => r[col] === val);
+      }
+      return Promise.resolve({ data: rows as T, error: null });
     },
   };
   return builder;
@@ -92,7 +106,7 @@ const COMMUNITY_WITH_DATA = {
 
 const COMMUNITY_NO_LOCATION = {
   id: "comm-2",
-  org_id: "org-1",
+  org_id: "org-2",
   name: "Test Community",
   address_line1: null,
   address_line2: null,
@@ -122,7 +136,7 @@ describe("CommunitiesPage", () => {
     communitiesData = [COMMUNITY_WITH_DATA];
     orgsData = [{ id: "org-1", name: "EnergyIoT Uganda" }];
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     expect(html).toContain("Kisakye");
@@ -136,7 +150,7 @@ describe("CommunitiesPage", () => {
     communitiesData = [COMMUNITY_WITH_DATA, COMMUNITY_NO_LOCATION];
     orgsData = [{ id: "org-1", name: "EnergyIoT Uganda" }];
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     expect(html).toContain("Kisakye");
@@ -148,7 +162,7 @@ describe("CommunitiesPage", () => {
     communitiesData = [COMMUNITY_WITH_DATA];
     orgsData = [{ id: "org-1", name: "EnergyIoT Uganda" }];
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     // AddEntityButton renders a <button> with the default label.
@@ -162,7 +176,7 @@ describe("CommunitiesPage", () => {
       { id: "org-2", name: "Field Energy Kenya" },
     ];
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     // Add button must render even when multiple orgs are accessible.
@@ -173,7 +187,7 @@ describe("CommunitiesPage", () => {
     communitiesData = [];
     orgsData = [];
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     // Zero-org view: directs user to the organization detail page.
@@ -185,9 +199,80 @@ describe("CommunitiesPage", () => {
     communitiesData = null;
     orgsData = null;
 
-    const jsx = await CommunitiesPage();
+    const jsx = await CommunitiesPage({});
     const html = renderToStaticMarkup(jsx as React.ReactElement);
 
     expect(html).toMatch(/No communities/);
+  });
+
+  // ── #134: ?org= filter ────────────────────────────────────────────────────
+
+  it("?org=X: only shows communities whose org_id matches (#134)", async () => {
+    communitiesData = [COMMUNITY_WITH_DATA, COMMUNITY_NO_LOCATION];
+    orgsData = [
+      { id: "org-1", name: "EnergyIoT Uganda" },
+      { id: "org-2", name: "Field Energy Kenya" },
+    ];
+
+    const jsx = await CommunitiesPage({
+      searchParams: Promise.resolve({ org: "org-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    // org-1 community renders, org-2 community does not.
+    expect(html).toContain("Kisakye");
+    expect(html).not.toContain("Test Community");
+  });
+
+  it("?org=X: AddEntityButton receives parentOrgId=X (locked mode) (#134)", async () => {
+    communitiesData = [COMMUNITY_WITH_DATA];
+    orgsData = [
+      { id: "org-1", name: "EnergyIoT Uganda" },
+      { id: "org-2", name: "Field Energy Kenya" },
+    ];
+
+    const jsx = await CommunitiesPage({
+      searchParams: Promise.resolve({ org: "org-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    // The Add button must still render (locked mode is functional).
+    expect(html).toContain("+ Add Community");
+    // Should NOT render picker (no "availableOrgs" path is taken).
+    // We can't directly inspect props in SSR output, but the button renders.
+  });
+
+  it("?org=invalid: shows warning banner and unfiltered list (#134)", async () => {
+    communitiesData = [COMMUNITY_WITH_DATA, COMMUNITY_NO_LOCATION];
+    orgsData = [
+      { id: "org-1", name: "EnergyIoT Uganda" },
+      { id: "org-2", name: "Field Energy Kenya" },
+    ];
+
+    const jsx = await CommunitiesPage({
+      searchParams: Promise.resolve({ org: "org-does-not-exist" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    // Warning banner present.
+    expect(html).toContain("Invalid or inaccessible organization filter");
+    // Both communities render (unfiltered).
+    expect(html).toContain("Kisakye");
+    expect(html).toContain("Test Community");
+  });
+
+  it("no ?org=: preserves current behaviour (all communities render) (#134)", async () => {
+    communitiesData = [COMMUNITY_WITH_DATA, COMMUNITY_NO_LOCATION];
+    orgsData = [
+      { id: "org-1", name: "EnergyIoT Uganda" },
+      { id: "org-2", name: "Field Energy Kenya" },
+    ];
+
+    const jsx = await CommunitiesPage({});
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    expect(html).toContain("Kisakye");
+    expect(html).toContain("Test Community");
+    expect(html).not.toContain("Invalid or inaccessible organization filter");
   });
 });
