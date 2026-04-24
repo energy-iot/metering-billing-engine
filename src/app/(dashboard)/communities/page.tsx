@@ -9,6 +9,8 @@ type CommunityRow = Community & {
   microgrids: { count: number }[];
 };
 
+type OrgRow = { id: string; name: string };
+
 export default async function CommunitiesPage() {
   const supabase = await createClient();
 
@@ -21,17 +23,23 @@ export default async function CommunitiesPage() {
         .returns<CommunityRow[]>(),
       supabase
         .from("organizations")
-        .select("id")
+        .select("id, name")
         .order("name")
-        .returns<{ id: string }[]>(),
+        .returns<OrgRow[]>(),
       getHierarchyLevels(supabase, { kind: "communities" }),
     ]);
 
-  // If the user can see exactly one org (the org_manager case), we can offer
-  // "+ Add Community" inline. Super_admin typically creates via the org
-  // detail page; we still allow inline add when there's only one org in view.
-  const singleAccessibleOrgId =
-    accessibleOrgs && accessibleOrgs.length === 1 ? accessibleOrgs[0].id : null;
+  // Resolve which AddEntityButton variant to use:
+  //   - Single accessible org → locked mode (parentOrgId)
+  //   - Multiple accessible orgs → picker mode (availableOrgs)
+  //   - Zero accessible orgs → no button
+  const orgs = accessibleOrgs ?? [];
+  const addButton =
+    orgs.length === 1 ? (
+      <AddEntityButton entity="community" parentOrgId={orgs[0].id} />
+    ) : orgs.length > 1 ? (
+      <AddEntityButton entity="community" availableOrgs={orgs} />
+    ) : null;
 
   if (error) {
     return (
@@ -51,16 +59,24 @@ export default async function CommunitiesPage() {
           </h1>
         </div>
         <div className="rounded-md border border-border bg-card p-8 text-center">
-          {singleAccessibleOrgId ? (
+          {addButton ? (
             <>
               <p className="mb-4 text-muted-foreground">
                 No communities yet.
               </p>
-              <AddEntityButton
-                entity="community"
-                parentOrgId={singleAccessibleOrgId}
-                label="+ Add the first Community"
-              />
+              {orgs.length === 1 ? (
+                <AddEntityButton
+                  entity="community"
+                  parentOrgId={orgs[0].id}
+                  label="+ Add the first Community"
+                />
+              ) : (
+                <AddEntityButton
+                  entity="community"
+                  availableOrgs={orgs}
+                  label="+ Add the first Community"
+                />
+              )}
             </>
           ) : (
             <p className="text-muted-foreground">
@@ -77,12 +93,7 @@ export default async function CommunitiesPage() {
       <HierarchyNav levels={levels} className="mb-4" />
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-foreground">Communities</h1>
-        {singleAccessibleOrgId && (
-          <AddEntityButton
-            entity="community"
-            parentOrgId={singleAccessibleOrgId}
-          />
-        )}
+        {addButton}
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {communities.map((community) => {
