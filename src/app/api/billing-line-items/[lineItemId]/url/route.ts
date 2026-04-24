@@ -226,10 +226,14 @@ export async function POST(
   // 6. Pesapal rejects reused `id` — fresh per click.
   const orderId = `INV-${lineItemId}-${Date.now()}`;
 
-  // 7. Dispatch through the factory.
-  const client = getPaymentProviderClient(paymentConfig);
+  // 7. Dispatch through the factory. The PesapalProvider constructor itself
+  //    throws PESAPAL_NO_IPN when the persisted config lacks ipn_id (a
+  //    per-#119 deferred-IPN state). Wrap both the constructor and the
+  //    generatePaymentLink call under a single try so every Pesapal-layer
+  //    error lands in the same mapPaymentError branch.
   let result: GeneratePaymentLinkResult;
   try {
+    const client = getPaymentProviderClient(paymentConfig);
     result = await client.generatePaymentLink({
       lineItemId,
       orderId,
@@ -314,7 +318,16 @@ function mapPaymentError(err: unknown): MappedError {
     case "PESAPAL_UNREACHABLE":
       return { message: err.message, reason: "unreachable", httpStatus: 503 };
     case "PESAPAL_NO_IPN":
-      return { message: err.message, reason: "invalid_config", httpStatus: 503 };
+      // Per #119 AC-LIB-2: community has a provider configured but no IPN
+      // registered yet — a user-caused not-ready state distinct from the
+      // malformed/invalid (503) case. 409 signals "config exists but link
+      // generation is gated on IPN registration (ships with #121)".
+      return {
+        message:
+          "Payment provider is configured but no IPN has been registered yet. A super admin must complete IPN registration before links can be generated.",
+        reason: "invalid_config",
+        httpStatus: 409,
+      };
     case "PESAPAL_INVALID_CONFIG":
       return { message: err.message, reason: "invalid_config", httpStatus: 503 };
     case "PESAPAL_MISSING_CONTACT":

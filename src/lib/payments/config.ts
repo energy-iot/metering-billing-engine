@@ -95,8 +95,21 @@ export async function getCommunityPaymentConfig(
   );
 }
 
-/** Validate the JSONB shape for Pesapal. Throws `PAYMENT_INVALID_CONFIG` on any issue. */
-function parsePesapalConfig(raw: unknown): PesapalConfig {
+/**
+ * Validate the JSONB shape for Pesapal.
+ *
+ * Required fields: `consumer_key`, `base_url`.
+ *
+ * `ipn_id` is **optional** (#119 contract amendment — IPN registration UX
+ * ships with #121). A configured community without ipn_id is "ready for auth
+ * validation" but not yet "ready to generate links" — the strict check lives
+ * further downstream in `PesapalProvider` / `submitOrder`, which throws
+ * `PESAPAL_NO_IPN` when a link is actually requested.
+ *
+ * Throws `PAYMENT_INVALID_CONFIG` only when the shape itself is wrong or the
+ * truly-required fields are missing.
+ */
+export function parsePesapalConfig(raw: unknown): PesapalConfig {
   if (!raw || typeof raw !== "object") {
     throw new PaymentError(
       "payment_provider_config is missing or not an object",
@@ -107,13 +120,17 @@ function parsePesapalConfig(raw: unknown): PesapalConfig {
   const obj = raw as Record<string, unknown>;
   const consumer_key = typeof obj.consumer_key === "string" ? obj.consumer_key : "";
   const base_url = typeof obj.base_url === "string" ? obj.base_url : "";
-  const ipn_id = typeof obj.ipn_id === "string" ? obj.ipn_id : "";
-  if (!consumer_key || !base_url || !ipn_id) {
+  if (!consumer_key || !base_url) {
     throw new PaymentError(
-      "payment_provider_config is missing required fields (consumer_key, base_url, ipn_id)",
+      "payment_provider_config is missing required fields (consumer_key, base_url)",
       "PAYMENT_INVALID_CONFIG",
       500,
     );
   }
-  return { consumer_key, base_url, ipn_id };
+  const ipn_id_raw = typeof obj.ipn_id === "string" ? obj.ipn_id : "";
+  const sandbox = typeof obj.sandbox === "boolean" ? obj.sandbox : undefined;
+  const parsed: PesapalConfig = { consumer_key, base_url };
+  if (ipn_id_raw) parsed.ipn_id = ipn_id_raw;
+  if (sandbox !== undefined) parsed.sandbox = sandbox;
+  return parsed;
 }

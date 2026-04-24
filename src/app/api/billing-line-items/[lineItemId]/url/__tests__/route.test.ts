@@ -266,6 +266,47 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("not_found");
   });
 
+  // ─── (9) IPN not registered (post-#119 deferred-IPN state) ───────────────
+  //
+  // A community configured with empty ipn_id is "configured for auth" but
+  // not yet "ready for link generation". The PesapalProvider constructor
+  // throws PESAPAL_NO_IPN; the route maps it to 409 reason: "invalid_config"
+  // with a distinct message so the UI can render the Designer §8 gate copy.
+  //
+  // Since this test mocks `getPaymentProviderClient`, we simulate the
+  // constructor-time throw by having the factory's generatePaymentLink mock
+  // raise PESAPAL_NO_IPN. End-to-end coverage (real factory + real provider
+  // constructor) is out of scope for this route test — the library-side
+  // validation is covered by parsePesapalConfig + PesapalProvider unit tests.
+  it("(9) returns 409 invalid_config when config has empty ipn_id (deferred-IPN state)", async () => {
+    const { PesapalError } = await import("@/lib/payments/pesapal/errors");
+    generatePaymentLinkMock.mockRejectedValueOnce(
+      new PesapalError(
+        "Pesapal config missing ipn_id — register an IPN via Pesapal first",
+        "PESAPAL_NO_IPN",
+        400,
+      ),
+    );
+    getCommunityPaymentConfigMock.mockResolvedValueOnce({
+      ...GOOD_CONFIG,
+      config: {
+        consumer_key: GOOD_CONFIG.config.consumer_key,
+        base_url: GOOD_CONFIG.config.base_url,
+        // ipn_id intentionally omitted — parsePesapalConfig now accepts this
+        // shape and returns a PesapalConfig without ipn_id.
+      },
+    });
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.reason).toBe("invalid_config");
+    expect(String(body.error)).toMatch(/IPN/i);
+  });
+
   // ─── (8) Log scrubber strips secret + token + URL ─────────────────────────
   it("(8) log payload never contains secret, session token, or redirect URL", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});

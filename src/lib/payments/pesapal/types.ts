@@ -73,9 +73,24 @@ export interface SubmitOrderResponse {
  * `communities.payment_provider_config`. `consumer_secret` is stored separately
  * in `payment_provider_secret_encrypted` (envelope-encrypted BYTEA) and
  * surfaced via `fn_get_community_payment_secret`.
+ *
+ * `ipn_id` is **optional** today (#119 contract amendment): Save & test
+ * persists a config with no IPN registered yet — IPN registration UX lands
+ * with #121. `submitOrder` remains strict; the PesapalProvider constructor
+ * throws PESAPAL_NO_IPN at link-generation time when ipn_id is missing,
+ * which surfaces as a clean 409/503 to the user rather than a silent crash.
  */
 export interface PesapalConfig {
   consumer_key: string;
   base_url: string;
-  ipn_id: string;
+  ipn_id?: string;
+  /**
+   * Persisted reflection of the Sandbox toggle in the config UI. Server
+   * derives `base_url` from this boolean on write, but we also persist the
+   * flag so the Reconfigure form can round-trip the toggle state without
+   * string-matching the URL. Optional for backward compatibility with rows
+   * written before #119 (there shouldn't be any in production, but tests
+   * and fixtures may omit it).
+   */
+  sandbox?: boolean;
 }
