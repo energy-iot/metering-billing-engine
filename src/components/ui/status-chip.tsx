@@ -21,7 +21,8 @@ type Kind =
   | "household"
   | "householdDeviceRole"
   | "meterType"
-  | "openemsBackendHealth";
+  | "openemsBackendHealth"
+  | "paymentHealth";
 
 type StatusMap = Record<string, { label: string; tone: ChipProps["tone"]; dot?: boolean }>;
 
@@ -106,6 +107,21 @@ const MAPS: Record<Kind, StatusMap> = {
   //   not_configured — ems_type IS NULL; no Discover has run. NO dot (chip
   //                   shouldn't imply any state, just absence).
   openemsBackendHealth: {
+    healthy:        { label: "Healthy",       tone: "success", dot: true  },
+    stale:          { label: "Stale",         tone: "warn",    dot: true  },
+    failing:        { label: "Failing",       tone: "alert",   dot: true  },
+    not_configured: { label: "Not connected", tone: "neutral" /* no dot */ },
+  },
+  // Community Payment-provider health (#119).
+  //   healthy        — payment_last_configured_at is recent (< 24h).
+  //   stale          — configured but last Save & test was ≥ 24h ago; user
+  //                    should "Test again".
+  //   failing        — RESERVED for #121 (IPN webhook failure tracking).
+  //                    `derivePaymentHealth` never emits this today, but the
+  //                    MAPS entry stays pinned so Designer §3's tone table
+  //                    remains stable across the deferred-IPN rollout.
+  //   not_configured — payment_provider IS NULL (no dot — just absence).
+  paymentHealth: {
     healthy:        { label: "Healthy",       tone: "success", dot: true  },
     stale:          { label: "Stale",         tone: "warn",    dot: true  },
     failing:        { label: "Failing",       tone: "alert",   dot: true  },

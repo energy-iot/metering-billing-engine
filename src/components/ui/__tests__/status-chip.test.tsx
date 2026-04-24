@@ -141,3 +141,49 @@ describe("StatusChip — openemsBackendHealth kind", () => {
     expect(chip?.className).toContain("bg-success-muted");
   });
 });
+
+// #119 — Community Payment-provider health chip (4 states).
+describe("StatusChip — paymentHealth kind", () => {
+  it("renders 'healthy' with success background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="paymentHealth" status="healthy" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-success-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-success");
+    expect(container.textContent).toContain("Healthy");
+  });
+
+  it("renders 'stale' with warn background + dot", () => {
+    const { container } = render(
+      <StatusChip kind="paymentHealth" status="stale" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-warning-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-warning");
+    expect(container.textContent).toContain("Stale");
+  });
+
+  it("renders 'failing' with alert background + dot (reserved; not emitted by derivePaymentHealth today)", () => {
+    const { container } = render(
+      <StatusChip kind="paymentHealth" status="failing" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-destructive-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-destructive");
+    expect(container.textContent).toContain("Failing");
+  });
+
+  it("renders 'not_configured' with neutral background + NO dot", () => {
+    const { container } = render(
+      <StatusChip kind="paymentHealth" status="not_configured" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-muted");
+    const dot = chip?.querySelector(
+      "span.bg-success, span.bg-warning, span.bg-destructive, span.bg-muted-foreground",
+    );
+    expect(dot).toBeNull();
+    expect(container.textContent).toContain("Not connected");
+  });
+});
