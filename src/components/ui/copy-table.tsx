@@ -46,7 +46,8 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-export type ColumnDef<Row> = {
+/** Row-header or copyable value column (original shape — existing callers unchanged). */
+export type ValueColumnDef<Row> = {
   /** Column header text — used for <th> and the per-cell aria-label. */
   header: string;
   /** "row-header" renders as <th scope="row">, no copy. "value" is copyable. */
@@ -60,6 +61,28 @@ export type ColumnDef<Row> = {
   /** Optional id used for aria-labelledby compositions. */
   id?: string;
 };
+
+/**
+ * Action column — renders arbitrary React content per row.
+ * Excluded from keyboard nav (no copy-pulse, no focus ring, no aria-label composition).
+ * The rendered content is responsible for its own interactivity and accessibility.
+ */
+export type ActionColumnDef<Row> = {
+  kind: "action";
+  /** Column header text rendered in <th>. */
+  header: string;
+  /** Optional aria-label override for the header cell (unused in nav). */
+  ariaLabel?: string;
+  /** Render arbitrary React content for each row. */
+  render: (row: Row) => React.ReactNode;
+  /** Tailwind classes on the cell. */
+  className?: string;
+  /** Optional id used for aria-labelledby compositions. */
+  id?: string;
+};
+
+/** Discriminated union over all column kinds. */
+export type ColumnDef<Row> = ValueColumnDef<Row> | ActionColumnDef<Row>;
 
 export interface CopyTableProps<Row> {
   rows: Row[];
@@ -86,6 +109,7 @@ export function CopyTable<Row>({
 }: CopyTableProps<Row>) {
   // Index of the row-header column (only one supported); numeric value
   // columns are everything else. Focus is restricted to value columns.
+  // Action columns are explicitly excluded — they're outside the copy-cell grid.
   const valueColIdxs = React.useMemo(
     () => columns.map((c, i) => (c.kind === "value" ? i : -1)).filter((i) => i >= 0),
     [columns],
@@ -165,7 +189,7 @@ export function CopyTable<Row>({
     (r: number, c: number) => {
       const col = columns[c];
       const row = rows[r];
-      if (!col || !row) return "";
+      if (!col || !row || col.kind === "action") return "";
       const raw = col.accessor(row);
       return (col.format ?? defaultFormat)(raw, row);
     },
@@ -175,7 +199,9 @@ export function CopyTable<Row>({
   const rowHeaderText = React.useCallback(
     (r: number): string => {
       if (rowHeaderIdx < 0) return `Row ${r + 1}`;
-      const raw = columns[rowHeaderIdx].accessor(rows[r]);
+      const col = columns[rowHeaderIdx];
+      if (col.kind === "action") return `Row ${r + 1}`;
+      const raw = col.accessor(rows[r]);
       return raw == null ? `Row ${r + 1}` : String(raw);
     },
     [columns, rows, rowHeaderIdx],
@@ -314,7 +340,7 @@ export function CopyTable<Row>({
                   id={col.id ?? `mbe-col-${ci}`}
                   className={cn(
                     "h-8 whitespace-nowrap border-b border-border px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
-                    col.kind === "row-header" ? "text-left" : "text-right",
+                    col.kind === "row-header" ? "text-left" : col.kind === "action" ? "text-center" : "text-right",
                     col.className,
                   )}
                 >
@@ -327,6 +353,21 @@ export function CopyTable<Row>({
             {rows.map((row, r) => (
               <tr key={r} className="border-b border-border last:border-b-0">
                 {columns.map((col, c) => {
+                  // Action columns: plain <td> with rendered content — no copy, no focus, no aria-label composition.
+                  if (col.kind === "action") {
+                    return (
+                      <td
+                        key={c}
+                        className={cn(
+                          "h-[30px] whitespace-nowrap px-2 text-center",
+                          col.className,
+                        )}
+                      >
+                        {col.render(row)}
+                      </td>
+                    );
+                  }
+
                   const formatted = formatCell(r, c);
                   if (col.kind === "row-header") {
                     return (

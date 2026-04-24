@@ -24,6 +24,8 @@ export interface BannerProps {
   children: React.ReactNode;
   action?: React.ReactNode;
   className?: string;
+  /** HTML id — useful for aria-describedby linkage from related controls. */
+  id?: string;
 }
 
 const toneClasses: Record<BannerTone, string> = {
@@ -33,12 +35,13 @@ const toneClasses: Record<BannerTone, string> = {
   destructive: "bg-destructive-muted text-destructive-fg border-l-4 border-destructive",
 };
 
-export function Banner({ tone, title, children, action, className }: BannerProps) {
+export function Banner({ tone, title, children, action, className, id }: BannerProps) {
   // Destructive banners are alert-level; others are status (or neutral informational).
   const role = tone === "destructive" ? "alert" : "status";
 
   return (
     <div
+      id={id}
       role={role}
       className={cn("p-4 rounded-md", toneClasses[tone], className)}
     >
