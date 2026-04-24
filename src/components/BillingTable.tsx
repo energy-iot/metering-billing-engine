@@ -16,7 +16,7 @@ import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/close-period-dialog";
 import { Banner } from "@/components/ui/banner";
-import { PaymentLinkButton } from "@/components/billing/payment-link-button";
+import { PaymentRowActions } from "@/components/billing/payment-row-actions";
 import type {
   BillingLineItem,
   BillingPeriod,
@@ -248,10 +248,25 @@ export function BillingTable({
       render: (h) => {
         const item = lineItemMap.get(h.id);
         if (!item) return null;
+
+        // Build period label for the ConfirmDialog body.
+        const periodLabel =
+          period.start_date === period.end_date
+            ? period.start_date
+            : `${period.start_date} – ${period.end_date}`;
+
         return (
-          <PaymentLinkButton
+          <PaymentRowActions
             lineItemId={item.id}
-            disabled={!isPaymentConfigured}
+            isPaymentConfigured={isPaymentConfigured}
+            lineItem={{
+              id: item.id,
+              payment_status: item.payment_status,
+              household_name: h.display_name,
+              period_label: periodLabel,
+              total_amount: item.total_amount,
+              currency: localeCurrency,
+            }}
           />
         );
       },

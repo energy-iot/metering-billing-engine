@@ -76,6 +76,12 @@ export type HouseholdDeviceRole =
 export type BillingPeriodStatus =
   Database["public"]["Enums"]["billing_period_status"];
 
+/** Payment status for a single billing_line_items row. Mirrors the
+ *  `billing_line_item_payment_status` Postgres enum (migration 00021).
+ *  Keep in sync with `src/lib/payments/state.ts` PaymentStatus type. */
+export type BillingLineItemPaymentStatus =
+  Database["public"]["Enums"]["billing_line_item_payment_status"];
+
 // ── Shared helper types ───────────────────────────────────────────────────────
 
 /** Tier config embedded in rate_schedules.tiers JSONB. */

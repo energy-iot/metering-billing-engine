@@ -42,6 +42,10 @@ export type Database = {
           end_kwh: number | null
           household_id: string
           id: string
+          paid_at: string | null
+          paid_by_user_id: string | null
+          payment_notes: string | null
+          payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
@@ -54,6 +58,10 @@ export type Database = {
           end_kwh?: number | null
           household_id: string
           id?: string
+          paid_at?: string | null
+          paid_by_user_id?: string | null
+          payment_notes?: string | null
+          payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -66,6 +74,10 @@ export type Database = {
           end_kwh?: number | null
           household_id?: string
           id?: string
+          paid_at?: string | null
+          paid_by_user_id?: string | null
+          payment_notes?: string | null
+          payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -99,6 +111,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "households"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_line_items_paid_by_user_id_fkey"
+            columns: ["paid_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -800,6 +819,11 @@ export type Database = {
       }
     }
     Enums: {
+      billing_line_item_payment_status:
+        | "unpaid"
+        | "paid"
+        | "failed"
+        | "refunded"
       billing_period_status: "draft" | "closed"
       device_type:
         | "consumption_meter"
@@ -950,6 +974,12 @@ export const Constants = {
   },
   public: {
     Enums: {
+      billing_line_item_payment_status: [
+        "unpaid",
+        "paid",
+        "failed",
+        "refunded",
+      ],
       billing_period_status: ["draft", "closed"],
       device_type: [
         "consumption_meter",
