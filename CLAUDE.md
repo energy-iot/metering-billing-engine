@@ -158,6 +158,8 @@ Five rules every contributor must follow:
 
 5. **Destructive actions:** Use `<ConfirmDialog tone="destructive">` for delete flows (Delete Period, Delete Meter, Delete Tenant). Use `<ClosePeriodDialog>` for billing-period close (irreversible, needs multi-channel confirm via totals review + checkbox); when the caller passes `unfilledHouseholdNames`, the dialog renders a warning-toned banner above the totals, flips the confirm button to "Close anyway", and appends an explicit acknowledgement to the checkbox copy (warn-but-allow per #167). Styled in neutral/primary tone — closing is a final commit, not a destruction. Reserve destructive tone for delete-entity flows (`<ConfirmDialog tone="destructive">`). Use `<ConfirmDialog tone="neutral">` for non-destructive warnings (e.g. remove-last-tier). Never use `confirm()` — it blocks the main thread and can't be tested.
 
+6. **Picker / empty-state mutual exclusion:** When a list surface has both a switcher control (e.g. `<PeriodPicker>`) and an `<EmptyState>`, the switcher MUST NOT render when its underlying collection is empty. The empty-state owns the create CTA at zero; the switcher owns the create CTA at ≥1. Switchers must not include their own internal "no items" empty-state branch — that responsibility belongs to the parent surface, where the canonical first-run pedagogy copy lives. Additionally, when an inline create form is open, the parent's `<EmptyState>` must hide so the form is the sole CTA on screen; the form itself must include a `Cancel` action so the user has an escape hatch back to the empty-state.
+
 ## Local Dev Setup
 
 See `docs/setup.md` for three modes:

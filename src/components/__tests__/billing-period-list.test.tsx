@@ -211,3 +211,151 @@ describe("BillingPeriodList — EmptyState (#139)", () => {
     expect(screen.queryByText("Create the first billing period")).toBeNull();
   });
 });
+
+// ─── CTA collapse / picker invariant (#171) ──────────────────────────────────
+//
+// One CTA at zero, one CTA at >=1, no overlap. Mirrors AC-7 of the ticket.
+
+describe("BillingPeriodList — CTA collapse (#171)", () => {
+  beforeEach(() => {
+    pushSpy.mockClear();
+  });
+
+  it("at zero periods + form closed: PeriodPicker NOT rendered, EmptyState rendered with one CTA, form NOT rendered", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+
+    // Picker hidden — its trigger has aria-haspopup="listbox"
+    expect(document.querySelector("button[aria-haspopup='listbox']")).toBeNull();
+
+    // EmptyState rendered with the canonical first-run title
+    expect(screen.getByText("Create the first billing period")).toBeTruthy();
+
+    // Exactly one CTA: the EmptyState's "+ Create period" button
+    const createButtons = screen.getAllByRole("button", { name: /Create period/i });
+    expect(createButtons).toHaveLength(1);
+
+    // Form not rendered — there's no Cancel button visible
+    expect(screen.queryByRole("button", { name: /^Cancel$/i })).toBeNull();
+  });
+
+  it("at zero periods + clicking EmptyState CTA: form rendered, EmptyState NOT rendered, PeriodPicker still NOT rendered", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+
+    // Click the EmptyState CTA to open the form
+    fireEvent.click(screen.getByRole("button", { name: /\+ Create period/i }));
+
+    // Form is rendered — Cancel + Create Period buttons visible
+    expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Create Period/i })).toBeTruthy();
+
+    // EmptyState gone — its title no longer in the document
+    expect(screen.queryByText("Create the first billing period")).toBeNull();
+
+    // Picker still hidden — periods.length is still 0
+    expect(document.querySelector("button[aria-haspopup='listbox']")).toBeNull();
+  });
+
+  it("at zero periods + form open + clicking Cancel: form NOT rendered, EmptyState rendered with CTA", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[]}
+          summaries={{}}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+
+    // Open the form
+    fireEvent.click(screen.getByRole("button", { name: /\+ Create period/i }));
+    expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
+
+    // Click Cancel
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel$/i }));
+
+    // Form gone — Cancel button no longer visible
+    expect(screen.queryByRole("button", { name: /^Cancel$/i })).toBeNull();
+
+    // EmptyState back with its "+ Create period" CTA
+    expect(screen.getByText("Create the first billing period")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\+ Create period/i })).toBeTruthy();
+  });
+
+  it("at >=1 period + form closed: PeriodPicker rendered, EmptyState NOT rendered, list rendered", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[PERIOD_1, PERIOD_2]}
+          summaries={SUMMARIES}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+
+    // Picker rendered
+    expect(document.querySelector("button[aria-haspopup='listbox']")).not.toBeNull();
+
+    // EmptyState absent
+    expect(screen.queryByText("Create the first billing period")).toBeNull();
+
+    // List rendered — column headers present
+    expect(screen.getByText(/Date Range/i)).toBeTruthy();
+  });
+
+  it("at >=1 period + clicking picker '+ New period': form rendered, picker still rendered, list still rendered", () => {
+    render(
+      <Wrapper>
+        <BillingPeriodList
+          microgridId={MICROGRID_ID}
+          periods={[PERIOD_1, PERIOD_2]}
+          summaries={SUMMARIES}
+          currency="UGX"
+          canManage={true}
+        />
+      </Wrapper>
+    );
+
+    // Open the picker
+    const trigger = document.querySelector(
+      "button[aria-haspopup='listbox']",
+    ) as HTMLButtonElement;
+    fireEvent.click(trigger);
+
+    // Click the picker's "+ New period" header CTA
+    fireEvent.click(screen.getByRole("button", { name: /\+ New period/i }));
+
+    // Form is rendered — Cancel + Create Period buttons visible
+    expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Create Period/i })).toBeTruthy();
+
+    // Picker still rendered
+    expect(document.querySelector("button[aria-haspopup='listbox']")).not.toBeNull();
+
+    // List still rendered — column header still in DOM
+    expect(screen.getByText(/Date Range/i)).toBeTruthy();
+  });
+});

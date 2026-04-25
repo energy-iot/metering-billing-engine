@@ -13,8 +13,15 @@
 //     is one of three core admin actions, not a ghost.
 //   • Same-day periods render as a single date (e.g. "2026-02-15") not
 //     "Feb 15 → Feb 15".
-//   • States: empty (no periods) / loading (skeleton rows) / error
-//     (retry inline). Disabled trigger when the user can't select.
+//   • States: loading (skeleton rows) / error (retry inline). Disabled
+//     trigger when the user can't select.
+//
+// INVARIANT: PeriodPicker MUST NOT be rendered when periods.length === 0.
+// The picker is a switcher; with zero entries there is nothing to switch
+// between. The parent surface's <EmptyState> owns the create CTA at zero;
+// the picker owns the create CTA at >= 1. See CLAUDE.md Design System
+// rule #6. If a caller violates the invariant, this component renders
+// nothing (defensive null) rather than a misleading empty branch.
 
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
@@ -53,11 +60,18 @@ export function PeriodPicker({
   disabled,
   className,
 }: PeriodPickerProps) {
+  // PeriodPicker MUST NOT be rendered when periods.length === 0 — see
+  // CLAUDE.md rule 6. Caller is responsible for hiding the picker at zero.
+  // Defensive null render to enforce the invariant if a caller violates it.
   const current = periods.find((p) => p.id === currentId) ?? periods[0];
   const [open, setOpen] = React.useState(false);
   const [activeIdx, setActiveIdx] = React.useState(() =>
     Math.max(0, periods.findIndex((p) => p.id === currentId)),
   );
+
+  if (periods.length === 0 && !loading && !error) {
+    return null;
+  }
 
   const onPanelKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -140,19 +154,11 @@ export function PeriodPicker({
               <div className="m-3 rounded-md bg-destructive-muted px-3 py-2.5 text-[13px] text-destructive-fg">
                 Couldn&apos;t load periods. <button className="underline">Retry</button>
               </div>
-            ) : periods.length === 0 ? (
-              <div className="m-3 rounded-md border border-dashed border-border bg-muted px-3 py-4 text-center text-[12px] text-muted-foreground">
-                <div className="mb-1.5 font-semibold text-foreground">No periods yet</div>
-                {onNewPeriod && (
-                  <button
-                    onClick={onNewPeriod}
-                    className="inline-flex h-6 items-center rounded-md bg-primary px-2.5 text-[12px] font-medium text-primary-foreground"
-                  >
-                    + Create the first
-                  </button>
-                )}
-              </div>
             ) : (
+              // INVARIANT: periods.length >= 1 here — the parent surface MUST
+              // hide PeriodPicker when periods.length === 0 (CLAUDE.md rule
+              // #6). The "No periods yet" empty branch was deleted because
+              // it is unreachable under the current contract.
               periods.map((p, i) => (
                 <button
                   key={p.id}
