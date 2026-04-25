@@ -142,14 +142,17 @@ export function BillingPeriodList({
 
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-foreground">Billing Periods</h2>
-        {/* PeriodPicker replaces the standalone "New Period" button.
-            currentId is undefined — the index page has no "current" period to highlight. */}
-        <PeriodPicker
-          periods={periods.map((p) => toPeriodOption(p, summaries))}
-          currentId={undefined}
-          onSelect={(option) => router.push(`/microgrids/${microgridId}/billing/${option.id}`)}
-          onNewPeriod={() => setShowCreateForm(true)}
-        />
+        {/* PeriodPicker is a switcher — it has nothing to switch between when
+            periods.length === 0. The <EmptyState> below owns the create CTA at
+            zero. See CLAUDE.md Design System rule #6. */}
+        {periods.length > 0 && (
+          <PeriodPicker
+            periods={periods.map((p) => toPeriodOption(p, summaries))}
+            currentId={undefined}
+            onSelect={(option) => router.push(`/microgrids/${microgridId}/billing/${option.id}`)}
+            onNewPeriod={() => setShowCreateForm(true)}
+          />
+        )}
       </div>
 
       {error && (
@@ -189,17 +192,27 @@ export function BillingPeriodList({
               />
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={creating}
-            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {creating ? "Creating..." : "Create Period"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreateForm(false)}
+              disabled={creating}
+              className="rounded-md bg-muted px-4 py-2 text-sm text-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={creating}
+              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {creating ? "Creating..." : "Create Period"}
+            </button>
+          </div>
         </form>
       )}
 
-      {periods.length === 0 ? (
+      {periods.length === 0 && !showCreateForm && (
         <EmptyState
           eyebrow="Billing periods"
           title="Create the first billing period"
@@ -229,7 +242,9 @@ export function BillingPeriodList({
           }
           className="border-0 shadow-none bg-transparent p-0"
         />
-      ) : (
+      )}
+
+      {periods.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
