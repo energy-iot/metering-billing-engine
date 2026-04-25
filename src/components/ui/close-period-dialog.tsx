@@ -36,6 +36,16 @@
 //   tone is reserved for delete flows. The rail and eyebrow render in
 //   primary tone; only the error-state banner and Retry button keep the
 //   destructive tokens (genuine failure state).
+//
+// Un-billed warning (#167):
+//   When `unfilledHouseholdNames` is non-empty, the dialog renders a
+//   warning-toned banner above the totals grid listing the un-metered
+//   households whose `usage_kwh` is still NULL. Closing is permitted —
+//   Aaron may genuinely want to bill nothing for a tenant — but the
+//   gesture becomes more deliberate: the confirm button label flips to
+//   "Close anyway" and the checkbox copy gains an explicit acknowledgement
+//   of the un-billed count. Tone uses warning tokens, not destructive,
+//   per Design System rule 3 (this is a soft block, not a failure state).
 
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -60,6 +70,12 @@ export interface ClosePeriodDialogProps {
   onConfirm: () => Promise<void>;
   /** Called when the user clicks "Export CSV for URA" in the closed state. */
   onExportCsv?: () => void;
+  /** Display names of un-metered households whose `usage_kwh` is still NULL.
+   *  When non-empty, the dialog renders a warning banner above the totals
+   *  grid, flips the confirm button label to "Close anyway", and appends
+   *  an acknowledgement of the un-billed count to the checkbox copy.
+   *  Default: `[]` (no banner, original "Close period" behavior). */
+  unfilledHouseholdNames?: string[];
 }
 
 type Phase = 2 | 2.5 | 3 | "E";
@@ -72,6 +88,7 @@ export function ClosePeriodDialog({
   grandTotal,
   onConfirm,
   onExportCsv,
+  unfilledHouseholdNames = [],
 }: ClosePeriodDialogProps) {
   const [phase, setPhase] = React.useState<Phase>(2);
   const [confirmed, setConfirmed] = React.useState(false);
@@ -108,6 +125,17 @@ export function ClosePeriodDialog({
     phase === 3
       ? "This period is now read-only. Export the CSV for your URA filing."
       : "Bills become final. This period will be filed with URA — values copied after this are the values you report.";
+
+  // #167 — un-billed warning derivations. Only relevant in the pre-close
+  // phases (2 / 2.5 / E); the closed surface intentionally drops the
+  // banner since the period is now committed and listing the un-billed
+  // households after-the-fact would be misleading.
+  const unfilledCount = unfilledHouseholdNames.length;
+  const hasUnfilled = unfilledCount > 0 && phase !== 3;
+  const unfilledHouseholdsWord = unfilledCount === 1 ? "household" : "households";
+  const unfilledNamesPreview = unfilledHouseholdNames.slice(0, 5).join(", ");
+  const unfilledNamesOverflow = unfilledCount > 5 ? unfilledCount - 5 : 0;
+  const confirmButtonLabel = hasUnfilled ? "Close anyway" : "Close period";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -157,6 +185,24 @@ export function ClosePeriodDialog({
             </Dialog.Description>
           </div>
 
+          {hasUnfilled && (
+            <div className="px-6 pt-3">
+              <div
+                data-testid="close-period-unfilled-banner"
+                role="alert"
+                className="rounded-md bg-warning-muted px-3 py-2.5 text-[13px] text-warning-fg"
+              >
+                <div className="font-semibold">
+                  {unfilledCount} {unfilledHouseholdsWord} still un-billed
+                </div>
+                <div className="mt-0.5">
+                  {unfilledNamesPreview}
+                  {unfilledNamesOverflow > 0 ? ` + ${unfilledNamesOverflow} more` : ""}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 px-6 pt-3">
             {summaryRows.map((r, i) => (
               <div key={i} className="rounded-md bg-muted px-2.5 py-2">
@@ -187,6 +233,9 @@ export function ClosePeriodDialog({
                 <span>
                   I have copied the tier values into URA&apos;s portal and confirm these
                   totals are what I will file.
+                  {hasUnfilled
+                    ? ` (including ${unfilledCount} un-billed ${unfilledHouseholdsWord})`
+                    : ""}
                 </span>
               </label>
             </div>
@@ -228,7 +277,7 @@ export function ClosePeriodDialog({
                 disabled={!confirmed}
                 className="inline-flex h-8 items-center rounded-md border border-primary bg-primary px-3.5 text-[13px] font-medium text-primary-foreground disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                Close period
+                {confirmButtonLabel}
               </button>
             )}
             {phase === 2.5 && (

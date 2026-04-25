@@ -46,6 +46,7 @@ function ControlledHarness(props: {
   initialOpen?: boolean;
   onConfirm: () => Promise<void>;
   onExportCsv?: () => void;
+  unfilledHouseholdNames?: string[];
 }) {
   const [open, setOpen] = React.useState(props.initialOpen ?? true);
   return (
@@ -64,6 +65,7 @@ function ControlledHarness(props: {
         grandTotal={GRAND_TOTAL}
         onConfirm={props.onConfirm}
         onExportCsv={props.onExportCsv}
+        unfilledHouseholdNames={props.unfilledHouseholdNames}
       />
     </Wrapper>
   );
@@ -287,5 +289,146 @@ describe("ClosePeriodDialog — a11y", () => {
     // And NOT the checkbox.
     const checkbox = screen.getByRole("checkbox");
     expect(document.activeElement).not.toBe(checkbox);
+  });
+});
+
+// ─── #167 — un-billed warning banner ──────────────────────────────────────────
+//
+// Pin the warn-but-allow contract:
+//   - With zero unfilled, no banner; button label is still "Close period";
+//     checkbox copy is unchanged.
+//   - With one unfilled, the banner appears with singular copy, lists the name,
+//     button label flips to "Close anyway", checkbox copy gets the
+//     " (including 1 un-billed household)" addendum.
+//   - With six unfilled, the banner shows plural copy and truncates the
+//     name list to the first five followed by "+ 1 more".
+//   - The banner uses warning tokens (bg-warning-muted + text-warning-fg),
+//     NOT destructive tokens.
+//   - The confirm flow still works end-to-end with the banner present:
+//     tick checkbox → button enables → click → onConfirm fires.
+
+describe("ClosePeriodDialog — un-billed warning banner (#167)", () => {
+  it("with zero unfilled: no banner, button reads 'Close period', checkbox copy has no addendum", () => {
+    render(
+      <ControlledHarness
+        onConfirm={() => Promise.resolve()}
+        unfilledHouseholdNames={[]}
+      />
+    );
+
+    // No banner rendered.
+    expect(screen.queryByTestId("close-period-unfilled-banner")).toBeNull();
+    expect(screen.queryByText(/un-billed/i)).toBeNull();
+
+    // Confirm button label unchanged.
+    const closeBtn = screen.getByRole("button", { name: /^Close period$/ });
+    expect(closeBtn).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Close anyway$/ })).toBeNull();
+
+    // Checkbox copy unchanged — no "(including ..." addendum.
+    expect(screen.queryByText(/including .* un-billed/i)).toBeNull();
+  });
+
+  it("with one unfilled: singular banner copy, lists the name, button reads 'Close anyway', checkbox addendum is singular", () => {
+    render(
+      <ControlledHarness
+        onConfirm={() => Promise.resolve()}
+        unfilledHouseholdNames={["House A"]}
+      />
+    );
+
+    // Banner present with singular heading.
+    const banner = screen.getByTestId("close-period-unfilled-banner");
+    expect(banner).toBeTruthy();
+    expect(screen.getByText("1 household still un-billed")).toBeTruthy();
+    // Plural form must NOT render in the singular case.
+    expect(screen.queryByText(/^1 households still un-billed$/)).toBeNull();
+
+    // Name listed in the body.
+    expect(screen.getByText("House A")).toBeTruthy();
+
+    // Confirm button label flips to "Close anyway".
+    expect(
+      screen.getByRole("button", { name: /^Close anyway$/ })
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Close period$/ })).toBeNull();
+
+    // Checkbox copy has the singular addendum.
+    expect(
+      screen.getByText(/including 1 un-billed household\)/)
+    ).toBeTruthy();
+  });
+
+  it("with six unfilled: plural banner copy, lists first 5 + '+ 1 more'", () => {
+    const names = [
+      "House A",
+      "House B",
+      "House C",
+      "House D",
+      "House E",
+      "House F",
+    ];
+    render(
+      <ControlledHarness
+        onConfirm={() => Promise.resolve()}
+        unfilledHouseholdNames={names}
+      />
+    );
+
+    // Plural heading.
+    expect(screen.getByText("6 households still un-billed")).toBeTruthy();
+
+    // First five listed in a comma-separated preview, followed by "+ 1 more".
+    const banner = screen.getByTestId("close-period-unfilled-banner");
+    expect(banner.textContent).toContain(
+      "House A, House B, House C, House D, House E + 1 more"
+    );
+    // The 6th name must NOT appear in the truncated preview.
+    expect(banner.textContent).not.toContain("House F");
+
+    // Plural addendum in checkbox copy.
+    expect(
+      screen.getByText(/including 6 un-billed households\)/)
+    ).toBeTruthy();
+  });
+
+  it("banner uses warning tokens, not destructive tokens (token-class drift sanity)", () => {
+    render(
+      <ControlledHarness
+        onConfirm={() => Promise.resolve()}
+        unfilledHouseholdNames={["House A", "House B"]}
+      />
+    );
+
+    const banner = screen.getByTestId("close-period-unfilled-banner");
+    expect(banner.className).toContain("bg-warning-muted");
+    expect(banner.className).toContain("text-warning-fg");
+    expect(banner.className).not.toContain("bg-destructive");
+    expect(banner.className).not.toContain("bg-destructive-muted");
+    expect(banner.className).not.toContain("text-destructive-fg");
+  });
+
+  it("confirm flow still works with the banner present: tick → enable → click → onConfirm", async () => {
+    const onConfirm = vi.fn(() => Promise.resolve());
+    render(
+      <ControlledHarness
+        onConfirm={onConfirm}
+        unfilledHouseholdNames={["House A"]}
+      />
+    );
+
+    const closeBtn = screen.getByRole("button", {
+      name: /^Close anyway$/,
+    }) as HTMLButtonElement;
+    expect(closeBtn.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(closeBtn.disabled).toBe(false);
+
+    fireEvent.click(closeBtn);
+    await waitFor(() => {
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    });
+    expect(onConfirm.mock.calls[0]).toEqual([]);
   });
 });
