@@ -1,0 +1,34 @@
+-- 00027_payment_state_machine_enum.sql
+-- Pesapal IPN Phase B: enum-only half of the payment state machine (#157).
+--
+-- ── Why this file is split from 00028 ────────────────────────────────────────
+--
+-- The original 00027 added the new enum value `link_generated` AND immediately
+-- referenced it as a string literal inside a CHECK constraint and a SECURITY
+-- DEFINER function in the same migration. Postgres has a known sharp edge:
+-- in older PG versions (and in some pooled / transactional contexts), a newly
+-- added enum value cannot be referenced inside the same transaction that
+-- added it — the value must be committed first.
+--
+-- Splitting the migration into two files (this one + 00028) makes the
+-- Supabase CLI run them in separate transactions, so the ALTER TYPE here is
+-- guaranteed to commit before 00028 references the new value. This keeps
+-- cloud deploys safe across PG versions.
+--
+-- ── Pre-migration enum (from 00021) ──────────────────────────────────────────
+--
+--   billing_line_item_payment_status: 'unpaid' | 'paid' | 'failed' | 'refunded'
+--
+-- This migration adds 'link_generated' (no-audit-fields tier — pre-payment).
+-- Everything else (column adds, CHECK constraint, payment_events table, RLS,
+-- fn_apply_payment_event, grants) lives in 00028_payment_state_machine.sql.
+--
+-- ── Idempotency ──────────────────────────────────────────────────────────────
+--
+-- ADD VALUE IF NOT EXISTS makes re-running this migration safe.
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 1. Enum: add 'link_generated' to billing_line_item_payment_status.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+ALTER TYPE billing_line_item_payment_status ADD VALUE IF NOT EXISTS 'link_generated';

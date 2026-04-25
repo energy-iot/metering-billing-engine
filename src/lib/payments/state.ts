@@ -2,7 +2,8 @@
  * state.ts — Payment-status state machine for manual + IPN transitions.
  *
  * This module is a pure-TS mirror of the SQL state machine encoded in
- * `fn_apply_payment_event` (migration 00027). The DB function is authoritative
+ * `fn_apply_payment_event` (migrations 00027 (enum) + 00028 (rest)). The DB
+ * function is authoritative
  * — these helpers are application-layer pre-flight guards so routes can
  * surface 400 invalid_transition / no_op responses without round-tripping to
  * the DB. Keep both in sync.
@@ -10,7 +11,8 @@
  * ── PaymentStatus ─────────────────────────────────────────────────────────────
  *
  * Mirrors the `billing_line_item_payment_status` Postgres enum (migrations
- * 00021 + 00027). Keep in sync with `src/lib/types/domain.ts:BillingLineItemPaymentStatus`.
+ * 00021 + 00027 (enum-only split) + 00028 (state-machine rest)). Keep in sync
+ * with `src/lib/types/domain.ts:BillingLineItemPaymentStatus`.
  *
  * ── Allowed manual transitions (Phase B widening) ─────────────────────────────
  *
@@ -47,7 +49,8 @@
 /**
  * All possible payment statuses for a billing_line_items row.
  * Mirrors `billing_line_item_payment_status` Postgres enum (migrations
- * 00021 + 00027 — `link_generated` added in 00027).
+ * 00021 + 00027 — `link_generated` added in 00027 (enum-only); state-machine
+ * plumbing that references it lives in 00028).
  */
 export type PaymentStatus =
   | "unpaid"
@@ -87,7 +90,8 @@ export const ALLOWED_MANUAL_TRANSITIONS: readonly ManualPaymentTransition[] = [
 
 /**
  * Allowed IPN-driven transitions. Mirrors the matrix encoded in
- * `fn_apply_payment_event` (migration 00027 §6) for source='ipn'.
+ * `fn_apply_payment_event` (migrations 00027 (enum) + 00028 (rest, §5) for
+ * source='ipn'.
  *
  * `unpaid → paid|failed` is included defensively for the case where a Pesapal
  * IPN arrives before the link-route's `unpaid → link_generated` event has

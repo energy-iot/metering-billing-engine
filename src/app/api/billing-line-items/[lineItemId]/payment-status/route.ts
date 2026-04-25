@@ -4,7 +4,8 @@
  * Manual mark-paid / mark-unpaid for a single billing_line_items row.
  * Phase B (#157) widens the body whitelist: super_admins may set 'failed' /
  * 'refunded' (reconciliation-class actions). All transitions go through the
- * authoritative SQL state machine `fn_apply_payment_event` (migration 00027)
+ * authoritative SQL state machine `fn_apply_payment_event` (migrations 00027
+ * (enum) + 00028 (rest))
  * which appends an audit row to `payment_events` automatically.
  *
  * Path chain:
