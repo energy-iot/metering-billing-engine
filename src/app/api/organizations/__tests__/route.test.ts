@@ -14,6 +14,9 @@ import { NextRequest } from "next/server";
 
 // ── Mocks ───────────────────────────────────────────────────────────────
 
+const mockRevalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
+
 let isSuperAdminReturn = true;
 const mockInsert = vi.fn();
 const mockUpdate = vi.fn();
@@ -145,6 +148,8 @@ describe("POST /api/organizations", () => {
     expect(res.status).toBe(201);
     const json = await res.json();
     expect(json.organization.id).toBe("o1");
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/organizations", "layout");
   });
 });
 

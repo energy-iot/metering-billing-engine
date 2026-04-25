@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessOrg } from "@/lib/auth/access";
 
@@ -81,6 +82,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 500 }
     );
   }
+
+  revalidatePath("/communities", "layout");
+  revalidatePath("/microgrids", "layout");
+  revalidatePath(`/organizations/${orgId}`, "layout");
 
   return NextResponse.json({ community: data }, { status: 201 });
 }

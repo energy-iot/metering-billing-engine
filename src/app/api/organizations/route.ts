@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserIsSuperAdmin } from "@/lib/auth/access";
 
@@ -91,6 +92,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 500 }
     );
   }
+
+  revalidatePath("/organizations", "layout");
 
   return NextResponse.json({ organization: data }, { status: 201 });
 }

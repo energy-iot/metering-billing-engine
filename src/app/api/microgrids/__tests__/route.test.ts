@@ -14,6 +14,9 @@ import { NextRequest } from "next/server";
 
 // ── Mocks ───────────────────────────────────────────────────────────────
 
+const mockRevalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
+
 let canAccessCommunityReturn = true;
 let canAccessMicrogridReturn = true;
 
@@ -174,6 +177,12 @@ describe("POST /api/microgrids", () => {
         name: "New MG",
         currency: "USD",
       })
+    );
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/microgrids", "layout");
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/communities/${VALID_COMMUNITY}`,
+      "layout"
     );
   });
 });
