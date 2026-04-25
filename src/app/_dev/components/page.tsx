@@ -159,7 +159,7 @@ export default function ComponentsDevPage() {
         <Section title="ClosePeriodDialog">
           <button
             onClick={() => setClosePeriodOpen(true)}
-            className="inline-flex h-8 items-center rounded-md border border-destructive bg-card px-3.5 text-[13px] font-medium text-destructive hover:bg-destructive-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex h-8 items-center rounded-md border border-primary bg-card px-3.5 text-[13px] font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Open Close Period Dialog
           </button>
