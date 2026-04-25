@@ -25,6 +25,8 @@ const mockHouseholdsUpdateSingle = vi.fn();
 const mockHouseholdsRefetchSingle = vi.fn();
 const mockHouseholdDevicesDeleteEq2 = vi.fn();
 const mockHouseholdDevicesInsert = vi.fn();
+// Steal-check: SELECT household_id FROM household_devices WHERE device_id=? AND role=? AND household_id != ?
+const mockHouseholdDevicesStealCheckMaybeSingle = vi.fn();
 
 // Track call counts to dispatch successive .from("households") calls.
 let householdsCalls = 0;
@@ -70,6 +72,16 @@ const mockFrom = vi.fn((table: string) => {
   }
   if (table === "household_devices") {
     return {
+      // Steal-check path: select().eq().eq().neq().maybeSingle()
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            neq: () => ({
+              maybeSingle: () => mockHouseholdDevicesStealCheckMaybeSingle(),
+            }),
+          }),
+        }),
+      }),
       delete: () => ({
         eq: () => ({
           eq: () => mockHouseholdDevicesDeleteEq2(),
@@ -97,6 +109,7 @@ vi.mock("@/lib/auth/access", () => ({
 }));
 
 const HH_UUID = "660e8400-e29b-41d4-a716-446655440001";
+const HH_UUID_B = "660e8400-e29b-41d4-a716-446655440002";
 const MG_UUID = "660e8400-e29b-41d4-a716-446655440099";
 const DEVICE_UUID = "660e8400-e29b-41d4-a716-44665544aaaa";
 const BAD_ID = "not-a-uuid";
@@ -149,6 +162,11 @@ describe("PATCH /api/households/[id]", () => {
       error: null,
     });
     mockHouseholdDevicesInsert.mockReset().mockResolvedValue({
+      error: null,
+    });
+    // Default: no existing cross-household link (steal check passes)
+    mockHouseholdDevicesStealCheckMaybeSingle.mockReset().mockResolvedValue({
+      data: null,
       error: null,
     });
   });
@@ -294,6 +312,33 @@ describe("PATCH /api/households/[id]", () => {
     expect(res.status).toBe(409);
     const json = await res.json();
     expect(json.reason).toBe("device_already_linked");
+  });
+
+  it("409: cross-household device steal blocked before any mutation", async () => {
+    // Pre-seed: DEVICE_UUID is already the primary_consumption_meter for HH_UUID_B.
+    // Household A (HH_UUID) attempts to claim it.
+    mockHouseholdDevicesStealCheckMaybeSingle.mockResolvedValueOnce({
+      data: { household_id: HH_UUID_B },
+      error: null,
+    });
+
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { device_id: DEVICE_UUID }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+
+    // Should be rejected with 409 device_already_linked
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.reason).toBe("device_already_linked");
+    expect(json.error).toMatch(/already linked to another household/);
+
+    // Steal check fires BEFORE any mutation — no household-row update,
+    // no delete, no insert on household_devices.
+    expect(mockHouseholdsUpdateSingle).not.toHaveBeenCalled();
+    expect(mockHouseholdDevicesDeleteEq2).not.toHaveBeenCalled();
+    expect(mockHouseholdDevicesInsert).not.toHaveBeenCalled();
   });
 
   it("403: RLS denial (42501) on household update", async () => {

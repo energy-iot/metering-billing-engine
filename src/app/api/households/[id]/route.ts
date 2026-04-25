@@ -37,8 +37,10 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
  * the explicit check here produces actionable 403s before a Postgres 42501
  * surfaces.
  *
- * Errors: `{ error, reason? }`. Postgres 42501 → 403, 23505 (partial unique
- * index on `household_devices.role='primary_consumption_meter'`) → 409,
+ * Errors: `{ error, reason? }`. Postgres 42501 → 403, 23505 → 409 (the
+ * schema's partial unique index guards one household having two primaries;
+ * cross-household steal is blocked by an explicit server-side SELECT guard
+ * added in the #145 review — see "Cross-household steal protection" below),
  * default → 500.
  */
 
@@ -269,6 +271,32 @@ export async function PATCH(
   }
 
   const changedFieldNames = Object.keys(update);
+
+  // Cross-household steal protection.
+  // The schema's unique index prevents one household from having two primary
+  // meters, not one device being claimed by two households. Guard server-side.
+  // Checked BEFORE any mutation so a 409 short-circuits the whole request and
+  // leaves both households untouched.
+  if (deviceIdProvided && deviceIdValue) {
+    const { data: existingLink } = await supabase
+      .from("household_devices")
+      .select("household_id")
+      .eq("device_id", deviceIdValue)
+      .eq("role", "primary_consumption_meter")
+      .neq("household_id", id)
+      .maybeSingle();
+
+    if (existingLink) {
+      return NextResponse.json(
+        {
+          error:
+            "Device is already linked to another household. Unlink it from the source household first.",
+          reason: "device_already_linked",
+        },
+        { status: 409 },
+      );
+    }
+  }
 
   // STEP 1 — household-row update (when any field changed)
   let updatedHousehold: Record<string, unknown> | null = null;
