@@ -38,12 +38,24 @@ import type { DeviceType } from "@/lib/types/domain";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-/** Shape of an available-meter row passed from the server component. */
+/**
+ * Shape of an available-meter row passed from the server component.
+ *
+ * Widened in #145 to include `edge_id` (required by `<DeviceSelect>` for
+ * grouping by edge) and `linked_household_name` (rendered as a
+ * "(linked: …)" suffix on already-assigned consumption meters when surfaced
+ * in `<DeviceSelect>`). The wizard's StepMeter still filters out linked
+ * meters at the call site, so AvailableMeter populates `linked_household_name`
+ * with `null` for the wizard's own usage but is shaped for cross-surface
+ * reuse in the Household Edit dialog.
+ */
 export type AvailableMeter = {
   id: string;
   name: string;
   device_type: DeviceType;
+  edge_id: string;
   edge_name: string;
+  linked_household_name: string | null;
 };
 
 export interface HouseholdWizardProps {

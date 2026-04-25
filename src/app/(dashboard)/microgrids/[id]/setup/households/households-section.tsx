@@ -77,6 +77,7 @@ export function HouseholdsSection({
         primaryDeviceAssignments={primaryDeviceAssignments}
         canManage={canManage}
         onAdd={() => setWizardOpen(true)}
+        microgridEdgesSetupHref={`/microgrids/${microgridId}/setup/edges`}
       />
     </div>
   );

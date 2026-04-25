@@ -43,13 +43,17 @@ const METERS: AvailableMeter[] = [
     id: "dev-1",
     name: "Household A Meter",
     device_type: "consumption_meter",
+    edge_id: "edge-1",
     edge_name: "Metering Pi",
+    linked_household_name: null,
   },
   {
     id: "dev-2",
     name: "Household B Meter",
     device_type: "consumption_meter",
+    edge_id: "edge-1",
     edge_name: "Metering Pi",
+    linked_household_name: null,
   },
 ];
 
