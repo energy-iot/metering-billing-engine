@@ -15,11 +15,11 @@
  *   - device_id semantics: the route reconciles the household_devices link
  *     by deleting any existing primary_consumption_meter row and (when
  *     non-null) inserting the new one. The dialog passes `null` to clear.
- *   - At-least-one-contact: form-level validation only. When both
- *     primary_email AND primary_phone are blank the contact section flags
- *     red (border-destructive ring) and the helper-text reads "At least
- *     one contact method is required (Pesapal needs to reach the
- *     customer)". Save remains disabled until the rule passes.
+ *   - Phone required (#155): primary_phone is mandatory — the payment-link
+ *     flow needs WhatsApp delivery. When primary_phone is blank the phone
+ *     field flags red (border-destructive ring) and the helper text reads
+ *     "Phone is required for payment links (WhatsApp delivery)." Save
+ *     remains disabled until the rule passes. primary_email stays optional.
  *   - Cancel-when-dirty: opens neutral <ConfirmDialog tone="neutral">
  *     with the discard prompt. Cancel-while-clean closes immediately.
  *   - Initial focus: display_name (the keystone identity field).
@@ -120,8 +120,10 @@ function buildDiff(
     out.primary_email = v.length > 0 ? v : null;
   }
   if (cur.primary_phone !== init.primary_phone) {
-    const v = cur.primary_phone.trim();
-    out.primary_phone = v.length > 0 ? v : null;
+    // #155: phone is required — canSave blocks the empty case, so we send
+    // the trimmed string here (never null). The PATCH route rejects null
+    // explicitly as a defense-in-depth check.
+    out.primary_phone = cur.primary_phone.trim();
   }
   if (cur.address_line1 !== init.address_line1) {
     const v = cur.address_line1.trim();
@@ -163,7 +165,7 @@ function buildDiff(
 
 // ── Component ────────────────────────────────────────────────────────────
 
-const CONTACT_HELPER_ID = "hh-edit-contact-helper";
+const PHONE_HELPER_ID = "hh-edit-phone-helper";
 const DEVICE_HELPER_ID = "hh-edit-device-helper";
 
 export function HouseholdEditDialog({
@@ -199,10 +201,10 @@ export function HouseholdEditDialog({
 
   const dirty = isDirty(state, init);
   const displayNameValid = state.display_name.trim().length > 0;
-  const hasContact =
-    state.primary_email.trim().length > 0 ||
-    state.primary_phone.trim().length > 0;
-  const canSave = dirty && displayNameValid && hasContact && !submitting;
+  // #155: phone is required for Pesapal payment-link delivery (WhatsApp).
+  // primary_email stays optional.
+  const hasPhone = state.primary_phone.trim().length > 0;
+  const canSave = dirty && displayNameValid && hasPhone && !submitting;
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setState((prev) => ({ ...prev, [key]: value }));
@@ -257,7 +259,7 @@ export function HouseholdEditDialog({
     onOpenChange(next);
   }
 
-  const contactInvalid = !hasContact;
+  const phoneInvalid = !hasPhone;
 
   return (
     <>
@@ -319,9 +321,9 @@ export function HouseholdEditDialog({
               {/* CONTACT */}
               <Section
                 title="Contact"
-                helper="At least one contact method is required (Pesapal needs to reach the customer)."
-                helperId={CONTACT_HELPER_ID}
-                helperTone={contactInvalid ? "destructive" : "default"}
+                helper="Phone is required for payment links (WhatsApp delivery)."
+                helperId={PHONE_HELPER_ID}
+                helperTone={phoneInvalid ? "destructive" : "default"}
               >
                 <Pair>
                   <Field
@@ -330,17 +332,16 @@ export function HouseholdEditDialog({
                     type="email"
                     value={state.primary_email}
                     onChange={(v) => update("primary_email", v)}
-                    describedBy={CONTACT_HELPER_ID}
-                    ariaInvalid={contactInvalid}
                   />
                   <Field
                     id="hh-edit-phone"
                     label="Primary phone"
                     type="tel"
+                    required
                     value={state.primary_phone}
                     onChange={(v) => update("primary_phone", v)}
-                    describedBy={CONTACT_HELPER_ID}
-                    ariaInvalid={contactInvalid}
+                    describedBy={PHONE_HELPER_ID}
+                    ariaInvalid={phoneInvalid}
                   />
                 </Pair>
               </Section>

@@ -12,7 +12,7 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
  *   {
  *     display_name?:        string;
  *     primary_email?:       string | null;
- *     primary_phone?:       string | null;
+ *     primary_phone?:       string;            // #155: must be non-empty if present
  *     address_line1?:       string | null;
  *     address_line2?:       string | null;
  *     unit_label?:          string | null;
@@ -35,8 +35,9 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
  * surface the error without rolling back the field updates (the operator
  * can retry the device assignment from the same dialog).
  *
- * At-least-one-contact is a form-level rule today; the route does NOT
- * reject when both contacts are blank — schema CHECK is a separate ticket.
+ * primary_phone is required (#155). The route rejects explicit null/empty/
+ * whitespace with 400 `household_phone_required`. PATCHes that omit
+ * primary_phone entirely still succeed (partial updates).
  *
  * Permission: super_admin OR org_manager via `currentUserCanAccessMicrogrid`,
  * resolved via the household's microgrid_id. RLS is the authoritative gate;
@@ -71,7 +72,7 @@ const ALLOWED_FIELDS = new Set([
 type HouseholdUpdate = {
   display_name?: string;
   primary_email?: string | null;
-  primary_phone?: string | null;
+  primary_phone?: string; // #155: NOT NULL — never set to null on update
   address_line1?: string | null;
   address_line2?: string | null;
   unit_label?: string | null;
@@ -189,17 +190,39 @@ export async function PATCH(
     update.primary_email = v;
   }
   if ("primary_phone" in bodyRec) {
-    const v = nullableString(bodyRec.primary_phone);
-    if (v === undefined) {
+    // #155: phone is required. Reject explicit null/empty/whitespace with
+    // structured 400. PATCHes that omit the key entirely are unaffected
+    // (backwards-compat — partial updates that don't touch phone still 200).
+    const raw = bodyRec.primary_phone;
+    if (raw === null) {
       return NextResponse.json(
         {
-          error: "primary_phone must be a string or null",
+          error: "household_phone_required",
+          reason: "household_phone_required",
+        },
+        { status: 400 }
+      );
+    }
+    if (typeof raw !== "string") {
+      return NextResponse.json(
+        {
+          error: "primary_phone must be a string",
           reason: "invalid_primary_phone",
         },
         { status: 400 }
       );
     }
-    update.primary_phone = v;
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return NextResponse.json(
+        {
+          error: "household_phone_required",
+          reason: "household_phone_required",
+        },
+        { status: 400 }
+      );
+    }
+    update.primary_phone = trimmed;
   }
   if ("address_line1" in bodyRec) {
     const v = nullableString(bodyRec.address_line1);

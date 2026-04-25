@@ -187,8 +187,9 @@ describe("HouseholdEditDialog (#145)", () => {
     });
   });
 
-  it("(6) at-least-one-contact rule disables save AND surfaces helper", () => {
-    // Start with email=null (already), then clear phone
+  it("(6) #155 — phone-required rule disables save AND surfaces helper", () => {
+    // Clear phone — Save must disable and helper text surfaces in destructive
+    // tone. (Email stays nullable; clearing it has no effect on save.)
     renderDialog({ currentDeviceId: "dev-1" });
 
     const phone = screen.getByLabelText(/Primary phone/i) as HTMLInputElement;
@@ -196,7 +197,7 @@ describe("HouseholdEditDialog (#145)", () => {
 
     // Helper text appears (color: destructive)
     expect(
-      screen.getByText(/At least one contact method is required/i)
+      screen.getByText(/Phone is required for payment links/i)
     ).toBeTruthy();
 
     const saveBtn = screen.getByRole("button", { name: /Save changes/i });

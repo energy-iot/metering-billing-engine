@@ -360,6 +360,62 @@ describe("PATCH /api/households/[id]", () => {
     expect(mockHouseholdDevicesInsert).not.toHaveBeenCalled();
   });
 
+  it("400: #155 — clearing primary_phone via empty string is rejected", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { primary_phone: "" }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.reason).toBe("household_phone_required");
+    expect(json.error).toBe("household_phone_required");
+    // No DB write
+    expect(mockHouseholdsUpdateSingle).not.toHaveBeenCalled();
+  });
+
+  it("400: #155 — clearing primary_phone via whitespace is rejected", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { primary_phone: "   " }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.reason).toBe("household_phone_required");
+  });
+
+  it("400: #155 — clearing primary_phone via null is rejected", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { primary_phone: null }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.reason).toBe("household_phone_required");
+  });
+
+  it("200: #155 — PATCH that omits primary_phone still succeeds (backwards-compat)", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { display_name: "Renamed" }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(200);
+    expect(mockHouseholdsUpdateSingle).toHaveBeenCalledTimes(1);
+  });
+
+  it("200: #155 — PATCH with non-empty primary_phone is accepted", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, { primary_phone: "+256700000001" }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(200);
+    expect(mockHouseholdsUpdateSingle).toHaveBeenCalledTimes(1);
+  });
+
   it("403: RLS denial (42501) on household update", async () => {
     mockHouseholdsUpdateSingle.mockResolvedValueOnce({
       data: null,

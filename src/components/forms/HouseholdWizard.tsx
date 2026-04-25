@@ -111,7 +111,12 @@ const STEP_LABELS: Record<Step, string> = {
 function isStepValid(step: Step, state: FormState, meterCount: number): boolean {
   switch (step) {
     case 1:
-      return state.display_name.trim().length > 0;
+      // #155: phone is required so Pesapal payment links can always be
+      // delivered via WhatsApp without falling back to manual lookup.
+      return (
+        state.display_name.trim().length > 0 &&
+        state.primary_phone.trim().length > 0
+      );
     case 2:
       // All fields optional.
       return true;
@@ -123,6 +128,7 @@ function isStepValid(step: Step, state: FormState, meterCount: number): boolean 
       // Review is valid iff 1 + 3 are (address is always optional).
       return (
         state.display_name.trim().length > 0 &&
+        state.primary_phone.trim().length > 0 &&
         meterCount > 0 &&
         state.device_id.length > 0
       );
@@ -253,7 +259,8 @@ export function HouseholdWizard({
         body: JSON.stringify({
           microgrid_id: microgridId,
           display_name: state.display_name.trim(),
-          primary_phone: state.primary_phone.trim() || null,
+          // #155: phone is required and validated upstream by isStepValid.
+          primary_phone: state.primary_phone.trim(),
           primary_email: state.primary_email.trim() || null,
           address_line1: state.address_line1.trim() || null,
           address_line2: state.address_line2.trim() || null,
@@ -364,6 +371,7 @@ export function HouseholdWizard({
                   update={update}
                   firstFieldRef={step1FirstFieldRef}
                   disabled={submitting}
+                  visited={visited.has(1)}
                 />
               )}
               {step === 2 && (
@@ -540,12 +548,17 @@ function StepBasics({
   update,
   firstFieldRef,
   disabled,
+  visited,
 }: {
   state: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   firstFieldRef: React.RefObject<HTMLInputElement | null>;
   disabled: boolean;
+  visited: boolean;
 }) {
+  // #155: phone is required for Pesapal payment-link delivery.
+  const phoneBlank = state.primary_phone.trim().length === 0;
+  const phoneInvalid = visited && phoneBlank;
   return (
     <fieldset className="space-y-4" disabled={disabled}>
       <legend className="sr-only">Step 1 of 4: Basics</legend>
@@ -574,7 +587,8 @@ function StepBasics({
             htmlFor="hh-primary-phone"
             className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            Primary phone
+            Primary phone <span aria-hidden="true">*</span>
+            <span className="sr-only"> (required)</span>
           </label>
           <Input
             id="hh-primary-phone"
@@ -582,7 +596,22 @@ function StepBasics({
             value={state.primary_phone}
             onChange={(e) => update("primary_phone", e.target.value)}
             placeholder="+256 …"
+            required
+            aria-required="true"
+            aria-invalid={phoneInvalid ? "true" : undefined}
+            aria-describedby={phoneInvalid ? "hh-primary-phone-error" : undefined}
+            className={cn(
+              phoneInvalid && "border-destructive ring-1 ring-destructive"
+            )}
           />
+          {phoneInvalid && (
+            <p
+              id="hh-primary-phone-error"
+              className="mt-1 text-xs text-destructive-fg"
+            >
+              Phone is required for payment links
+            </p>
+          )}
         </div>
         <div>
           <label
