@@ -11,6 +11,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
+const mockRevalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
+
 let canAccessOrgReturn = true;
 let canAccessCommunityReturn = true;
 
@@ -119,6 +122,13 @@ describe("POST /api/communities", () => {
 
     expect(mockInsert).toHaveBeenCalledWith(
       expect.objectContaining({ org_id: VALID_ORG, name: "C1" })
+    );
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/communities", "layout");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/microgrids", "layout");
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/organizations/${VALID_ORG}`,
+      "layout"
     );
   });
 });
