@@ -5,17 +5,23 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 /**
  * PATCH /api/households/[id]
  *
- * Added in #145 as part of the Household Edit dialog flow. Pattern follows
+ * Added in #145 as part of the Household Edit dialog flow. Widened in #146
+ * to accept the 5 new address fields. Pattern follows
  * `src/app/api/edges/[id]/route.ts`. Body shape:
  *
  *   {
- *     display_name?: string;
- *     primary_email?: string | null;
- *     primary_phone?: string | null;
- *     address_line1?: string | null;
- *     address_line2?: string | null;
- *     unit_label?:    string | null;
- *     device_id?:     string | null;
+ *     display_name?:        string;
+ *     primary_email?:       string | null;
+ *     primary_phone?:       string | null;
+ *     address_line1?:       string | null;
+ *     address_line2?:       string | null;
+ *     unit_label?:          string | null;
+ *     address_city?:        string | null;
+ *     address_region?:      string | null;
+ *     address_country?:     string | null;
+ *     address_postal_code?: string | null;
+ *     geography_notes?:     string | null;
+ *     device_id?:           string | null;
  *   }
  *
  * `device_id === null` clears the household's primary_consumption_meter
@@ -54,6 +60,11 @@ const ALLOWED_FIELDS = new Set([
   "address_line1",
   "address_line2",
   "unit_label",
+  "address_city",
+  "address_region",
+  "address_country",
+  "address_postal_code",
+  "geography_notes",
   "device_id",
 ]);
 
@@ -64,6 +75,11 @@ type HouseholdUpdate = {
   address_line1?: string | null;
   address_line2?: string | null;
   unit_label?: string | null;
+  address_city?: string | null;
+  address_region?: string | null;
+  address_country?: string | null;
+  address_postal_code?: string | null;
+  geography_notes?: string | null;
 };
 
 function nullableString(v: unknown): string | null | undefined {
@@ -223,6 +239,71 @@ export async function PATCH(
       );
     }
     update.unit_label = v;
+  }
+  if ("address_city" in bodyRec) {
+    const v = nullableString(bodyRec.address_city);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "address_city must be a string or null",
+          reason: "invalid_address_city",
+        },
+        { status: 400 }
+      );
+    }
+    update.address_city = v;
+  }
+  if ("address_region" in bodyRec) {
+    const v = nullableString(bodyRec.address_region);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "address_region must be a string or null",
+          reason: "invalid_address_region",
+        },
+        { status: 400 }
+      );
+    }
+    update.address_region = v;
+  }
+  if ("address_country" in bodyRec) {
+    const v = nullableString(bodyRec.address_country);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "address_country must be a string or null",
+          reason: "invalid_address_country",
+        },
+        { status: 400 }
+      );
+    }
+    update.address_country = v;
+  }
+  if ("address_postal_code" in bodyRec) {
+    const v = nullableString(bodyRec.address_postal_code);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "address_postal_code must be a string or null",
+          reason: "invalid_address_postal_code",
+        },
+        { status: 400 }
+      );
+    }
+    update.address_postal_code = v;
+  }
+  if ("geography_notes" in bodyRec) {
+    const v = nullableString(bodyRec.geography_notes);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "geography_notes must be a string or null",
+          reason: "invalid_geography_notes",
+        },
+        { status: 400 }
+      );
+    }
+    update.geography_notes = v;
   }
 
   const hasFieldUpdate = Object.keys(update).length > 0;

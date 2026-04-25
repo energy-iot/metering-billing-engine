@@ -16,14 +16,19 @@ import { createClient } from "@/lib/supabase/server";
  *
  * Request body:
  * {
- *   microgrid_id:   string;
- *   display_name:   string;
- *   device_id:      string;
- *   primary_phone?: string | null;
- *   primary_email?: string | null;
- *   address_line1?: string | null;
- *   address_line2?: string | null;
- *   unit_label?:    string | null;
+ *   microgrid_id:         string;
+ *   display_name:         string;
+ *   device_id:            string;
+ *   primary_phone?:       string | null;
+ *   primary_email?:       string | null;
+ *   address_line1?:       string | null;
+ *   address_line2?:       string | null;
+ *   unit_label?:          string | null;
+ *   address_city?:        string | null;
+ *   address_region?:      string | null;
+ *   address_country?:     string | null;
+ *   address_postal_code?: string | null;
+ *   geography_notes?:     string | null;
  * }
  *
  * Response:
@@ -86,6 +91,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     p_address_line1: optional(body.address_line1) ?? undefined,
     p_address_line2: optional(body.address_line2) ?? undefined,
     p_unit_label: optional(body.unit_label) ?? undefined,
+    p_address_city: optional(body.address_city) ?? undefined,
+    p_address_region: optional(body.address_region) ?? undefined,
+    p_address_country: optional(body.address_country) ?? undefined,
+    p_address_postal_code: optional(body.address_postal_code) ?? undefined,
+    p_geography_notes: optional(body.geography_notes) ?? undefined,
   });
 
   if (error) {
