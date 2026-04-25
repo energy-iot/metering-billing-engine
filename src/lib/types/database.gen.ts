@@ -34,14 +34,69 @@ export type Database = {
   }
   public: {
     Tables: {
+      billing_audit_log: {
+        Row: {
+          actor_user_id: string | null
+          billing_line_item_id: string | null
+          billing_period_id: string
+          created_at: string
+          details: Json
+          event_type: Database["public"]["Enums"]["billing_audit_event_type"]
+          id: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          billing_line_item_id?: string | null
+          billing_period_id: string
+          created_at?: string
+          details?: Json
+          event_type: Database["public"]["Enums"]["billing_audit_event_type"]
+          id?: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          billing_line_item_id?: string | null
+          billing_period_id?: string
+          created_at?: string
+          details?: Json
+          event_type?: Database["public"]["Enums"]["billing_audit_event_type"]
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_audit_log_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "billing_audit_log_billing_line_item_id_fkey"
+            columns: ["billing_line_item_id"]
+            isOneToOne: false
+            referencedRelation: "billing_line_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_audit_log_billing_period_id_fkey"
+            columns: ["billing_period_id"]
+            isOneToOne: false
+            referencedRelation: "billing_periods"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_line_items: {
         Row: {
           billing_period_id: string
           created_at: string
           device_id: string | null
           end_kwh: number | null
+          entered_at: string | null
+          entered_by_user_id: string | null
           household_id: string
           id: string
+          manual_reason: string | null
           paid_at: string | null
           paid_by_user_id: string | null
           payment_failed_at: string | null
@@ -49,6 +104,7 @@ export type Database = {
           payment_refunded_at: string | null
           payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id: string | null
+          reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
@@ -59,8 +115,11 @@ export type Database = {
           created_at?: string
           device_id?: string | null
           end_kwh?: number | null
+          entered_at?: string | null
+          entered_by_user_id?: string | null
           household_id: string
           id?: string
+          manual_reason?: string | null
           paid_at?: string | null
           paid_by_user_id?: string | null
           payment_failed_at?: string | null
@@ -68,6 +127,7 @@ export type Database = {
           payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id?: string | null
+          reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -78,8 +138,11 @@ export type Database = {
           created_at?: string
           device_id?: string | null
           end_kwh?: number | null
+          entered_at?: string | null
+          entered_by_user_id?: string | null
           household_id?: string
           id?: string
+          manual_reason?: string | null
           paid_at?: string | null
           paid_by_user_id?: string | null
           payment_failed_at?: string | null
@@ -87,6 +150,7 @@ export type Database = {
           payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id?: string | null
+          reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -113,6 +177,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "microgrid_shared_devices"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_line_items_entered_by_user_id_fkey"
+            columns: ["entered_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
           },
           {
             foreignKeyName: "billing_line_items_household_id_fkey"
@@ -650,6 +721,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "payment_events_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
+          {
             foreignKeyName: "payment_events_line_item_id_fkey"
             columns: ["line_item_id"]
             isOneToOne: false
@@ -836,13 +914,41 @@ export type Database = {
     Functions: {
       fn_apply_payment_event: {
         Args: {
-          _actor_user_id: string | null
+          _actor_user_id: string
           _line_item_id: string
-          _raw_payload: Json | null
+          _raw_payload: Json
           _source: string
           _to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
         }
-        Returns: Database["public"]["Tables"]["billing_line_items"]["Row"]
+        Returns: {
+          billing_period_id: string
+          created_at: string
+          device_id: string | null
+          end_kwh: number | null
+          entered_at: string | null
+          entered_by_user_id: string | null
+          household_id: string
+          id: string
+          manual_reason: string | null
+          paid_at: string | null
+          paid_by_user_id: string | null
+          payment_failed_at: string | null
+          payment_notes: string | null
+          payment_refunded_at: string | null
+          payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+          pesapal_order_id: string | null
+          reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          start_kwh: number | null
+          tier_breakdown: Json
+          total_amount: number
+          usage_kwh: number | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "billing_line_items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       fn_change_user_role: {
         Args: {
@@ -860,7 +966,7 @@ export type Database = {
           p_address_line2?: string
           p_address_postal_code?: string
           p_address_region?: string
-          p_device_id?: string | null
+          p_device_id?: string
           p_display_name: string
           p_geography_notes?: string
           p_microgrid_id: string
@@ -911,6 +1017,52 @@ export type Database = {
         Returns: string
       }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
+      fn_record_line_item_with_audit: {
+        Args: {
+          _actor_user_id: string
+          _audit_details: Json
+          _billing_period_id: string
+          _device_id: string
+          _end_kwh: number
+          _entered_by_user_id: string
+          _household_id: string
+          _manual_reason: string
+          _reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          _start_kwh: number
+          _tier_breakdown: Json
+          _total_amount: number
+          _usage_kwh: number
+        }
+        Returns: {
+          billing_period_id: string
+          created_at: string
+          device_id: string | null
+          end_kwh: number | null
+          entered_at: string | null
+          entered_by_user_id: string | null
+          household_id: string
+          id: string
+          manual_reason: string | null
+          paid_at: string | null
+          paid_by_user_id: string | null
+          payment_failed_at: string | null
+          payment_notes: string | null
+          payment_refunded_at: string | null
+          payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+          pesapal_order_id: string | null
+          reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          start_kwh: number | null
+          tier_breakdown: Json
+          total_amount: number
+          usage_kwh: number | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "billing_line_items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       is_super_admin: { Args: never; Returns: boolean }
       user_can_access_microgrid: {
         Args: { _microgrid_id: string }
@@ -923,12 +1075,18 @@ export type Database = {
       }
     }
     Enums: {
+      billing_audit_event_type:
+        | "period_created"
+        | "period_closed"
+        | "line_item_generated"
+        | "line_item_regenerated"
       billing_line_item_payment_status:
         | "unpaid"
         | "paid"
         | "failed"
         | "refunded"
         | "link_generated"
+      billing_line_item_reading_source: "edge" | "manual"
       billing_period_status: "draft" | "closed"
       device_type:
         | "consumption_meter"
@@ -1079,6 +1237,12 @@ export const Constants = {
   },
   public: {
     Enums: {
+      billing_audit_event_type: [
+        "period_created",
+        "period_closed",
+        "line_item_generated",
+        "line_item_regenerated",
+      ],
       billing_line_item_payment_status: [
         "unpaid",
         "paid",
@@ -1086,6 +1250,7 @@ export const Constants = {
         "refunded",
         "link_generated",
       ],
+      billing_line_item_reading_source: ["edge", "manual"],
       billing_period_status: ["draft", "closed"],
       device_type: [
         "consumption_meter",

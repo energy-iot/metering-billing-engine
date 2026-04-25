@@ -150,6 +150,11 @@ const lineItems: BillingLineItem[] = [
     pesapal_order_id: null,
     payment_failed_at: null,
     payment_refunded_at: null,
+    // BC1 (#173) reading-source provenance.
+    reading_source: "edge",
+    entered_by_user_id: null,
+    entered_at: null,
+    manual_reason: null,
   },
   {
     id: "li-2",
@@ -172,6 +177,11 @@ const lineItems: BillingLineItem[] = [
     pesapal_order_id: null,
     payment_failed_at: null,
     payment_refunded_at: null,
+    // BC1 (#173) reading-source provenance.
+    reading_source: "edge",
+    entered_by_user_id: null,
+    entered_at: null,
+    manual_reason: null,
   },
   {
     id: "li-3",
@@ -194,6 +204,11 @@ const lineItems: BillingLineItem[] = [
     pesapal_order_id: null,
     payment_failed_at: null,
     payment_refunded_at: null,
+    // BC1 (#173) reading-source provenance.
+    reading_source: "edge",
+    entered_by_user_id: null,
+    entered_at: null,
+    manual_reason: null,
   },
 ];
 
