@@ -89,8 +89,22 @@ function makeBuilder(tableName: string) {
       if (_head) {
         return Promise.resolve({ count: 0 }).then(resolve);
       }
-      // Should not normally be reached.
-      return Promise.resolve({ data: null, error: null }).then(resolve);
+      // Bare-builder await (no terminal .single()/.maybeSingle()/.returns()):
+      // resolve to filtered rows. The page no longer calls .returns<…>() after
+      // issue #106 (column list narrows the type at the source).
+      let rows = (tables[tableName] ?? []) as Record<string, unknown>[];
+      for (const [col, val] of _eqs) {
+        if (col.includes(".")) {
+          const [joinTable, joinCol] = col.split(".");
+          rows = rows.filter((r) => {
+            const joined = r[joinTable] as Record<string, unknown> | undefined;
+            return joined?.[joinCol] === val;
+          });
+        } else {
+          rows = rows.filter((r) => r[col] === val);
+        }
+      }
+      return Promise.resolve({ data: rows, error: null }).then(resolve);
     },
   };
   return proxy;

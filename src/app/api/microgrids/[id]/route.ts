@@ -11,6 +11,7 @@ import {
   UUID_RE,
   type EntityDeleteLogPayload,
 } from "@/lib/entity-deletion/shared";
+import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 
 /**
  * PATCH /api/microgrids/[id] — update a microgrid (#76).
@@ -127,7 +128,7 @@ export async function PATCH(
     .from("microgrids")
     .update(updates)
     .eq("id", id)
-    .select("*")
+    .select(MICROGRID_PUBLIC_COLUMNS)
     .maybeSingle();
 
   if (error) {

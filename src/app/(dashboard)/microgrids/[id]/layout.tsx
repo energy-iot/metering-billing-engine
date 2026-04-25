@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Microgrid } from "@/lib/types/domain";
+import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 import { TabNav } from "./tab-nav";
 import { LocaleProvider } from "@/components/format/locale-context";
 import { EditEntityButton } from "@/components/forms/EditEntityButton";
@@ -21,7 +22,7 @@ export default async function MicrogridLayout({
 
   const { data, error } = await supabase
     .from("microgrids")
-    .select("*")
+    .select(MICROGRID_PUBLIC_COLUMNS)
     .eq("id", id)
     .single();
 
@@ -29,7 +30,7 @@ export default async function MicrogridLayout({
     notFound();
   }
 
-  const microgrid = data as Microgrid;
+  const microgrid = data as Omit<Microgrid, "ems_aws_secret_access_key_encrypted">;
 
   // Build location label from structured columns (location TEXT was dropped in AB)
   const locationParts = [microgrid.address_city, microgrid.address_country].filter(Boolean);

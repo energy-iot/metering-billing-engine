@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessCommunity } from "@/lib/auth/access";
 import { validateCurrency } from "@/lib/validation/currency";
+import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -88,7 +89,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const { data, error } = await supabase
     .from("microgrids")
     .insert(row)
-    .select("*")
+    .select(MICROGRID_PUBLIC_COLUMNS)
     .single();
 
   if (error) {

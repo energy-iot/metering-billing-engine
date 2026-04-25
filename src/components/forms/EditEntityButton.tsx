@@ -27,7 +27,9 @@ type Props =
     }
   | {
       entity: "microgrid";
-      initialValues: Microgrid;
+      // Omit the encrypted ciphertext column so SSR-rendered HTML / client
+      // components never receive it (defense-in-depth, see issue #106).
+      initialValues: Omit<Microgrid, "ems_aws_secret_access_key_encrypted">;
       label?: string;
       className?: string;
     };
