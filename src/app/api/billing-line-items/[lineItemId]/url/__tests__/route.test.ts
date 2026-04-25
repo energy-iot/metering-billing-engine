@@ -179,7 +179,8 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
 
     // Pesapal rejects reused ids — every call must generate a fresh orderId.
     const call = generatePaymentLinkMock.mock.calls[0][0];
-    expect(call.orderId).toMatch(new RegExp(`^INV-${LINE_ITEM_ID}-\\d+$`));
+    expect(call.orderId).toMatch(/^INV-[0-9A-HJKMNPQ-TV-Z]{26}-\d+$/);
+    expect(call.orderId.length).toBeLessThanOrEqual(50);
     expect(call.currency).toBe("UGX");
 
     infoSpy.mockRestore();

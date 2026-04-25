@@ -34,6 +34,7 @@ import {
 } from "@/lib/payments";
 import { getCommunityPaymentConfig } from "@/lib/payments/config";
 import { buildOrderParamsFromLineItem } from "@/lib/payments/pesapal/build-params";
+import { buildOrderId } from "@/lib/payments/pesapal/order-id";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 const UUID_RE =
@@ -231,8 +232,10 @@ export async function POST(
     currency = "UGX";
   }
 
-  // 6. Pesapal rejects reused `id` — fresh per click.
-  const orderId = `INV-${lineItemId}-${Date.now()}`;
+  // 6. Pesapal rejects reused `id` — fresh per click. Pesapal caps `id` at
+  //    50 chars; `buildOrderId` encodes the UUID as crockford-base32 so the
+  //    composed id stays at 44 chars. See src/lib/payments/pesapal/order-id.ts.
+  const orderId = buildOrderId(lineItemId);
 
   // 7. Dispatch through the factory. The PesapalProvider constructor itself
   //    throws PESAPAL_NO_IPN when the persisted config lacks ipn_id (a
