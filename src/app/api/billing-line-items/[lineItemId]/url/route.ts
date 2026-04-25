@@ -273,6 +273,51 @@ export async function POST(
     );
   }
 
+  // 8. Phase B (#157): record the unpaid → link_generated transition AND
+  //    persist `pesapal_order_id` (the merchant_reference Pesapal will echo
+  //    back in IPN webhooks). This is the canonical join key for the IPN
+  //    webhook receiver.
+  //
+  //    The redirect URL is already valid at this point — if the audit write
+  //    fails, log loudly but STILL return 200 with the URL. Better UX (the
+  //    user can pay) than blocking on a non-critical audit row.
+  try {
+    const { error: rpcErr } = await supabase.rpc("fn_apply_payment_event", {
+      _line_item_id: lineItemId,
+      _to_status: "link_generated",
+      _source: "generate_link",
+      _actor_user_id: actorUserId,
+      _raw_payload: {
+        pesapal_order_id: result.providerReference,
+        provider_order_tracking_id: result.providerOrderId,
+        // redirect_url is intentionally NOT logged in raw_payload — it
+        // contains a session token. Only the opaque ids are persisted.
+      },
+    });
+    if (rpcErr) {
+      console.warn(
+        JSON.stringify({
+          event: "payment.generate_link.audit_write_failed",
+          line_item_id: lineItemId,
+          microgrid_id: microgridId,
+          pg_code: rpcErr.code,
+          pg_message: rpcErr.message,
+          at: new Date().toISOString(),
+        }),
+      );
+    }
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "payment.generate_link.audit_write_threw",
+        line_item_id: lineItemId,
+        microgrid_id: microgridId,
+        message: err instanceof Error ? err.message : String(err),
+        at: new Date().toISOString(),
+      }),
+    );
+  }
+
   logPaymentEvent({
     communityId,
     microgridId,

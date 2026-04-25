@@ -74,27 +74,67 @@ describe("derivePaymentHealth()", () => {
     ).toBe("stale");
   });
 
-  it("never returns failing today — reserved for #121", () => {
-    // Exercise a range of inputs and assert the helper NEVER emits "failing".
-    const inputs = [
-      { payment_provider: null, payment_last_configured_at: null },
-      {
-        payment_provider: "pesapal" as const,
-        payment_last_configured_at: new Date().toISOString(),
-      },
-      {
-        payment_provider: "pesapal" as const,
-        payment_last_configured_at: new Date(
-          NOW.getTime() - 365 * 24 * 3600 * 1000,
-        ).toISOString(),
-      },
-      {
-        payment_provider: "pesapal" as const,
-        payment_last_configured_at: "not-a-date",
-      },
-    ];
-    for (const row of inputs) {
-      expect(derivePaymentHealth(row, NOW)).not.toBe("failing");
-    }
+  it("returns failing when a recent IPN failure happened in the last 24h (Phase B / #157)", () => {
+    expect(
+      derivePaymentHealth(
+        {
+          payment_provider: "pesapal",
+          payment_last_configured_at: new Date(
+            NOW.getTime() - 2 * 3600 * 1000,
+          ).toISOString(),
+          most_recent_failed_ipn_at: new Date(
+            NOW.getTime() - 1 * 3600 * 1000,
+          ).toISOString(),
+        },
+        NOW,
+      ),
+    ).toBe("failing");
+  });
+
+  it("does NOT return failing when the failed IPN is older than 24h", () => {
+    expect(
+      derivePaymentHealth(
+        {
+          payment_provider: "pesapal",
+          payment_last_configured_at: new Date(
+            NOW.getTime() - 1 * 3600 * 1000,
+          ).toISOString(),
+          most_recent_failed_ipn_at: new Date(
+            NOW.getTime() - 48 * 3600 * 1000,
+          ).toISOString(),
+        },
+        NOW,
+      ),
+    ).toBe("healthy");
+  });
+
+  it("ignores invalid most_recent_failed_ipn_at strings (no failing emitted)", () => {
+    expect(
+      derivePaymentHealth(
+        {
+          payment_provider: "pesapal",
+          payment_last_configured_at: new Date(
+            NOW.getTime() - 1 * 3600 * 1000,
+          ).toISOString(),
+          most_recent_failed_ipn_at: "not-a-date",
+        },
+        NOW,
+      ),
+    ).toBe("healthy");
+  });
+
+  it("falls back to existing healthy/stale logic when most_recent_failed_ipn_at is null", () => {
+    expect(
+      derivePaymentHealth(
+        {
+          payment_provider: "pesapal",
+          payment_last_configured_at: new Date(
+            NOW.getTime() - 2 * 3600 * 1000,
+          ).toISOString(),
+          most_recent_failed_ipn_at: null,
+        },
+        NOW,
+      ),
+    ).toBe("healthy");
   });
 });

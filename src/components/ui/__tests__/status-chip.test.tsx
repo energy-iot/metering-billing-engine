@@ -189,6 +189,17 @@ describe("StatusChip — billingLineItemPaymentStatus kind", () => {
     expect(dot).toBeNull();
     expect(container.textContent).toContain("Refunded");
   });
+
+  // Phase B (#157) — link_generated state.
+  it("renders 'link_generated' with warn background + dot (Phase B)", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemPaymentStatus" status="link_generated" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-warning-muted");
+    expect(chip?.querySelector("span")?.className).toContain("bg-warning");
+    expect(container.textContent).toContain("Link sent");
+  });
 });
 
 // #119 — Community Payment-provider health chip (4 states).
@@ -213,7 +224,7 @@ describe("StatusChip — paymentHealth kind", () => {
     expect(container.textContent).toContain("Stale");
   });
 
-  it("renders 'failing' with alert background + dot (reserved; not emitted by derivePaymentHealth today)", () => {
+  it("renders 'failing' with alert background + dot (Phase B — emitted on recent IPN failure)", () => {
     const { container } = render(
       <StatusChip kind="paymentHealth" status="failing" />,
     );

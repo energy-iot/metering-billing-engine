@@ -2,25 +2,33 @@
  * PATCH /api/billing-line-items/[lineItemId]/payment-status
  *
  * Manual mark-paid / mark-unpaid for a single billing_line_items row.
- * Enforces the operator-tier state machine: unpaid↔paid, failed→paid.
+ * Phase B (#157) widens the body whitelist: super_admins may set 'failed' /
+ * 'refunded' (reconciliation-class actions). All transitions go through the
+ * authoritative SQL state machine `fn_apply_payment_event` (migration 00027)
+ * which appends an audit row to `payment_events` automatically.
  *
  * Path chain:
  *   lineItem → billing_periods(microgrid_id, start_date, end_date)
  *            → microgrids(id) → households(display_name)
  *
  * Permission:
- *   Both super_admin AND org_manager may trigger manual mark-paid.
- *   (This is an operational reconciliation action, not an admin-only config.)
+ *   - super_admin AND org_manager may trigger 'unpaid' / 'paid' transitions
+ *     (operational reconciliation).
+ *   - super_admin ONLY may trigger 'failed' / 'refunded' (reconciliation
+ *     actions; org_managers are gated to avoid accidental terminal states).
  *
  * Body:
- *   { status: 'unpaid' | 'paid', notes?: string (≤500 chars) }
- *   'failed' / 'refunded' in body → 400 invalid_body (IPN / refund domain).
+ *   { status: 'unpaid' | 'paid' | 'failed' | 'refunded', notes?: string (≤500 chars) }
  *   Notes are trimmed server-side; empty string after trim → stored as NULL.
+ *   'link_generated' is NOT a manual body input — that state is set by the
+ *   link generation route only. Manual transitions OUT of 'link_generated'
+ *   are still admitted (operator may cancel a pending link).
  *
  * Response:
- *   200 → { status: 'success', line_item: <updated row with all 4 payment cols> }
+ *   200 → { status: 'success', line_item: <updated row with all payment cols> }
  *   400 → { error, reason: 'invalid_body' | 'no_op' | 'invalid_transition' }
- *   403 → { error, reason: 'forbidden' }
+ *   401 → { error, reason: 'session_expired' }
+ *   403 → { error, reason: 'forbidden' | 'super_admin_required' }
  *   404 → { error, reason: 'not_found' }
  *   500 → { error, reason: 'invariant_violation' | 'unknown_error' }
  *
@@ -28,13 +36,14 @@
  *   Logs `payment.manual_mark` with notes_present: boolean.
  *   Raw notes are NEVER logged — they may contain PII / receipt references.
  *   No scrubSecretValues needed: this route touches no credentials.
- *   notes_present is booleanised so the log pipeline can be audited for
- *   usage patterns without surfacing any customer data.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import {
+  currentUserCanAccessMicrogrid,
+  currentUserIsSuperAdmin,
+} from "@/lib/auth/access";
 import {
   assertValidManualTransition,
   PaymentTransitionError,
@@ -44,12 +53,20 @@ import {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const ALLOWED_BODY_STATUSES: readonly string[] = ["unpaid", "paid"];
+const ALLOWED_BODY_STATUSES: readonly PaymentStatus[] = [
+  "unpaid",
+  "paid",
+  "failed",
+  "refunded",
+];
+
+/** Statuses gated to super_admin only (reconciliation-class). */
+const SUPER_ADMIN_ONLY_STATUSES: readonly PaymentStatus[] = ["failed", "refunded"];
 
 // ── Body type ─────────────────────────────────────────────────────────────────
 
 type ParsedBody = {
-  status: "unpaid" | "paid";
+  status: PaymentStatus;
   notes: string | null; // trimmed; null when empty
 };
 
@@ -158,15 +175,31 @@ export async function PATCH(
     );
   }
 
-  // 3a. Resolve actor user ONCE — used for both the paid audit trail and the
-  //     structured log. Single fetch avoids the double-getUser() pattern and
-  //     guarantees the same identity is written to the DB and emitted to logs.
+  // 3b. Super-admin gate for reconciliation-class statuses.
+  if (SUPER_ADMIN_ONLY_STATUSES.includes(parsed.status)) {
+    const isSuper = await currentUserIsSuperAdmin(supabase);
+    if (!isSuper) {
+      return NextResponse.json(
+        {
+          error:
+            "Only super admins can mark a bill as failed or refunded — this is a reconciliation action.",
+          reason: "super_admin_required",
+        },
+        { status: 403 },
+      );
+    }
+  }
+
+  // 3c. Resolve actor user ONCE — used for both the audit trail and the log.
+  //     Single fetch avoids the double-getUser() pattern and guarantees the
+  //     same identity is written to the DB and emitted to logs.
   const {
     data: { user },
   } = await supabase.auth.getUser();
   const actorUserId: string | null = user?.id ?? null;
 
-  // 4. State transition validation.
+  // 4. State transition validation (TS-side pre-flight; DB function is the
+  //    authoritative re-validator under row lock).
   const currentStatus = scoped.payment_status as PaymentStatus;
   try {
     assertValidManualTransition(currentStatus, parsed.status);
@@ -184,52 +217,64 @@ export async function PATCH(
     throw err;
   }
 
-  // 5. Build the UPDATE payload.
-  //    • *→paid: set all 4 fields atomically.
-  //    • paid→unpaid: clear all audit fields — no stale attribution.
-  let updatePayload: Record<string, unknown>;
-
-  if (parsed.status === "paid") {
-    // Guard: the DB CHECK constraint (billing_line_items_payment_audit_fields_required)
-    // requires paid_by_user_id to be non-NULL when payment_status = 'paid'.
-    // If auth.getUser() returned null (degraded/expired session), fail fast here
-    // with a user-actionable 401 rather than letting the UPDATE reach the DB and
-    // surface as an opaque 500 invariant_violation.
-    if (!actorUserId) {
-      return NextResponse.json(
-        { error: "Session expired. Please reload and try again.", reason: "session_expired" },
-        { status: 401 },
-      );
-    }
-
-    updatePayload = {
-      payment_status: "paid",
-      paid_at: new Date().toISOString(),
-      paid_by_user_id: actorUserId,
-      payment_notes: parsed.notes,
-    };
-  } else {
-    // paid → unpaid: clear everything. The CHECK constraint will reject any
-    // row where unpaid is set with non-NULL audit fields.
-    updatePayload = {
-      payment_status: "unpaid",
-      paid_at: null,
-      paid_by_user_id: null,
-      payment_notes: null,
-    };
+  // 5. Session guard: paid / refunded require a non-null actor for the audit
+  //    invariant (the SQL CHECK constraint requires paid_by_user_id when
+  //    status is 'paid' / 'refunded'). Surface a 401 actionable message.
+  if (
+    (parsed.status === "paid" || parsed.status === "refunded") &&
+    !actorUserId
+  ) {
+    return NextResponse.json(
+      { error: "Session expired. Please reload and try again.", reason: "session_expired" },
+      { status: 401 },
+    );
   }
 
-  // 6. Atomic UPDATE + return the full updated row.
-  const { data: updated, error: updateErr } = await supabase
-    .from("billing_line_items")
-    .update(updatePayload)
-    .eq("id", lineItemId)
-    .select()
-    .single();
+  // 6. Apply via the authoritative state-machine RPC.
+  //    `_raw_payload` carries the operator's free-text note through to the
+  //    SECURITY DEFINER function so the note is persisted atomically with the
+  //    state transition (no second RLS-bound UPDATE that could be silently
+  //    denied). Convention:
+  //      - notes provided                  → { payment_notes: <trimmed> }
+  //                                          (function copies into payment_notes)
+  //      - transitioning to 'unpaid'       → { payment_notes: null }
+  //                                          (function clears payment_notes;
+  //                                          attribution stays consistent with
+  //                                          paid_at / paid_by_user_id, which
+  //                                          the function also clears)
+  //      - neither                         → null (key absent → leave column
+  //                                          unchanged inside the function)
+  //    The audit row in `payment_events.raw_payload` retains the same shape,
+  //    so the operator's note is captured in the audit trail too.
+  let rawPayload: Record<string, unknown> | null = null;
+  if (parsed.notes !== null) {
+    rawPayload = { payment_notes: parsed.notes };
+  } else if (parsed.status === "unpaid") {
+    rawPayload = { payment_notes: null };
+  }
 
-  if (updateErr) {
-    // PostgreSQL constraint violation (23514 = check_violation).
-    const isCheckViolation = updateErr.code === "23514";
+  const { data: updated, error: rpcErr } = await supabase.rpc(
+    "fn_apply_payment_event",
+    {
+      _line_item_id: lineItemId,
+      _to_status: parsed.status,
+      _source: "manual",
+      _actor_user_id: actorUserId,
+      _raw_payload: rawPayload,
+    },
+  );
+
+  if (rpcErr) {
+    const msg = rpcErr.message ?? "";
+    // The SQL function uses RAISE EXCEPTION with prefixes 'invalid_transition'
+    // / 'invalid_source' / 'transition_conflict' / 'line_item_not_found'.
+    // These should not normally surface (TS pre-flight catches them), but
+    // races / direct-DB writes can produce them.
+    const isInvalid = msg.includes("invalid_transition");
+    const isNotFound = msg.includes("line_item_not_found");
+    const isConflict = msg.includes("transition_conflict");
+    const isCheckViolation = rpcErr.code === "23514";
+
     console.error(
       JSON.stringify({
         event: "payment.manual_mark.error",
@@ -237,18 +282,55 @@ export async function PATCH(
         microgrid_id: microgridId,
         from_status: currentStatus,
         to_status: parsed.status,
-        reason: isCheckViolation ? "invariant_violation" : "update_error",
-        pg_code: updateErr.code,
+        reason: isInvalid
+          ? "invalid_transition"
+          : isNotFound
+            ? "not_found"
+            : isConflict
+              ? "transition_conflict"
+              : isCheckViolation
+                ? "invariant_violation"
+                : "unknown_error",
+        pg_code: rpcErr.code,
         at: new Date().toISOString(),
       }),
     );
     return NextResponse.json(
       {
-        error: isCheckViolation
-          ? "Internal constraint violation. Contact support."
-          : "Failed to update payment status.",
-        reason: isCheckViolation ? "invariant_violation" : "unknown_error",
+        error: isInvalid
+          ? "That status change is not allowed for manual edits."
+          : isNotFound
+            ? "Billing line item not found."
+            : isConflict
+              ? "The bill state changed during your edit. Please refresh and try again."
+              : isCheckViolation
+                ? "Internal constraint violation. Contact support."
+                : "Failed to update payment status.",
+        reason: isInvalid
+          ? "invalid_transition"
+          : isNotFound
+            ? "not_found"
+            : isConflict
+              ? "transition_conflict"
+              : isCheckViolation
+                ? "invariant_violation"
+                : "unknown_error",
       },
+      {
+        status: isInvalid
+          ? 400
+          : isNotFound
+            ? 404
+            : isConflict
+              ? 409
+              : 500,
+      },
+    );
+  }
+
+  if (!updated) {
+    return NextResponse.json(
+      { error: "Failed to update payment status.", reason: "unknown_error" },
       { status: 500 },
     );
   }
@@ -259,13 +341,6 @@ export async function PATCH(
   // receipt references (e.g. "M-Pesa receipt #KJ3F456", customer name).
   // We log `notes_present: boolean` only so the log pipeline can audit
   // usage frequency without surfacing customer data.
-  //
-  // No scrubSecretValues needed: this route does not touch any credentials
-  // (no payment provider secret, no AWS key). The deliberate omission is
-  // documented here so a future reader can verify the decision was conscious.
-  //
-  // actorUserId was resolved once at step 3a — reused here, no second getUser().
-
   console.info(
     JSON.stringify({
       event: "payment.manual_mark",
@@ -274,7 +349,7 @@ export async function PATCH(
       actor_user_id: actorUserId,
       from_status: currentStatus,
       to_status: parsed.status,
-      notes_present: parsed.notes !== null, // booleanised — see comment above
+      notes_present: parsed.notes !== null,
       at: new Date().toISOString(),
     }),
   );
@@ -298,15 +373,14 @@ async function parseBody(request: NextRequest): Promise<ParsedBody> {
 
   const raw = body as Record<string, unknown>;
 
-  // status — required; only 'unpaid' | 'paid' accepted from clients.
-  // 'failed' and 'refunded' are IPN/refund-flow domain — rejected here so
-  // the transition matrix never sees them from a manual PATCH.
+  // status — required; whitelist enforced. 'link_generated' is NOT admittable
+  // (set only by the link-generation route).
   if (!("status" in raw)) {
     throw new Error("Missing required field: status.");
   }
-  if (!ALLOWED_BODY_STATUSES.includes(raw.status as string)) {
+  if (!ALLOWED_BODY_STATUSES.includes(raw.status as PaymentStatus)) {
     throw new Error(
-      `Invalid status '${raw.status}'. Manual edits accept only 'unpaid' or 'paid'.`,
+      `Invalid status '${String(raw.status)}'. Allowed: ${ALLOWED_BODY_STATUSES.join(", ")}.`,
     );
   }
 
@@ -323,5 +397,5 @@ async function parseBody(request: NextRequest): Promise<ParsedBody> {
     notes = trimmed.length > 0 ? trimmed : null;
   }
 
-  return { status: raw.status as "unpaid" | "paid", notes };
+  return { status: raw.status as PaymentStatus, notes };
 }

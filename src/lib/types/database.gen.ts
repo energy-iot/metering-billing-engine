@@ -44,8 +44,11 @@ export type Database = {
           id: string
           paid_at: string | null
           paid_by_user_id: string | null
+          payment_failed_at: string | null
           payment_notes: string | null
+          payment_refunded_at: string | null
           payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+          pesapal_order_id: string | null
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
@@ -60,8 +63,11 @@ export type Database = {
           id?: string
           paid_at?: string | null
           paid_by_user_id?: string | null
+          payment_failed_at?: string | null
           payment_notes?: string | null
+          payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
+          pesapal_order_id?: string | null
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -76,8 +82,11 @@ export type Database = {
           id?: string
           paid_at?: string | null
           paid_by_user_id?: string | null
+          payment_failed_at?: string | null
           payment_notes?: string | null
+          payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
+          pesapal_order_id?: string | null
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -602,6 +611,53 @@ export type Database = {
         }
         Relationships: []
       }
+      payment_events: {
+        Row: {
+          actor_user_id: string | null
+          at: string
+          from_status:
+            | Database["public"]["Enums"]["billing_line_item_payment_status"]
+            | null
+          id: string
+          line_item_id: string
+          raw_payload: Json | null
+          source: string
+          to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+        }
+        Insert: {
+          actor_user_id?: string | null
+          at?: string
+          from_status?:
+            | Database["public"]["Enums"]["billing_line_item_payment_status"]
+            | null
+          id?: string
+          line_item_id: string
+          raw_payload?: Json | null
+          source: string
+          to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+        }
+        Update: {
+          actor_user_id?: string | null
+          at?: string
+          from_status?:
+            | Database["public"]["Enums"]["billing_line_item_payment_status"]
+            | null
+          id?: string
+          line_item_id?: string
+          raw_payload?: Json | null
+          source?: string
+          to_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_events_line_item_id_fkey"
+            columns: ["line_item_id"]
+            isOneToOne: false
+            referencedRelation: "billing_line_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rate_schedules: {
         Row: {
           created_at: string
@@ -778,6 +834,16 @@ export type Database = {
       }
     }
     Functions: {
+      fn_apply_payment_event: {
+        Args: {
+          _actor_user_id: string | null
+          _line_item_id: string
+          _raw_payload: Json | null
+          _source: string
+          _to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
+        }
+        Returns: Database["public"]["Tables"]["billing_line_items"]["Row"]
+      }
       fn_change_user_role: {
         Args: {
           p_role: Database["public"]["Enums"]["user_role"]
@@ -862,6 +928,7 @@ export type Database = {
         | "paid"
         | "failed"
         | "refunded"
+        | "link_generated"
       billing_period_status: "draft" | "closed"
       device_type:
         | "consumption_meter"
@@ -1017,6 +1084,7 @@ export const Constants = {
         "paid",
         "failed",
         "refunded",
+        "link_generated",
       ],
       billing_period_status: ["draft", "closed"],
       device_type: [
