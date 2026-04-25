@@ -283,6 +283,23 @@ export function BillingTable({
       ? period.start_date
       : `${period.start_date} – ${period.end_date}`;
 
+  // #167 — derive the list of un-metered households whose `usage_kwh` is
+  // still NULL. These are the rows that would silently lock in zero kWh /
+  // zero amount on close. Surfaced to <ClosePeriodDialog> as a warning
+  // banner; closing is still permitted (operator may genuinely intend to
+  // bill nothing) but the gesture becomes more deliberate.
+  const unfilledHouseholdNames = lineItems
+    .filter(
+      (item) =>
+        item.device_id === null &&
+        (item.usage_kwh === null || item.usage_kwh === undefined)
+    )
+    .map(
+      (item) =>
+        households.find((h) => h.id === item.household_id)?.display_name ??
+        "Unknown household"
+    );
+
   // Build summary rows for ClosePeriodDialog
   const closePeriodSummaryRows: ClosePeriodSummaryRow[] = [
     {
@@ -445,6 +462,7 @@ export function BillingTable({
         summaryRows={closePeriodSummaryRows}
         grandTotal={grandTotal}
         onConfirm={handleClose}
+        unfilledHouseholdNames={unfilledHouseholdNames}
       />
 
       {/* Header */}
