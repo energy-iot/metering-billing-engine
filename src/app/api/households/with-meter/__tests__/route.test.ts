@@ -80,14 +80,19 @@ describe("POST /api/households/with-meter", () => {
     expect(json.field).toBe("display_name");
   });
 
-  it("422: missing device_id", async () => {
+  it("201: empty device_id routes to fn_create_household (manual billing) (#158)", async () => {
+    // #158: device_id is now optional. Empty/missing/null device_id routes
+    // to fn_create_household (no meter wiring); a non-empty UUID still
+    // routes to fn_create_household_with_meter.
     const { POST } = await import("../route");
     const res = await POST(
       makePostRequest({ ...VALID_BODY, device_id: "" })
     );
-    expect(res.status).toBe(422);
-    const json = await res.json();
-    expect(json.field).toBe("device_id");
+    expect(res.status).toBe(201);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [fnName, args] = mockRpc.mock.calls[0];
+    expect(fnName).toBe("fn_create_household");
+    expect((args as Record<string, unknown>).p_device_id).toBeNull();
   });
 
   it("400: #155 — primary_phone key missing returns household_phone_required", async () => {
@@ -162,5 +167,55 @@ describe("POST /api/households/with-meter", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toBe("household_phone_required");
+  });
+
+  it("201: #158 — null device_id calls fn_create_household with p_device_id=null", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({ ...VALID_BODY, device_id: null })
+    );
+    expect(res.status).toBe(201);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [fnName, args] = mockRpc.mock.calls[0];
+    expect(fnName).toBe("fn_create_household");
+    expect((args as Record<string, unknown>).p_device_id).toBeNull();
+    expect((args as Record<string, unknown>).p_primary_phone).toBe(
+      "+256700000000"
+    );
+  });
+
+  it("201: #158 — missing device_id key calls fn_create_household", async () => {
+    const { POST } = await import("../route");
+    const { device_id: _drop, ...withoutDeviceId } = VALID_BODY;
+    void _drop;
+    const res = await POST(makePostRequest(withoutDeviceId));
+    expect(res.status).toBe(201);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [fnName, args] = mockRpc.mock.calls[0];
+    expect(fnName).toBe("fn_create_household");
+    expect((args as Record<string, unknown>).p_device_id).toBeNull();
+  });
+
+  it("201: #158 — non-empty device_id calls fn_create_household_with_meter", async () => {
+    // Backwards compatibility: existing metered path is preserved.
+    const { POST } = await import("../route");
+    const res = await POST(makePostRequest(VALID_BODY));
+    expect(res.status).toBe(201);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [fnName, args] = mockRpc.mock.calls[0];
+    expect(fnName).toBe("fn_create_household_with_meter");
+    expect((args as Record<string, unknown>).p_device_id).toBe(DEVICE_UUID);
+  });
+
+  it("400: #158 — null phone with null device_id still rejects (phone-required preserved)", async () => {
+    // Coordinated #155 + #158: even on the no-meter path, phone is required.
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({ ...VALID_BODY, device_id: null, primary_phone: null })
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe("household_phone_required");
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

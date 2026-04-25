@@ -195,7 +195,7 @@ describe("DeviceSelect (#145)", () => {
     expect(triggers[0].textContent).toContain("No devices on this microgrid yet");
   });
 
-  it("calls onChange(null) when sentinel 'Unassigned' option chosen", () => {
+  it("calls onChange(null) when sentinel 'No meter (manual billing)' option chosen (#158)", () => {
     const onChange = vi.fn();
     render(
       <DeviceSelect
@@ -207,9 +207,13 @@ describe("DeviceSelect (#145)", () => {
     );
     openTrigger();
 
+    // #158 renamed the sentinel option copy from 'Unassigned' to
+    // '— No meter (manual billing) —' so it reads as an intentional state.
+    // The underlying value (UNASSIGNED_VALUE) and onChange semantics
+    // (null) are preserved.
     const unassignedOption = screen
       .getAllByRole("option")
-      .find((o) => o.textContent?.trim() === "Unassigned");
+      .find((o) => o.textContent?.includes("No meter (manual billing)"));
     expect(unassignedOption).toBeDefined();
     fireEvent.click(unassignedOption!);
     expect(onChange).toHaveBeenCalledWith(null);

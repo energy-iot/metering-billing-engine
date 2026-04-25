@@ -77,20 +77,26 @@ export async function POST(request: NextRequest) {
 
   const rateSchedule = schedule as RateSchedule;
 
-  // 3. Fetch households with their primary-consumption-meter device + parent edge
-  //    in a single relational query. Post-#101: openems_backend_url lives on the
-  //    microgrid, not the edge — so we don't select it per-device here.
+  // 3. Fetch households + their primary-consumption-meter device + parent
+  //    edge. #158 widens this from an INNER join to a LEFT join so un-metered
+  //    households are returned alongside metered ones — they just arrive with
+  //    an empty `household_devices` array. Concrete change: drop `!inner` on
+  //    both `household_devices` and `devices` and add a filter on the join
+  //    predicate so the include set is unchanged for metered households.
+  //
+  //    Post-#101: openems_backend_url lives on the microgrid, not the edge —
+  //    so we don't select it per-device here.
   const { data: householdsRaw, error: householdsError } = await supabase
     .from("households")
     .select(`
       id,
       display_name,
-      household_devices!inner(
+      household_devices(
         role,
-        devices!inner(
+        devices(
           id,
           openems_component_id,
-          edges!inner(
+          edges(
             openems_edge_id
           )
         )
@@ -112,6 +118,11 @@ export async function POST(request: NextRequest) {
   // Map: deviceId → householdId (for line item assembly)
   const deviceToHouseholdMap = new Map<string, string>();
 
+  // #158: track households that have NO primary_consumption_meter link.
+  // These get null-device "manual entry pending" line items inserted alongside
+  // the metered rows so Aaron can fill them in from the BillingTable.
+  const unmeteredHouseholdIds: string[] = [];
+
   type HouseholdRow = {
     id: string;
     display_name: string;
@@ -122,31 +133,38 @@ export async function POST(request: NextRequest) {
         openems_component_id: string | null;
         edges: {
           openems_edge_id: string | null;
-        };
-      };
+        } | null;
+      } | null;
     }[];
   };
 
   for (const h of (householdsRaw ?? []) as unknown as HouseholdRow[]) {
-    // Should have exactly one primary_consumption_meter due to partial unique index,
-    // but iterate defensively.
+    // Should have at most one primary_consumption_meter due to the partial
+    // unique index. The LEFT join may surface zero rows for un-metered
+    // households — those go to the manual-billing path.
     const primaryHD = h.household_devices.find(
       (hd) => hd.role === "primary_consumption_meter"
     );
 
     if (!primaryHD) {
-      errors.push({
-        householdId: h.id,
-        householdName: h.display_name,
-        error: "No primary_consumption_meter device assigned",
-      });
+      // #158: no meter linked — manual-billing path. We still emit a
+      // line-item row with null device + null usage so the BillingTable
+      // surfaces the household and the operator can enter usage by hand.
+      unmeteredHouseholdIds.push(h.id);
       continue;
     }
 
     const device = primaryHD.devices;
+    if (!device) {
+      // Defensive: a household_devices row with role=primary_consumption_meter
+      // but a nullable joined `devices` payload means the device row was
+      // dropped underneath us. Treat as un-metered for this run.
+      unmeteredHouseholdIds.push(h.id);
+      continue;
+    }
     const edge = device.edges;
 
-    if (!edge.openems_edge_id || !device.openems_component_id) {
+    if (!edge || !edge.openems_edge_id || !device.openems_component_id) {
       errors.push({
         householdId: h.id,
         householdName: h.display_name,
@@ -211,14 +229,62 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // #158: shape an "unmetered placeholder" row per un-metered household.
+  // These rows have null device_id, null end_kwh, null usage_kwh,
+  // empty tier_breakdown, and total_amount=0. Aaron fills end/usage in
+  // manually from the BillingTable; the PATCH /usage route then recomputes
+  // tier_breakdown + total_amount via calculateTieredCost.
+  type UnmeteredLineItem = {
+    billing_period_id: string;
+    household_id: string;
+    device_id: null;
+    usage_kwh: null;
+    start_kwh: number;
+    end_kwh: null;
+    tier_breakdown: { label: string; kwh: number; amount: number }[];
+    total_amount: number;
+  };
+  const unmeteredLineItems: UnmeteredLineItem[] = unmeteredHouseholdIds.map(
+    (householdId) => ({
+      billing_period_id: body.billingPeriodId,
+      household_id: householdId,
+      device_id: null,
+      usage_kwh: null,
+      // start_kwh stays 0 for un-metered rows: the manual entry IS the
+      // usage_kwh, and end_kwh - start_kwh = usage_kwh holds when
+      // start_kwh=0 + end_kwh=usage_kwh. Aaron can edit either field.
+      start_kwh: 0,
+      end_kwh: null,
+      tier_breakdown: [],
+      total_amount: 0,
+    })
+  );
+
   if (deviceConfigs.length === 0) {
-    // No devices to query — delete old line items and return
+    // No metered devices to query. Still delete-then-insert the unmetered
+    // placeholders so re-runs don't accumulate stale rows.
     await supabase
       .from("billing_line_items")
       .delete()
       .eq("billing_period_id", body.billingPeriodId);
 
-    return NextResponse.json({ lineItems: 0, errors });
+    if (unmeteredLineItems.length > 0) {
+      const { error: insertError } = await supabase
+        .from("billing_line_items")
+        .insert(unmeteredLineItems);
+
+      if (insertError) {
+        return NextResponse.json(
+          { error: `Failed to insert manual-billing line items: ${insertError.message}` },
+          { status: 500 }
+        );
+      }
+    }
+
+    return NextResponse.json({
+      lineItems: unmeteredLineItems.length,
+      errors,
+    });
   }
 
   // 5. Call OpenEMS for readings. Resolve the microgrid-level config first
@@ -314,11 +380,15 @@ export async function POST(request: NextRequest) {
       .delete()
       .eq("billing_period_id", body.billingPeriodId);
 
-    // 9. Insert new line items
-    if (lineItemRows.length > 0) {
+    // 9. Insert new line items — metered rows (from OpenEMS) + un-metered
+    //    placeholder rows (for households with no primary meter linked).
+    //    The two are inserted together so the delete-then-insert pattern
+    //    stays atomic from the operator's POV.
+    const allRows = [...lineItemRows, ...unmeteredLineItems];
+    if (allRows.length > 0) {
       const { error: insertError } = await supabase
         .from("billing_line_items")
-        .insert(lineItemRows);
+        .insert(allRows);
 
       if (insertError) {
         return NextResponse.json(
@@ -329,7 +399,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      lineItems: lineItemRows.length,
+      lineItems: allRows.length,
       errors,
     });
   } catch (err) {

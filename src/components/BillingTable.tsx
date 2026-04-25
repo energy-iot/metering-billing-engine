@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/close-period-dialog";
 import { Banner } from "@/components/ui/banner";
 import { PaymentRowActions } from "@/components/billing/payment-row-actions";
+import { ManualUsageCell } from "@/components/billing/manual-usage-cell";
 import type {
   BillingLineItem,
   BillingPeriod,
@@ -74,6 +75,25 @@ export function BillingTable({
     lineItemMap.set(item.household_id, item);
   }
 
+  // #158: per-row error message surfaced from the inline-edit cells. Keyed
+  // by line item id so a failure on one un-metered row doesn't clobber the
+  // others. Cleared on next successful save or Esc-revert.
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const recordRowError = React.useCallback(
+    (lineItemId: string, message: string | null) => {
+      setRowErrors((prev) => {
+        if (message === null) {
+          if (!(lineItemId in prev)) return prev;
+          const next = { ...prev };
+          delete next[lineItemId];
+          return next;
+        }
+        return { ...prev, [lineItemId]: message };
+      });
+    },
+    []
+  );
+
   // Grand totals
   let grandTotalKwh = 0;
   let grandTotal = 0;
@@ -81,7 +101,10 @@ export function BillingTable({
   const grandTierAmount: number[] = tiers.map(() => 0);
 
   for (const item of lineItems) {
-    grandTotalKwh += item.usage_kwh;
+    // #158: usage_kwh may be NULL on un-metered rows that haven't been
+    // filled in yet. Treat NULL as 0 in the grand total — the row reads as
+    // an em-dash in the per-cell display, but it shouldn't poison the sum.
+    grandTotalKwh += item.usage_kwh ?? 0;
     grandTotal += item.total_amount;
 
     const breakdown = item.tier_breakdown as { label: string; kwh: number; amount: number }[];
@@ -204,17 +227,51 @@ export function BillingTable({
       accessor: (h) => lineItemMap.get(h.id)?.start_kwh ?? null,
       format: (v) => (v == null ? "—" : kwhFormat(v)),
     },
+    // #158: END (kWh) and USAGE (kWh) are inline-editable for un-metered
+    // rows (lineItem.device_id == null). Metered rows render the same
+    // visual as before via ManualUsageCell's read-only path. We render
+    // these as `action` columns so the inline <input> doesn't fight the
+    // CopyTable's keyboard nav grid; un-metered rows are operator-entry
+    // surfaces, not URA-paste targets.
     {
-      kind: "value",
+      kind: "action",
       header: "End (kWh)",
-      accessor: (h) => lineItemMap.get(h.id)?.end_kwh ?? null,
-      format: (v) => (v == null ? "—" : kwhFormat(v)),
+      className: "text-right",
+      render: (h) => {
+        const item = lineItemMap.get(h.id);
+        if (!item) return <span className="text-muted-foreground">—</span>;
+        const isUnmetered = item.device_id == null;
+        return (
+          <ManualUsageCell
+            lineItemId={item.id}
+            field="end_kwh"
+            value={item.end_kwh}
+            format={(v) => (v == null ? "—" : kwhFormat(v))}
+            editable={isUnmetered && isDraft}
+            onError={recordRowError}
+          />
+        );
+      },
     },
     {
-      kind: "value",
+      kind: "action",
       header: "Usage (kWh)",
-      accessor: (h) => lineItemMap.get(h.id)?.usage_kwh ?? null,
-      format: (v) => (v == null ? "—" : kwhFormat(v)),
+      className: "text-right",
+      render: (h) => {
+        const item = lineItemMap.get(h.id);
+        if (!item) return <span className="text-muted-foreground">—</span>;
+        const isUnmetered = item.device_id == null;
+        return (
+          <ManualUsageCell
+            lineItemId={item.id}
+            field="usage_kwh"
+            value={item.usage_kwh}
+            format={(v) => (v == null ? "—" : kwhFormat(v))}
+            editable={isUnmetered && isDraft}
+            onError={recordRowError}
+          />
+        );
+      },
     },
     ...tiers.flatMap((tier, i): ColumnDef<Household>[] => [
       {
@@ -429,6 +486,36 @@ export function BillingTable({
               caption={`Billing table for period ${periodLabel} — ${householdsWithItems.length} household${householdsWithItems.length !== 1 ? "s" : ""}`}
               ariaLabel={`Billing data for ${periodLabel}`}
             />
+
+            {/* #158: surface per-row inline-edit errors below the grid so
+                they aren't trapped inside the CopyTable's static markup.
+                Cleared automatically when the user successfully retries or
+                presses Esc on the cell. */}
+            {Object.keys(rowErrors).length > 0 && (
+              <ul className="space-y-1 rounded-md border border-destructive bg-destructive-muted p-3 text-xs text-destructive-fg">
+                {Object.entries(rowErrors).map(([lineItemId, message]) => {
+                  const item = lineItems.find((li) => li.id === lineItemId);
+                  const householdName = households.find(
+                    (h) => h.id === item?.household_id
+                  )?.display_name;
+                  return (
+                    <li key={lineItemId} className="flex items-center justify-between gap-2">
+                      <span>
+                        {householdName ? `${householdName}: ` : ""}
+                        Could not save: {message}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => recordRowError(lineItemId, null)}
+                        className="rounded-sm border border-destructive bg-card px-2 py-0.5 text-[11px] font-medium text-destructive-fg hover:bg-muted"
+                      >
+                        Dismiss
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
 
             {/* Grand-total footer — rendered BELOW the CopyTable */}
             {lineItems.length > 0 && (

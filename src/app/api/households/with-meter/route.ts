@@ -4,21 +4,28 @@ import { createClient } from "@/lib/supabase/server";
 /**
  * POST /api/households/with-meter
  *
- * Creates a household AND links its primary_consumption_meter in one atomic
- * RPC (`fn_create_household_with_meter`). Used by the Add-Household wizard
- * (UX2 / #74). The RPC is SECURITY INVOKER — RLS on households and
- * household_devices decides whether the caller may write.
+ * Creates a household. Originally written for the Add-Household wizard
+ * (UX2 / #74) when meter assignment was mandatory; route name is preserved
+ * for back-compat. Two paths post-#158:
+ *
+ *   - `device_id` present and non-empty → calls `fn_create_household_with_meter`
+ *     (which now wraps `fn_create_household` with a non-null device id).
+ *   - `device_id` null/missing/empty → calls `fn_create_household` directly
+ *     with `p_device_id => null` (manual-billing household, no meter wiring).
+ *
+ * The RPC is SECURITY INVOKER — RLS on households and household_devices
+ * decides whether the caller may write.
  *
  * Authorization:
  *   - RLS via user_can_access_microgrid(microgrid_id) on households INSERT
- *   - The RPC's own safety guards reject cross-microgrid device_ids and
+ *   - The RPC's safety guards reject cross-microgrid device_ids and
  *     non-consumption-meter device types BEFORE any write happens.
  *
  * Request body:
  * {
  *   microgrid_id:         string;
  *   display_name:         string;
- *   device_id:            string;
+ *   device_id?:           string | null;     // optional — manual billing if null
  *   primary_phone:        string;            // required (#155)
  *   primary_email?:       string | null;
  *   address_line1?:       string | null;
@@ -65,13 +72,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const device_id =
-    typeof body.device_id === "string" ? body.device_id.trim() : "";
-  if (!device_id) {
-    return NextResponse.json(
-      { error: "device_id is required.", field: "device_id" },
-      { status: 422 }
-    );
+  // #158: device_id is optional. `null`, missing, or empty string → manual
+  // billing path (call fn_create_household with p_device_id => null). A
+  // non-empty string → metered path (call fn_create_household_with_meter
+  // wrapper). Anything that's not a string is rejected by the trim/optional
+  // helpers below.
+  let device_id: string | null = null;
+  if (body.device_id !== undefined && body.device_id !== null) {
+    if (typeof body.device_id !== "string") {
+      return NextResponse.json(
+        { error: "device_id must be a string, null, or omitted.", field: "device_id" },
+        { status: 422 }
+      );
+    }
+    const trimmed = body.device_id.trim();
+    device_id = trimmed.length > 0 ? trimmed : null;
   }
 
   // #155: primary_phone is required. Defense-in-depth — the RPC also raises
@@ -95,10 +110,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const supabase = await createClient();
 
-  const { data, error } = await supabase.rpc("fn_create_household_with_meter", {
+  // #158: dispatch to the meter-required wrapper (back-compat) or the
+  // no-meter path on fn_create_household. The wrapper itself just delegates
+  // to fn_create_household; the split is preserved at the route level so
+  // existing observability/logs keep their function-name signal.
+  const rpcArgs = {
     p_microgrid_id: microgrid_id,
     p_display_name: display_name,
-    p_device_id: device_id,
     p_primary_phone: primary_phone,
     p_primary_email: optional(body.primary_email) ?? undefined,
     p_address_line1: optional(body.address_line1) ?? undefined,
@@ -109,7 +127,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     p_address_country: optional(body.address_country) ?? undefined,
     p_address_postal_code: optional(body.address_postal_code) ?? undefined,
     p_geography_notes: optional(body.geography_notes) ?? undefined,
-  });
+  };
+
+  const { data, error } = device_id
+    ? await supabase.rpc("fn_create_household_with_meter", {
+        ...rpcArgs,
+        p_device_id: device_id,
+      })
+    : await supabase.rpc("fn_create_household", {
+        ...rpcArgs,
+        p_device_id: null,
+      });
 
   if (error) {
     // Row-level security denial → 403.
