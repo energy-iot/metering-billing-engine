@@ -212,6 +212,21 @@ Missing `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_JWT_SECRET` without `SKIP_RLS_TE
 loudly** with an actionable error — this is intentional so CI catches missing config rather than
 silently skipping coverage.
 
+### Bypassing the DEK-bootstrap integration test
+
+`src/lib/supabase/__tests__/dek-bootstrap.test.ts` shells out to
+`supabase db reset --yes` to verify migration `00025_dek_bootstrap_hardening.sql`.
+That requires the Supabase CLI plus `psql` available on PATH. Skip the suite
+when those aren't present (CI without Docker, fast iteration loops, etc.):
+
+```bash
+SKIP_DEK_BOOTSTRAP_TEST=1 npm test
+```
+
+This is destructive when it runs (it resets the local DB), so prefer running
+it in isolation: `SKIP_RLS_TESTS=1 npm test -- dek-bootstrap.test.ts`. Combine
+both flags in CI without local Supabase: `SKIP_RLS_TESTS=1 SKIP_DEK_BOOTSTRAP_TEST=1 npm test`.
+
 ### How JWT impersonation works
 
 The harness mints JWTs locally with `jose` and `SUPABASE_JWT_SECRET`. Each JWT carries `sub=<userId>`
