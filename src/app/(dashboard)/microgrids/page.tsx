@@ -1,11 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Microgrid } from "@/lib/types/domain";
+import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { AddEntityButton } from "@/components/forms/AddEntityButton";
 import type { CommunityOption } from "@/components/forms/AddEntityButton";
 
-type MicrogridWithHouseholdCount = Microgrid & {
+type MicrogridWithHouseholdCount = Omit<
+  Microgrid,
+  "ems_aws_secret_access_key_encrypted"
+> & {
   household_count: number;
 };
 
@@ -70,19 +74,26 @@ export default async function MicrogridsPage({
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     (() => {
-      let query = supabase.from("microgrids").select("*");
+      // Three branches. The org-filtered branch uses an embed (`communities!inner`)
+      // so its row shape differs from the other two branches; rather than fight
+      // the union type, we narrow `data` to the public columns at the
+      // destructure site below.
       if (communityId) {
         // Community filter is narrower — it wins.
-        query = query.eq("community_id", communityId);
-      } else if (orgValid) {
+        return supabase
+          .from("microgrids")
+          .select(MICROGRID_PUBLIC_COLUMNS)
+          .eq("community_id", communityId);
+      }
+      if (orgValid) {
         // Org filter: join via communities to filter by org_id.
         // PostgREST syntax: select from the embedded communities resource.
-        query = supabase
+        return supabase
           .from("microgrids")
-          .select("*, communities!inner(org_id)")
+          .select(`${MICROGRID_PUBLIC_COLUMNS}, communities!inner(org_id)`)
           .eq("communities.org_id", orgId!);
       }
-      return query.returns<Microgrid[]>();
+      return supabase.from("microgrids").select(MICROGRID_PUBLIC_COLUMNS);
     })(),
   ]);
 

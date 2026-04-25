@@ -153,6 +153,7 @@ export async function PUT(
   // Permission check — 404 on hidden/missing (don't leak existence).
   // Also read the existing encrypted secret so we can support the
   // "leave blank to keep the current secret" flow (#102 AC-SECRET-PRESERVE).
+  // SECURITY: ciphertext read server-side only — never returned to client (issue #106).
   const { data: mgRow, error: mgErr } = await supabase
     .from("microgrids")
     .select(
