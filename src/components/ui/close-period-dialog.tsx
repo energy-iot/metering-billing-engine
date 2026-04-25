@@ -1,30 +1,41 @@
 "use client";
 
-// ClosePeriodDialog — Radix Dialog wrapping the two-phase close flow.
+// ClosePeriodDialog — Radix Dialog wrapping the close-period flow.
 //
 // Phases (internal state):
-//   1 = summary       — grid of totals + "Review & close…" button
-//   2 = confirm        — checkbox "I have copied the values for URA"
-//                        + primary destructive "Close period" button
-//   2.5 = pending      — disabled "Closing…" button while mutation runs
-//   3 = closed         — green header, "Export CSV for URA" primary CTA
-//   E = error          — destructive inline error with Retry
+//   2   = confirm   — totals grid + grand total + checkbox
+//                     ("I have copied the values for URA") + filled-primary
+//                     "Close period" button (disabled until checkbox ticked).
+//                     This is the open surface — no preceding "Review & close…"
+//                     ceremony; the totals are visible immediately so the
+//                     user can review and commit in a single gesture.
+//   2.5 = pending   — disabled "Closing…" button while the mutation runs.
+//   3   = closed    — green header + "Export CSV for URA" primary CTA.
+//   E   = error     — destructive inline banner with "Retry close".
 //
 // A11y commitments (handled via Radix Dialog primitives):
 //   • role="dialog" + aria-modal on the content panel.
 //   • Focus trap while open; Esc to close; focus returns to trigger on close.
-//   • Cancel renders BEFORE the destructive trigger in DOM order so screen-
-//     reader users reach the safe option first.
+//   • Cancel renders BEFORE the confirm trigger in DOM order so screen-
+//     reader users reach the safe option first. Radix's default would land
+//     focus on the first focusable in DOM (the checkbox); we override that
+//     via onOpenAutoFocus + cancelRef to keep cancel-first focus order.
 //   • `aria-labelledby` references the dialog title; `aria-describedby`
 //     references the warning copy.
 //
 // Why multi-channel confirm over typed-phrase:
 //   The original typed "CLOSE 2026-03" phrase was shown on-screen, so the
 //   user just typed (or pasted) what they saw — friction illusory. A
-//   checkbox "I have copied the values for URA" + final "I confirm" button
-//   is a deliberate two-gesture commit AND names the real-world precondition
-//   (the transcription must be done). Forks that want typed-phrase ceremony
-//   can swap the confirm row; match case-insensitively.
+//   checkbox "I have copied the values for URA" + final "Close period"
+//   button is a deliberate two-gesture commit AND names the real-world
+//   precondition (the transcription must be done). Forks that want
+//   typed-phrase ceremony can swap the confirm row.
+//
+// Tone calibration:
+//   Closing a period is a final commit, not a destruction — destructive
+//   tone is reserved for delete flows. The rail and eyebrow render in
+//   primary tone; only the error-state banner and Retry button keep the
+//   destructive tokens (genuine failure state).
 
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -51,7 +62,7 @@ export interface ClosePeriodDialogProps {
   onExportCsv?: () => void;
 }
 
-type Phase = 1 | 2 | 2.5 | 3 | "E";
+type Phase = 2 | 2.5 | 3 | "E";
 
 export function ClosePeriodDialog({
   open,
@@ -62,7 +73,7 @@ export function ClosePeriodDialog({
   onConfirm,
   onExportCsv,
 }: ClosePeriodDialogProps) {
-  const [phase, setPhase] = React.useState<Phase>(1);
+  const [phase, setPhase] = React.useState<Phase>(2);
   const [confirmed, setConfirmed] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const cancelRef = React.useRef<HTMLButtonElement>(null);
@@ -70,7 +81,7 @@ export function ClosePeriodDialog({
   // Reset phase whenever the dialog is opened (don't carry state between openings).
   React.useEffect(() => {
     if (open) {
-      setPhase(1);
+      setPhase(2);
       setConfirmed(false);
       setError(null);
     }
@@ -104,8 +115,9 @@ export function ClosePeriodDialog({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/55 data-[state=open]:animate-in data-[state=closed]:animate-out" />
         <Dialog.Content
           // Cancel-first focus order: when the dialog opens, Radix tries to
-          // focus the first focusable element inside. We explicitly forward
-          // initial focus to the Cancel button below via onOpenAutoFocus.
+          // focus the first focusable element inside (the checkbox in the
+          // collapsed surface). We explicitly forward initial focus to the
+          // Cancel button below via onOpenAutoFocus.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             cancelRef.current?.focus();
@@ -117,8 +129,8 @@ export function ClosePeriodDialog({
             "outline-none",
           )}
         >
-          {/* destructive top-rail — 6px, token color */}
-          <div aria-hidden="true" className="h-[6px] bg-destructive" />
+          {/* primary top-rail — 6px, token color (commit moment, not destruction) */}
+          <div aria-hidden="true" className="h-[6px] bg-primary" />
 
           <div
             className={cn(
@@ -129,10 +141,10 @@ export function ClosePeriodDialog({
             <span
               className={cn(
                 "text-[11px] font-semibold uppercase tracking-wide",
-                phase === 3 ? "text-success-fg" : "text-destructive",
+                phase === 3 ? "text-success-fg" : "text-primary",
               )}
             >
-              {phase === 3 ? "Closed" : "Irreversible action"}
+              {phase === 3 ? "Closed" : "Final review"}
             </span>
             <Dialog.Title className="mt-1.5 text-xl font-semibold tracking-tight">
               {title}
@@ -170,7 +182,7 @@ export function ClosePeriodDialog({
                   type="checkbox"
                   checked={confirmed}
                   onChange={(e) => setConfirmed(e.target.checked)}
-                  className="mt-0.5 accent-[color:var(--destructive)]"
+                  className="mt-0.5 accent-[color:var(--primary)]"
                 />
                 <span>
                   I have copied the tier values into URA&apos;s portal and confirm these
@@ -210,19 +222,11 @@ export function ClosePeriodDialog({
                 Cancel
               </button>
             </Dialog.Close>
-            {phase === 1 && (
-              <button
-                onClick={() => setPhase(2)}
-                className="inline-flex h-8 items-center rounded-md border border-destructive bg-card px-3.5 text-[13px] font-medium text-destructive hover:bg-destructive-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Review &amp; close…
-              </button>
-            )}
             {phase === 2 && (
               <button
                 onClick={handleClose}
                 disabled={!confirmed}
-                className="inline-flex h-8 items-center rounded-md border border-destructive bg-destructive px-3.5 text-[13px] font-medium text-destructive-foreground disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="inline-flex h-8 items-center rounded-md border border-primary bg-primary px-3.5 text-[13px] font-medium text-primary-foreground disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 Close period
               </button>
@@ -230,7 +234,7 @@ export function ClosePeriodDialog({
             {phase === 2.5 && (
               <button
                 disabled
-                className="inline-flex h-8 items-center rounded-md border border-destructive bg-destructive px-3.5 text-[13px] font-medium text-destructive-foreground opacity-60 cursor-not-allowed"
+                className="inline-flex h-8 items-center rounded-md border border-primary bg-primary px-3.5 text-[13px] font-medium text-primary-foreground opacity-60 cursor-not-allowed"
               >
                 Closing…
               </button>
