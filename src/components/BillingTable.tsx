@@ -546,7 +546,17 @@ export function BillingTable({
             </span>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* BC4 (#176): "View history" link — renders on draft AND closed
+                periods (audit trail matters most after close). Always
+                rendered even before any events exist; the destination
+                page owns the empty-state pedagogy. */}
+            <Link
+              href={`/microgrids/${microgridId}/billing/${period.id}/history`}
+              className="text-sm text-muted-foreground underline underline-offset-2 hover:opacity-80"
+            >
+              View history
+            </Link>
             {isDraft && (
               <>
                 <button
