@@ -467,6 +467,43 @@ describe("BillingTable", () => {
     });
   });
 
+  // ── BC4 (#176) — "View history" link in period header ─────────────────────
+
+  it("(BC4) renders 'View history' link in the period header on draft periods", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} />
+      </Wrapper>
+    );
+    const link = Array.from(
+      container.querySelectorAll<HTMLAnchorElement>("a")
+    ).find((a) => a.textContent?.trim() === "View history");
+    expect(link).toBeDefined();
+    expect(link!.getAttribute("href")).toBe(
+      `/microgrids/mg-1/billing/${period.id}/history`
+    );
+  });
+
+  it("(BC4) renders 'View history' link in the period header on closed periods", () => {
+    const closedPeriod: BillingPeriod = {
+      ...period,
+      status: "closed",
+      closed_at: "2026-04-01T00:00:00Z",
+    };
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} period={closedPeriod} />
+      </Wrapper>
+    );
+    const link = Array.from(
+      container.querySelectorAll<HTMLAnchorElement>("a")
+    ).find((a) => a.textContent?.trim() === "View history");
+    expect(link).toBeDefined();
+    expect(link!.getAttribute("href")).toBe(
+      `/microgrids/mg-1/billing/${closedPeriod.id}/history`
+    );
+  });
+
   it("(f) row-actions kebab still renders when !isPaymentConfigured (gate banner explains the why)", () => {
     // BC2 (#174) — payment-link generate items are HIDDEN inside the menu
     // when !isPaymentConfigured, but the kebab itself still renders so the
