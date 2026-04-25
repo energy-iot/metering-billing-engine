@@ -77,12 +77,23 @@ export default async function PaymentPage({
       typeof cfgObj.consumer_key === "string" ? cfgObj.consumer_key : "",
     base_url: typeof cfgObj.base_url === "string" ? cfgObj.base_url : "",
     sandbox: typeof cfgObj.sandbox === "boolean" ? cfgObj.sandbox : false,
+    ipn_id: typeof cfgObj.ipn_id === "string" ? cfgObj.ipn_id : "",
   };
 
   const health = derivePaymentHealth({
     payment_provider: community.payment_provider,
     payment_last_configured_at: community.payment_last_configured_at,
   });
+
+  // Server-derived public callback URL surfaced in the configured-mode panel
+  // (super_admin only) for operator visibility — matches the URL Save & test
+  // registers with Pesapal. Always recomputed; never persisted client-side.
+  const callbackBase = (
+    process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL ?? ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
+  const callbackUrl = callbackBase ? `${callbackBase}/api/payments/ipn` : "";
 
   return (
     <div className="space-y-4">
@@ -93,6 +104,7 @@ export default async function PaymentPage({
           payment_provider: community.payment_provider,
           payment_last_configured_at: community.payment_last_configured_at,
           config: normalizedConfig,
+          callback_url: callbackUrl,
         }}
         health={health}
         secretLast4={secretLast4}

@@ -98,16 +98,16 @@ export async function getCommunityPaymentConfig(
 /**
  * Validate the JSONB shape for Pesapal.
  *
- * Required fields: `consumer_key`, `base_url`.
+ * Required fields (post-#121): `consumer_key`, `base_url`, `ipn_id`.
  *
- * `ipn_id` is **optional** (#119 contract amendment — IPN registration UX
- * ships with #121). A configured community without ipn_id is "ready for auth
- * validation" but not yet "ready to generate links" — the strict check lives
- * further downstream in `PesapalProvider` / `submitOrder`, which throws
- * `PESAPAL_NO_IPN` when a link is actually requested.
+ * `ipn_id` is now **required**. The Save & test flow registers an IPN with
+ * Pesapal and persists the returned GUID; a saved Pesapal config without an
+ * `ipn_id` is malformed and rejected here. Route handlers translate the
+ * resulting `PAYMENT_INVALID_CONFIG` into a 409 `ipn_not_registered` reason
+ * with an actionable hint to re-run Save & test.
  *
- * Throws `PAYMENT_INVALID_CONFIG` only when the shape itself is wrong or the
- * truly-required fields are missing.
+ * Throws `PAYMENT_INVALID_CONFIG` when the shape itself is wrong or any
+ * required field is missing.
  */
 export function parsePesapalConfig(raw: unknown): PesapalConfig {
   if (!raw || typeof raw !== "object") {
@@ -120,6 +120,8 @@ export function parsePesapalConfig(raw: unknown): PesapalConfig {
   const obj = raw as Record<string, unknown>;
   const consumer_key = typeof obj.consumer_key === "string" ? obj.consumer_key : "";
   const base_url = typeof obj.base_url === "string" ? obj.base_url : "";
+  const ipn_id =
+    typeof obj.ipn_id === "string" ? obj.ipn_id.trim() : "";
   if (!consumer_key || !base_url) {
     throw new PaymentError(
       "payment_provider_config is missing required fields (consumer_key, base_url)",
@@ -127,10 +129,18 @@ export function parsePesapalConfig(raw: unknown): PesapalConfig {
       500,
     );
   }
-  const ipn_id_raw = typeof obj.ipn_id === "string" ? obj.ipn_id : "";
+  if (!ipn_id) {
+    // Distinct code so route handlers can map this to a 409
+    // `ipn_not_registered` (actionable: "re-run Save & test") rather than the
+    // generic 503 `invalid_config`. Required since #121.
+    throw new PaymentError(
+      "Pesapal config is missing ipn_id — open Community Payment settings and run Save & test connection to register the IPN URL with Pesapal.",
+      "PAYMENT_IPN_NOT_REGISTERED",
+      409,
+    );
+  }
   const sandbox = typeof obj.sandbox === "boolean" ? obj.sandbox : undefined;
-  const parsed: PesapalConfig = { consumer_key, base_url };
-  if (ipn_id_raw) parsed.ipn_id = ipn_id_raw;
+  const parsed: PesapalConfig = { consumer_key, base_url, ipn_id };
   if (sandbox !== undefined) parsed.sandbox = sandbox;
   return parsed;
 }

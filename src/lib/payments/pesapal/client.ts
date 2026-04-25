@@ -2,9 +2,13 @@ import { PesapalError } from "./errors";
 import type {
   AuthTokenResponse,
   IpnEntry,
+  RegisterIpnResponse,
   SubmitOrderParams,
   SubmitOrderResponse,
 } from "./types";
+
+/** Pesapal supports POST or GET for IPN delivery. We default to POST. */
+export type IpnNotificationType = "POST" | "GET";
 
 /**
  * Pesapal client (stateless).
@@ -115,6 +119,49 @@ export class PesapalClient {
       },
       "PESAPAL_HTTP_ERROR",
     );
+  }
+
+  /**
+   * Register an IPN URL with Pesapal and return the canonical record (incl.
+   * `ipn_id`). Called by the Save & test flow (#121) so subsequent
+   * `submitOrder` calls can pass `notification_id`.
+   *
+   * Pesapal returns 200 with `{ ipn_id: "<GUID>", ... }` on success. Any 2xx
+   * payload missing `ipn_id` surfaces as `PESAPAL_REGISTER_IPN_FAILED`.
+   * Non-2xx and network failures surface via `pesapalFetch` as
+   * `PESAPAL_REGISTER_IPN_FAILED` and `PESAPAL_UNREACHABLE` respectively.
+   */
+  async registerIpn(
+    token: string,
+    url: string,
+    type: IpnNotificationType = "POST",
+  ): Promise<RegisterIpnResponse> {
+    const data = await this.pesapalFetch<RegisterIpnResponse>(
+      "/api/URLSetup/RegisterIPN",
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          url,
+          ipn_notification_type: type,
+        }),
+      },
+      "PESAPAL_REGISTER_IPN_FAILED",
+    );
+
+    if (!data.ipn_id || !String(data.ipn_id).trim()) {
+      throw new PesapalError(
+        `Pesapal RegisterIPN returned no ipn_id: ${JSON.stringify(data).slice(0, 500)}`,
+        "PESAPAL_REGISTER_IPN_FAILED",
+        502,
+        data,
+      );
+    }
+    return data;
   }
 
   /** Step 3: Submit order request. */

@@ -50,7 +50,8 @@ const BASE_COMMUNITY = {
   name: "Kisakye",
   payment_provider: null,
   payment_last_configured_at: null,
-  config: { consumer_key: "", base_url: "", sandbox: false },
+  config: { consumer_key: "", base_url: "", sandbox: false, ipn_id: "" },
+  callback_url: "",
 } as const;
 
 const CONFIGURED_COMMUNITY = {
@@ -62,7 +63,9 @@ const CONFIGURED_COMMUNITY = {
     consumer_key: "ck_live_example",
     base_url: "https://pay.pesapal.com/v3",
     sandbox: false,
+    ipn_id: "f3a2b1c0-9d8e-7f6a-5b4c-3d2e1f0a9b8c",
   },
+  callback_url: "https://app.example.com/api/payments/ipn",
 };
 
 beforeEach(() => {
@@ -140,6 +143,55 @@ describe("PaymentShell — configured state", () => {
       screen.getByText(/only super admins can update payment credentials/i),
     ).toBeDefined();
     expect(container.textContent).toContain("—");
+  });
+
+  it("(4b) super_admin: callback URL + truncated ipn_id rendered (#121)", () => {
+    const { container } = render(
+      <PaymentShell
+        community={CONFIGURED_COMMUNITY}
+        health="healthy"
+        secretLast4="9xYZ"
+        isSuperAdmin={true}
+      />,
+    );
+    expect(container.textContent).toContain("IPN callback URL");
+    expect(container.textContent).toContain(
+      "https://app.example.com/api/payments/ipn",
+    );
+    // Truncated middle: 4 leading + ellipsis + 4 trailing chars.
+    expect(container.textContent).toContain("f3a2…9b8c");
+    // Full GUID never rendered as inline text — it's only on a `title` attr.
+    expect(container.textContent).not.toContain(
+      "f3a2b1c0-9d8e-7f6a-5b4c-3d2e1f0a9b8c",
+    );
+  });
+
+  it("(4c) org_manager does not see callback URL / ipn_id (super_admin gated)", () => {
+    const { container } = render(
+      <PaymentShell
+        community={CONFIGURED_COMMUNITY}
+        health="healthy"
+        secretLast4={null}
+        isSuperAdmin={false}
+      />,
+    );
+    expect(container.textContent).not.toContain("IPN callback URL");
+    expect(container.textContent).not.toContain("Registered IPN id");
+  });
+
+  it("(4d) super_admin sees 'Not registered yet' hint when ipn_id is missing", () => {
+    const { container } = render(
+      <PaymentShell
+        community={{
+          ...CONFIGURED_COMMUNITY,
+          config: { ...CONFIGURED_COMMUNITY.config, ipn_id: "" },
+        }}
+        health="healthy"
+        secretLast4="9xYZ"
+        isSuperAdmin={true}
+      />,
+    );
+    expect(container.textContent).toContain("Not registered yet");
   });
 });
 

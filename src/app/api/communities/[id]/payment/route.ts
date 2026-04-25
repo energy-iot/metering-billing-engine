@@ -9,7 +9,7 @@ import { PesapalError } from "@/lib/payments/pesapal/errors";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 /**
- * PUT /api/communities/[id]/payment — Save & test payment-provider config (#119).
+ * PUT /api/communities/[id]/payment — Save & test payment-provider config (#119, #121).
  *
  * Body shape (super_admin only):
  *   {
@@ -22,7 +22,7 @@ import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
  * from the `sandbox` boolean so the JSONB stays canonical and typo'd URLs
  * can never reach the DB.
  *
- * Execution order (AC-ROUTE-1..6 in #119):
+ * Execution order (post-#121):
  *
  *   1. UUID check on [id] → 400 on malformed.
  *   2. JSON parse + manual shape validation → 400 on malformed body.
@@ -36,13 +36,20 @@ import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
  *      preserve it. Otherwise require a non-empty secret → 400.
  *   6. Decrypt the preserved secret via fn_get_community_payment_secret so we
  *      can run a live auth test against Pesapal with it.
- *   7. Save & test: call PesapalClient.getAccessToken() with the effective
- *      credentials. On failure → 503 { reason } with no DB write.
- *   8. On success: atomic UPDATE of all 4 columns
- *      (payment_provider, payment_provider_config JSONB,
- *      payment_provider_secret_encrypted BYTEA via fn_ems_encrypt_secret,
- *      payment_last_configured_at = now()).
- *   9. Log payment.save_test with scrubbed secret + token.
+ *   7. Save & test (auth): call PesapalClient.getAccessToken() with the
+ *      effective credentials. On failure → 503 { reason: 'auth_failed' }
+ *      with no DB write.
+ *   8. Save & test (IPN registration, #121): derive the public callback URL
+ *      from `NEXT_PUBLIC_PAYMENT_CALLBACK_URL` (required), append
+ *      `/api/payments/ipn`, and call `PesapalClient.registerIpn`. Always
+ *      re-register so a sandbox/prod toggle replaces the stale GUID
+ *      automatically. On failure → 503 { reason: 'register_ipn_failed' or
+ *      'callback_url_unknown' } with no DB write.
+ *   9. On success: atomic UPDATE of all 4 columns
+ *      (payment_provider, payment_provider_config JSONB with the freshly
+ *      registered ipn_id, payment_provider_secret_encrypted BYTEA via
+ *      fn_ems_encrypt_secret, payment_last_configured_at = now()).
+ *  10. Log payment.save_test with scrubbed secret + token.
  *
  * Response:
  *   200 → { status: 'success', message: string }
@@ -208,13 +215,14 @@ export async function PUT(
     : PESAPAL_BASE_URL_PROD;
 
   // Save & test — call Pesapal auth BEFORE any persist.
+  const client = new PesapalClient({
+    consumerKey: parsed.consumer_key,
+    consumerSecret: effectiveSecret,
+    baseUrl: base_url,
+  });
+  let token: string;
   try {
-    const client = new PesapalClient({
-      consumerKey: parsed.consumer_key,
-      consumerSecret: effectiveSecret,
-      baseUrl: base_url,
-    });
-    await client.getAccessToken();
+    token = await client.getAccessToken();
   } catch (err) {
     let reason: "auth_failed" | "unreachable" | "unknown_error" =
       "unknown_error";
@@ -246,7 +254,67 @@ export async function PUT(
     return NextResponse.json({ error: message, reason }, { status: 503 });
   }
 
-  // Pesapal validated the creds → persist.
+  // #121 — Register the IPN URL with Pesapal so subsequent submitOrder calls
+  // can pass `notification_id`. We always re-register: this handles the
+  // sandbox/prod toggle automatically (the previous GUID belongs to the
+  // OTHER environment's Pesapal account and is invalid).
+  const callbackBase = (process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL ?? "").trim();
+  if (!callbackBase) {
+    logSaveTest({
+      communityId,
+      provider: parsed.provider,
+      status: "callback_url_unknown",
+      durationMs: Date.now() - startedAt,
+      sensitive: [effectiveSecret],
+      supabase,
+    });
+    return NextResponse.json(
+      {
+        error:
+          "Server configuration error: NEXT_PUBLIC_PAYMENT_CALLBACK_URL is not set, so the IPN URL cannot be registered with Pesapal. Ask an administrator to set this environment variable in all Vercel scopes (Production, Preview, Development).",
+        reason: "callback_url_unknown",
+      },
+      { status: 503 },
+    );
+  }
+  const ipnUrl = `${callbackBase.replace(/\/+$/, "")}/api/payments/ipn`;
+
+  let registeredIpnId: string;
+  try {
+    const registered = await client.registerIpn(token, ipnUrl, "POST");
+    registeredIpnId = registered.ipn_id;
+  } catch (err) {
+    let reason:
+      | "register_ipn_failed"
+      | "unreachable"
+      | "unknown_error" = "unknown_error";
+    let message =
+      "Could not register the IPN URL with Pesapal. Check server logs and try again.";
+    if (err instanceof PesapalError) {
+      if (err.code === "PESAPAL_REGISTER_IPN_FAILED") {
+        reason = "register_ipn_failed";
+        message =
+          "Pesapal accepted the credentials but rejected the IPN registration. Verify the callback URL is publicly reachable and try again.";
+      } else if (err.code === "PESAPAL_UNREACHABLE") {
+        reason = "unreachable";
+        message =
+          "Could not reach Pesapal while registering the IPN URL. Check your network and try again.";
+      }
+    }
+
+    logSaveTest({
+      communityId,
+      provider: parsed.provider,
+      status: reason,
+      durationMs: Date.now() - startedAt,
+      sensitive: [effectiveSecret],
+      supabase,
+    });
+
+    return NextResponse.json({ error: message, reason }, { status: 503 });
+  }
+
+  // Pesapal validated the creds AND registered the IPN → persist.
   // 1. Encrypt the (possibly reused) plaintext secret.
   let encryptedSecret: string | null = null;
   if (!preserveExistingSecret) {
@@ -265,33 +333,17 @@ export async function PUT(
     encryptedSecret = enc as string;
   }
 
-  // 2. Build the atomic UPDATE payload. Preserve existing ipn_id if present
-  //    on the current row (IPN registration UX ships with #121; until then
-  //    the column may carry a stale ipn_id from pre-#119 configs). Read the
-  //    existing config first to avoid dropping the field.
-  const { data: existingCfg } = await supabase
-    .from("communities")
-    .select("payment_provider_config")
-    .eq("id", communityId)
-    .maybeSingle<{ payment_provider_config: unknown }>();
-
-  const existingIpnId =
-    existingCfg &&
-    existingCfg.payment_provider_config &&
-    typeof existingCfg.payment_provider_config === "object" &&
-    typeof (
-      existingCfg.payment_provider_config as Record<string, unknown>
-    ).ipn_id === "string"
-      ? ((existingCfg.payment_provider_config as Record<string, unknown>)
-          .ipn_id as string)
-      : undefined;
-
+  // 2. Build the atomic UPDATE payload. Save & test ALWAYS overwrites
+  //    `ipn_id` with the freshly registered GUID — no preservation of the
+  //    prior value. This makes the sandbox↔prod toggle correct by
+  //    construction (the new GUID belongs to the now-effective Pesapal
+  //    environment).
   const newConfig: Record<string, unknown> = {
     consumer_key: parsed.consumer_key,
     base_url,
     sandbox: parsed.sandbox,
+    ipn_id: registeredIpnId,
   };
-  if (existingIpnId) newConfig.ipn_id = existingIpnId;
 
   const updatePayload: Record<string, unknown> = {
     payment_provider: parsed.provider,

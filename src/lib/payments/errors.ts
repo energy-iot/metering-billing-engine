@@ -24,11 +24,12 @@ export class PaymentError extends Error {
 }
 
 // Generic codes (provider-agnostic):
-//   "PAYMENT_NOT_CONFIGURED"    (409) — community has no provider set
-//   "PAYMENT_FORBIDDEN"         (403) — caller may not decrypt the secret
-//   "PAYMENT_INVALID_CONFIG"    (500) — stored config is malformed / partial
-//   "PAYMENT_UNKNOWN_PROVIDER"  (500) — factory received an unknown provider
-//                                        discriminator (exhaustiveness guard)
+//   "PAYMENT_NOT_CONFIGURED"      (409) — community has no provider set
+//   "PAYMENT_FORBIDDEN"           (403) — caller may not decrypt the secret
+//   "PAYMENT_INVALID_CONFIG"      (500) — stored config is malformed / partial
+//   "PAYMENT_IPN_NOT_REGISTERED"  (409) — Pesapal config has no ipn_id (post-#121)
+//   "PAYMENT_UNKNOWN_PROVIDER"    (500) — factory received an unknown provider
+//                                          discriminator (exhaustiveness guard)
 //
 // Provider-specific codes live on the subclass and are mapped to a short
 // `reason` string by the route handler.

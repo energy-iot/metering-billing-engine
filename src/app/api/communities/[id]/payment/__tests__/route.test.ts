@@ -14,15 +14,28 @@
  *  (10) base_url is server-derived from sandbox (NOT taken from body)
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { NextRequest } from "next/server";
 
 const COMMUNITY_ID = "550e8400-e29b-41d4-a716-446655440010";
 const ORG_ID = "550e8400-e29b-41d4-a716-446655440020";
 
+// Vercel env var used by the route to derive the IPN callback URL.
+const PRIOR_CALLBACK_URL = process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL;
+process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL = "https://app.example.com";
+
+afterAll(() => {
+  if (PRIOR_CALLBACK_URL === undefined) {
+    delete process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL;
+  } else {
+    process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL = PRIOR_CALLBACK_URL;
+  }
+});
+
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const getAccessTokenMock = vi.fn();
+const registerIpnMock = vi.fn();
 
 vi.mock("@/lib/payments/pesapal/client", async () => {
   const actual = await vi.importActual<
@@ -31,6 +44,7 @@ vi.mock("@/lib/payments/pesapal/client", async () => {
   class PesapalClientMock {
     constructor(public cfg: unknown) {}
     getAccessToken = getAccessTokenMock;
+    registerIpn = registerIpnMock;
   }
   return {
     ...actual,
@@ -48,10 +62,9 @@ vi.mock("@/lib/auth/access", () => ({
 
 // ─── Supabase mock — sequenced from() handlers, shared mockRpc ─────────────
 //
-// Route's from() sequence (success path):
+// Route's from() sequence (success path, post-#121):
 //   1. communities.select(... payment_provider_secret_encrypted).eq(id).maybeSingle()
-//   2. communities.select(payment_provider_config).eq(id).maybeSingle()     ← pre-update read
-//   3. communities.update(payload).eq(id)
+//   2. communities.update(payload).eq(id)
 //
 // Plus: mockRpc is used for fn_get_community_payment_secret (preserve path)
 // and fn_ems_encrypt_secret.
@@ -64,13 +77,8 @@ let communitySelectResp: { data: unknown; error: unknown } = {
   },
   error: null,
 };
-let existingCfgSelectResp: { data: unknown; error: unknown } = {
-  data: { payment_provider_config: null },
-  error: null,
-};
 let updateError: unknown = null;
 let updatePayloadCapture: Record<string, unknown> | null = null;
-let fromCallIndex = 0;
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
@@ -100,7 +108,6 @@ function makePutRequest(body: unknown): NextRequest {
 describe("PUT /api/communities/[id]/payment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fromCallIndex = 0;
     canAccessOrgReturn = true;
     isSuperAdminReturn = true;
     communitySelectResp = {
@@ -111,22 +118,15 @@ describe("PUT /api/communities/[id]/payment", () => {
       },
       error: null,
     };
-    existingCfgSelectResp = {
-      data: { payment_provider_config: null },
-      error: null,
-    };
     updateError = null;
     updatePayloadCapture = null;
+    process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL = "https://app.example.com";
 
     mockFrom.mockImplementation(() => {
-      const idx = fromCallIndex++;
       return {
         select: () => ({
           eq: () => ({
-            maybeSingle: () => {
-              if (idx === 0) return Promise.resolve(communitySelectResp);
-              return Promise.resolve(existingCfgSelectResp);
-            },
+            maybeSingle: () => Promise.resolve(communitySelectResp),
           }),
         }),
         update: (payload: Record<string, unknown>) => {
@@ -149,6 +149,11 @@ describe("PUT /api/communities/[id]/payment", () => {
     });
 
     getAccessTokenMock.mockResolvedValue("fake-token");
+    registerIpnMock.mockResolvedValue({
+      url: "https://app.example.com/api/payments/ipn",
+      created_date: "2026-04-25T00:00:00Z",
+      ipn_id: "ipn-fresh-guid",
+    });
   });
 
   // ─── (1) Happy path ────────────────────────────────────────────────────
@@ -166,6 +171,13 @@ describe("PUT /api/communities/[id]/payment", () => {
     const body = await res.json();
     expect(body.status).toBe("success");
     expect(getAccessTokenMock).toHaveBeenCalledTimes(1);
+    // #121: registerIpn called once, with the canonical callback URL.
+    expect(registerIpnMock).toHaveBeenCalledTimes(1);
+    expect(registerIpnMock).toHaveBeenCalledWith(
+      "fake-token",
+      "https://app.example.com/api/payments/ipn",
+      "POST",
+    );
     expect(updatePayloadCapture).toBeTruthy();
     const payload = updatePayloadCapture!;
     expect(payload.payment_provider).toBe("pesapal");
@@ -173,6 +185,8 @@ describe("PUT /api/communities/[id]/payment", () => {
       consumer_key: "ck_live_abc",
       base_url: "https://pay.pesapal.com/v3",
       sandbox: false,
+      // #121: freshly-registered ipn_id persisted as a flat key.
+      ipn_id: "ipn-fresh-guid",
     });
     expect(payload.payment_provider_secret_encrypted).toBe("\\x0a0b0c0d");
     expect(payload.payment_last_configured_at).toEqual(expect.any(String));
@@ -216,6 +230,16 @@ describe("PUT /api/communities/[id]/payment", () => {
         >
       ).base_url,
     ).toBe("https://cybqa.pesapal.com/pesapalv3");
+    // #121: ipn_id is still re-registered + persisted on a secret-preserve.
+    expect(registerIpnMock).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        updatePayloadCapture!.payment_provider_config as Record<
+          string,
+          unknown
+        >
+      ).ipn_id,
+    ).toBe("ipn-fresh-guid");
   });
 
   // ─── (3) org_manager → 403 ─────────────────────────────────────────────
@@ -361,5 +385,100 @@ describe("PUT /api/communities/[id]/payment", () => {
       unknown
     >).base_url;
     expect(stored).toBe("https://cybqa.pesapal.com/pesapalv3");
+  });
+
+  // ─── (11) #121 IPN registration failure → 503 register_ipn_failed ──────
+  it("(11) IPN registration failure → 503 register_ipn_failed, no DB write", async () => {
+    const { PesapalError } = await import("@/lib/payments/pesapal/errors");
+    registerIpnMock.mockRejectedValueOnce(
+      new PesapalError(
+        "RegisterIPN returned 401",
+        "PESAPAL_REGISTER_IPN_FAILED",
+        502,
+      ),
+    );
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        config: { consumer_key: "ck_live_abc", sandbox: false },
+        secret_access_key: "cs_live_verylongsecret",
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.reason).toBe("register_ipn_failed");
+    expect(updatePayloadCapture).toBeNull();
+    // Encrypt is gated on the success path — never called when IPN fails.
+    const rpcNames = mockRpc.mock.calls.map((c) => c[0]);
+    expect(rpcNames).not.toContain("fn_ems_encrypt_secret");
+  });
+
+  // ─── (12) #121 callback URL env var unset → 503 callback_url_unknown ───
+  it("(12) NEXT_PUBLIC_PAYMENT_CALLBACK_URL unset → 503 callback_url_unknown", async () => {
+    const prior = process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL;
+    delete process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL;
+    try {
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          provider: "pesapal",
+          config: { consumer_key: "ck_live_abc", sandbox: false },
+          secret_access_key: "cs_live_verylongsecret",
+        }),
+        { params: Promise.resolve({ id: COMMUNITY_ID }) },
+      );
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.reason).toBe("callback_url_unknown");
+      expect(updatePayloadCapture).toBeNull();
+      // registerIpn never called because the URL is unknown.
+      expect(registerIpnMock).not.toHaveBeenCalled();
+    } finally {
+      process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL = prior;
+    }
+  });
+
+  // ─── (13) #121 sandbox toggle replaces ipn_id ──────────────────────────
+  //
+  // Save & test always re-registers, so toggling sandbox produces a NEW GUID
+  // and the PRIOR ipn_id (which belonged to the other Pesapal environment)
+  // is overwritten — never preserved.
+  it("(13) sandbox toggle: ipn_id is replaced with the freshly-registered GUID", async () => {
+    // Existing config used to be sandbox=false with an old prod ipn_id.
+    communitySelectResp = {
+      data: {
+        id: COMMUNITY_ID,
+        org_id: ORG_ID,
+        payment_provider_secret_encrypted: "\\xdeadbeef",
+      },
+      error: null,
+    };
+    registerIpnMock.mockResolvedValueOnce({
+      url: "https://app.example.com/api/payments/ipn",
+      created_date: "2026-04-25T00:00:00Z",
+      ipn_id: "ipn-sandbox-new-guid",
+    });
+
+    const { PUT } = await import("../route");
+    const res = await PUT(
+      makePutRequest({
+        provider: "pesapal",
+        // Toggle sandbox=true → new IPN must be registered with the
+        // sandbox account; the old prod GUID would be invalid.
+        config: { consumer_key: "ck_live_abc", sandbox: true },
+      }),
+      { params: Promise.resolve({ id: COMMUNITY_ID }) },
+    );
+    expect(res.status).toBe(200);
+    const cfg = updatePayloadCapture!.payment_provider_config as Record<
+      string,
+      unknown
+    >;
+    expect(cfg.ipn_id).toBe("ipn-sandbox-new-guid");
+    expect(cfg.sandbox).toBe(true);
+    expect(cfg.base_url).toBe("https://cybqa.pesapal.com/pesapalv3");
   });
 });
