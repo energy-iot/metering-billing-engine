@@ -151,22 +151,30 @@ describe("HouseholdWizard", () => {
       expect(next).toHaveProperty("disabled", false);
     });
 
-    it("(#155) blank phone shows inline error AND blocks Next", () => {
+    it("(#155) inline error stays hidden until phone is touched, then blocks Next", () => {
       renderWizard();
-      // Step 1 is visited from open → inline error visible immediately.
+      // On first render the dialog must NOT yell — error appears only after
+      // the user has interacted with the phone field.
+      expect(
+        screen.queryByText(/Phone is required for payment links/i)
+      ).toBeNull();
+
+      fillDisplayName("Block A, Unit 1");
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      // display_name set, phone still blank → Next disabled regardless of
+      // whether the error message is rendered.
+      expect(next).toHaveProperty("disabled", true);
+
+      // Touch the phone field (focus + blur) without typing → error appears.
+      const phone = screen.getByLabelText(
+        /Primary phone/i
+      ) as HTMLInputElement;
+      fireEvent.blur(phone);
       expect(
         screen.getByText(/Phone is required for payment links/i)
       ).toBeTruthy();
 
-      fillDisplayName("Block A, Unit 1");
-      // display_name set, phone still blank → Next disabled
-      const next = screen.getByRole("button", { name: /^Next$/ });
-      expect(next).toHaveProperty("disabled", true);
-
       // Fill phone → error clears and Next enables
-      const phone = screen.getByLabelText(
-        /Primary phone/i
-      ) as HTMLInputElement;
       fireEvent.change(phone, { target: { value: "+256 700 000 000" } });
       expect(
         screen.queryByText(/Phone is required for payment links/i)

@@ -393,7 +393,6 @@ export function HouseholdWizard({
                   update={update}
                   firstFieldRef={step1FirstFieldRef}
                   disabled={submitting}
-                  visited={visited.has(1)}
                 />
               )}
               {step === 2 && (
@@ -560,9 +559,7 @@ function StepIndicator({
               >
                 {isCompleted && !isActive ? "✓" : s}
               </span>
-              <span>
-                {s} / 4 {STEP_LABELS[s]}
-              </span>
+              <span>{STEP_LABELS[s]}</span>
             </button>
             {idx < steps.length - 1 && (
               <span aria-hidden="true" className="h-px flex-1 bg-border" />
@@ -581,17 +578,20 @@ function StepBasics({
   update,
   firstFieldRef,
   disabled,
-  visited,
 }: {
   state: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   firstFieldRef: React.RefObject<HTMLInputElement | null>;
   disabled: boolean;
-  visited: boolean;
 }) {
-  // #155: phone is required for Pesapal payment-link delivery.
+  // #155: phone is required for Pesapal payment-link delivery. The inline
+  // error fires only after the user has interacted with the phone field
+  // (focused-then-left), so the dialog doesn't yell on first render. The
+  // Next button stays disabled until phone is non-empty either way, so the
+  // user can't bypass the rule.
+  const [phoneTouched, setPhoneTouched] = React.useState(false);
   const phoneBlank = state.primary_phone.trim().length === 0;
-  const phoneInvalid = visited && phoneBlank;
+  const phoneInvalid = phoneTouched && phoneBlank;
   return (
     <fieldset className="space-y-4" disabled={disabled}>
       <legend className="sr-only">Step 1 of 4: Basics</legend>
@@ -628,6 +628,7 @@ function StepBasics({
             type="text"
             value={state.primary_phone}
             onChange={(e) => update("primary_phone", e.target.value)}
+            onBlur={() => setPhoneTouched(true)}
             placeholder="+256 …"
             required
             aria-required="true"
