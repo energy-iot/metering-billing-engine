@@ -37,7 +37,20 @@ type CommunityProps = {
     consumer_key: string;
     base_url: string;
     sandbox: boolean;
+    /**
+     * GUID Pesapal returned from RegisterIPN when Save & test last ran (#121).
+     * Empty string when the row pre-dates #121 — the configured panel surfaces
+     * a "Not registered yet" hint and Save & test will fix it on next click.
+     */
+    ipn_id: string;
   };
+  /**
+   * Server-derived public IPN callback URL — always
+   * `${NEXT_PUBLIC_PAYMENT_CALLBACK_URL}/api/payments/ipn`. Empty string when
+   * the env var is unset (e.g. in some test setups). Read-only display field;
+   * never round-tripped through the form.
+   */
+  callback_url: string;
 };
 
 export type PaymentShellProps = {
@@ -52,6 +65,8 @@ type SaveOutcome =
   | { kind: "auth_failed"; message: string }
   | { kind: "unreachable"; message: string }
   | { kind: "invalid_config"; message: string }
+  | { kind: "register_ipn_failed"; message: string }
+  | { kind: "callback_url_unknown"; message: string }
   | { kind: "permission_denied"; message: string }
   | { kind: "generic_error"; message: string };
 
@@ -164,6 +179,20 @@ export function PaymentShell(props: PaymentShellProps) {
             message:
               (typeof json.error === "string" && json.error) ||
               "Could not reach Pesapal. Check your network and try again.",
+          });
+        } else if (reason === "register_ipn_failed") {
+          setOutcome({
+            kind: "register_ipn_failed",
+            message:
+              (typeof json.error === "string" && json.error) ||
+              "Pesapal accepted the credentials but rejected the IPN registration.",
+          });
+        } else if (reason === "callback_url_unknown") {
+          setOutcome({
+            kind: "callback_url_unknown",
+            message:
+              (typeof json.error === "string" && json.error) ||
+              "Server configuration error: the IPN callback URL is not set.",
           });
         } else {
           setOutcome({
@@ -332,6 +361,36 @@ export function PaymentShell(props: PaymentShellProps) {
                 {community.config.base_url || "—"}
               </p>
             </div>
+            {isSuperAdmin && (
+              <>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    IPN callback URL
+                  </p>
+                  <p className="mt-1 break-all font-mono text-xs text-foreground">
+                    {community.callback_url || "—"}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Pesapal calls this URL after a checkout completes.
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Registered IPN id
+                  </p>
+                  <p
+                    className="mt-1 break-all font-mono text-xs text-foreground"
+                    title={community.config.ipn_id || ""}
+                  >
+                    {formatIpnId(community.config.ipn_id) || (
+                      <span className="text-muted-foreground">
+                        Not registered yet — run Save & test connection.
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Right column */}
@@ -514,6 +573,17 @@ export function PaymentShell(props: PaymentShellProps) {
   );
 }
 
+/**
+ * Truncate the Pesapal IPN GUID for display. Full value remains accessible
+ * via the surrounding `<p title="…">`. Returns empty string when no value
+ * is registered so the caller can render a placeholder.
+ */
+function formatIpnId(ipnId: string): string {
+  if (!ipnId) return "";
+  if (ipnId.length <= 12) return ipnId;
+  return `${ipnId.slice(0, 4)}…${ipnId.slice(-4)}`;
+}
+
 function OutcomeBanner({ outcome }: { outcome: SaveOutcome }) {
   if (outcome.kind === "success") {
     return (
@@ -539,6 +609,20 @@ function OutcomeBanner({ outcome }: { outcome: SaveOutcome }) {
   if (outcome.kind === "invalid_config") {
     return (
       <Banner tone="warn" title="Invalid configuration">
+        {outcome.message}
+      </Banner>
+    );
+  }
+  if (outcome.kind === "register_ipn_failed") {
+    return (
+      <Banner tone="destructive" title="IPN registration failed">
+        {outcome.message}
+      </Banner>
+    );
+  }
+  if (outcome.kind === "callback_url_unknown") {
+    return (
+      <Banner tone="destructive" title="Callback URL not configured">
         {outcome.message}
       </Banner>
     );

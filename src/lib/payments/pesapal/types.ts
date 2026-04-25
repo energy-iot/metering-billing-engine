@@ -69,21 +69,39 @@ export interface SubmitOrderResponse {
 }
 
 /**
+ * Response from /api/URLSetup/RegisterIPN.
+ *
+ * Pesapal returns the canonical record for the registered IPN, including the
+ * `ipn_id` GUID which we persist on `communities.payment_provider_config` and
+ * pass back into `submitOrder` as `notification_id`.
+ */
+export interface RegisterIpnResponse {
+  url: string;
+  created_date: string;
+  ipn_id: string;
+  notification_type?: number | string;
+  ipn_notification_type_description?: string;
+  ipn_status?: number;
+  ipn_status_description?: string;
+  status?: string;
+  error?: unknown;
+}
+
+/**
  * Non-secret Pesapal config stored as JSONB in
  * `communities.payment_provider_config`. `consumer_secret` is stored separately
  * in `payment_provider_secret_encrypted` (envelope-encrypted BYTEA) and
  * surfaced via `fn_get_community_payment_secret`.
  *
- * `ipn_id` is **optional** today (#119 contract amendment): Save & test
- * persists a config with no IPN registered yet — IPN registration UX lands
- * with #121. `submitOrder` remains strict; the PesapalProvider constructor
- * throws PESAPAL_NO_IPN at link-generation time when ipn_id is missing,
- * which surfaces as a clean 409/503 to the user rather than a silent crash.
+ * `ipn_id` is **required** post-#121: Save & test now registers an IPN with
+ * Pesapal as part of the success path and writes the returned GUID here. A
+ * persisted Pesapal config without `ipn_id` is treated as malformed by
+ * `parsePesapalConfig` (throws `PAYMENT_INVALID_CONFIG`).
  */
 export interface PesapalConfig {
   consumer_key: string;
   base_url: string;
-  ipn_id?: string;
+  ipn_id: string;
   /**
    * Persisted reflection of the Sandbox toggle in the config UI. Server
    * derives `base_url` from this boolean on write, but we also persist the

@@ -234,11 +234,12 @@ export async function POST(
   // 6. Pesapal rejects reused `id` — fresh per click.
   const orderId = `INV-${lineItemId}-${Date.now()}`;
 
-  // 7. Dispatch through the factory. The PesapalProvider constructor itself
-  //    throws PESAPAL_NO_IPN when the persisted config lacks ipn_id (a
-  //    per-#119 deferred-IPN state). Wrap both the constructor and the
-  //    generatePaymentLink call under a single try so every Pesapal-layer
-  //    error lands in the same mapPaymentError branch.
+  // 7. Dispatch through the factory. Post-#121, parsePesapalConfig rejects
+  //    upstream when the persisted config is missing `ipn_id` (throws
+  //    PAYMENT_IPN_NOT_REGISTERED — 409), so the legacy
+  //    PesapalProvider-constructor PESAPAL_NO_IPN branch is unreachable here.
+  //    Wrap both the constructor and the generatePaymentLink call under a
+  //    single try so every Pesapal-layer error lands in mapPaymentError.
   let result: GeneratePaymentLinkResult;
   try {
     const client = getPaymentProviderClient(paymentConfig);
@@ -315,6 +316,16 @@ function mapPaymentError(err: unknown): MappedError {
       return { message: err.message, reason: "forbidden", httpStatus: 403 };
     case "PAYMENT_INVALID_CONFIG":
       return { message: err.message, reason: "invalid_config", httpStatus: 503 };
+    case "PAYMENT_IPN_NOT_REGISTERED":
+      // Post-#121: parsePesapalConfig throws this when the saved Pesapal
+      // config has no `ipn_id`. Distinct from generic invalid_config so the
+      // UI can render an actionable hint ("re-run Save & test connection").
+      return {
+        message:
+          "Payment provider is configured but no IPN has been registered yet. A super admin must run Save & test connection on the Community Payment tab to register the IPN URL.",
+        reason: "ipn_not_registered",
+        httpStatus: 409,
+      };
     case "PAYMENT_UNKNOWN_PROVIDER":
       return { message: err.message, reason: "invalid_config", httpStatus: 500 };
 
@@ -324,16 +335,18 @@ function mapPaymentError(err: unknown): MappedError {
     case "PESAPAL_UNREACHABLE":
       return { message: err.message, reason: "unreachable", httpStatus: 503 };
     case "PESAPAL_NO_IPN":
-      // Per #119 AC-LIB-2: community has a provider configured but no IPN
-      // registered yet — a user-caused not-ready state distinct from the
-      // malformed/invalid (503) case. 409 signals "config exists but link
-      // generation is gated on IPN registration (ships with #121)".
+      // Legacy code retained for defense-in-depth: post-#121 parsePesapalConfig
+      // rejects missing ipn_id upstream as PAYMENT_IPN_NOT_REGISTERED, so this
+      // branch is unreachable in practice. Mapped to the same 409 reason for
+      // consistency if it ever fires.
       return {
         message:
-          "Payment provider is configured but no IPN has been registered yet. A super admin must complete IPN registration before links can be generated.",
-        reason: "invalid_config",
+          "Payment provider is configured but no IPN has been registered yet. A super admin must run Save & test connection on the Community Payment tab to register the IPN URL.",
+        reason: "ipn_not_registered",
         httpStatus: 409,
       };
+    case "PESAPAL_REGISTER_IPN_FAILED":
+      return { message: err.message, reason: "register_ipn_failed", httpStatus: 503 };
     case "PESAPAL_INVALID_CONFIG":
       return { message: err.message, reason: "invalid_config", httpStatus: 503 };
     case "PESAPAL_MISSING_CONTACT":
