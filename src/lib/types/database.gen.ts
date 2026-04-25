@@ -384,10 +384,15 @@ export type Database = {
       }
       households: {
         Row: {
+          address_city: string | null
+          address_country: string | null
           address_line1: string | null
           address_line2: string | null
+          address_postal_code: string | null
+          address_region: string | null
           created_at: string
           display_name: string
+          geography_notes: string | null
           id: string
           microgrid_id: string
           primary_email: string | null
@@ -395,10 +400,15 @@ export type Database = {
           unit_label: string | null
         }
         Insert: {
+          address_city?: string | null
+          address_country?: string | null
           address_line1?: string | null
           address_line2?: string | null
+          address_postal_code?: string | null
+          address_region?: string | null
           created_at?: string
           display_name: string
+          geography_notes?: string | null
           id?: string
           microgrid_id: string
           primary_email?: string | null
@@ -406,10 +416,15 @@ export type Database = {
           unit_label?: string | null
         }
         Update: {
+          address_city?: string | null
+          address_country?: string | null
           address_line1?: string | null
           address_line2?: string | null
+          address_postal_code?: string | null
+          address_region?: string | null
           created_at?: string
           display_name?: string
+          geography_notes?: string | null
           id?: string
           microgrid_id?: string
           primary_email?: string | null
