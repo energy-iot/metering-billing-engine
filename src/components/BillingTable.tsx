@@ -16,7 +16,11 @@ import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClosePeriodDialog, type ClosePeriodSummaryRow } from "@/components/ui/close-period-dialog";
 import { Banner } from "@/components/ui/banner";
-import { PaymentRowActions } from "@/components/billing/payment-row-actions";
+import { RowActionsMenu } from "@/components/billing/row-actions-menu";
+import {
+  RowBannerStack,
+  type RowBannerEntry,
+} from "@/components/billing/row-banner-stack";
 import { ManualUsageCell } from "@/components/billing/manual-usage-cell";
 import type {
   BillingLineItem,
@@ -37,6 +41,8 @@ export function BillingTable({
   isPaymentConfigured = true,
   isSuperAdmin = false,
   communityId,
+  edgeAvailableByHouseholdId,
+  actorByLineItemId,
 }: {
   microgridId: string;
   period: BillingPeriod;
@@ -50,6 +56,21 @@ export function BillingTable({
   isSuperAdmin?: boolean;
   /** Community id — used for the super_admin "Go to Payment tab" link. */
   communityId?: string;
+  /**
+   * Whether each household has a primary_consumption_meter device on a
+   * configured edge. Drives visibility of "Switch back to edge data" /
+   * "Regenerate from edge data" in the row kebab menu (BC2 #174).
+   * Defaults to `true` when a household id is missing from the map.
+   */
+  edgeAvailableByHouseholdId?: Record<string, boolean>;
+  /**
+   * Map of `billing_line_items.id → actor display name` resolved via the
+   * `user_directory!entered_by_user_id` join in the page loader. Drives
+   * the per-row "Updated by …" caption (BC2 #174 AC3). When the join
+   * returns null (deleted user OR `entered_by_user_id IS NULL`) the
+   * caption falls back to "Updated by a user".
+   */
+  actorByLineItemId?: Record<string, string | null>;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -84,6 +105,26 @@ export function BillingTable({
   for (const item of lineItems) {
     lineItemMap.set(item.household_id, item);
   }
+
+  // BC2 (#174) — per-row transient banner queue. Pushed by <RowActionsMenu>
+  // for stub regenerate handlers, payment-link failures, and IPN auto-close
+  // notices. Rendered by <RowBannerStack> below the CopyTable as a sibling
+  // of the rowErrors <ul>.
+  const [rowBanners, setRowBanners] = useState<RowBannerEntry[]>([]);
+  const pushRowBanner = React.useCallback((entry: RowBannerEntry) => {
+    setRowBanners((prev) => [...prev, entry]);
+  }, []);
+  const dismissRowBanner = React.useCallback((id: string) => {
+    setRowBanners((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+  const getHouseholdNameForLineItem = React.useCallback(
+    (lineItemId: string) => {
+      const li = lineItems.find((x) => x.id === lineItemId);
+      if (!li) return undefined;
+      return households.find((h) => h.id === li.household_id)?.display_name;
+    },
+    [lineItems, households],
+  );
 
   // #158: per-row error message surfaced from the inline-edit cells. Keyed
   // by line item id so a failure on one un-metered row doesn't clobber the
@@ -409,30 +450,50 @@ export function BillingTable({
     },
     {
       kind: "action",
-      header: "Payment",
+      header: "Status",
       render: (h) => {
         const item = lineItemMap.get(h.id);
         if (!item) return null;
 
-        // Build period label for the ConfirmDialog body.
-        const periodLabel =
-          period.start_date === period.end_date
-            ? period.start_date
-            : `${period.start_date} – ${period.end_date}`;
+        const edgeAvailable =
+          edgeAvailableByHouseholdId?.[h.id] ?? true;
+        const actorDisplayName =
+          actorByLineItemId?.[item.id] ?? null;
+
+        // Per AC3: caption suppressed when reading_source !== 'manual'
+        // OR entered_at is null (legacy rows pre-BC1 are tolerated).
+        const showCaption =
+          item.reading_source === "manual" && item.entered_at != null;
+        const captionLabel = actorDisplayName ?? "a user";
 
         return (
-          <PaymentRowActions
-            lineItemId={item.id}
-            isPaymentConfigured={isPaymentConfigured}
-            lineItem={{
-              id: item.id,
-              payment_status: item.payment_status,
-              household_name: h.display_name,
-              period_label: periodLabel,
-              total_amount: item.total_amount,
-              currency: localeCurrency,
-            }}
-          />
+          <span className="inline-flex flex-col items-end gap-1">
+            <RowActionsMenu
+              microgridId={microgridId}
+              lineItem={{
+                id: item.id,
+                payment_status: item.payment_status,
+                reading_source: item.reading_source,
+                total_amount: item.total_amount,
+              }}
+              household={{ id: h.id, display_name: h.display_name }}
+              period={{
+                id: period.id,
+                status: period.status,
+                start_date: period.start_date,
+                end_date: period.end_date,
+              }}
+              edgeAvailable={edgeAvailable}
+              isPaymentConfigured={isPaymentConfigured}
+              onRowBanner={pushRowBanner}
+            />
+            {showCaption && item.entered_at && (
+              <p className="text-[11px] text-muted-foreground">
+                Updated by {captionLabel} ·{" "}
+                <LocalDate value={item.entered_at} relative />
+              </p>
+            )}
+          </span>
         );
       },
     },
@@ -625,6 +686,14 @@ export function BillingTable({
               columns={columns}
               caption={`Billing table for period ${periodLabel} — ${householdsWithItems.length} household${householdsWithItems.length !== 1 ? "s" : ""}`}
               ariaLabel={`Billing data for ${periodLabel}`}
+            />
+
+            {/* BC2 (#174) — per-row transient banners (payment-link
+                errors, IPN auto-close info, BC3 regenerate stubs). */}
+            <RowBannerStack
+              entries={rowBanners}
+              onDismiss={dismissRowBanner}
+              getHouseholdName={getHouseholdNameForLineItem}
             />
 
             {/* #158: surface per-row inline-edit errors below the grid so

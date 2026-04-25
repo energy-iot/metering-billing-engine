@@ -202,6 +202,35 @@ describe("StatusChip — billingLineItemPaymentStatus kind", () => {
   });
 });
 
+// BC2 (#174) — billing line item reading-source chip (2 states).
+describe("StatusChip — billingLineItemReadingSource kind", () => {
+  it("renders 'edge' with success background", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemReadingSource" status="edge" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-success-muted");
+    expect(container.textContent).toContain("Edge");
+  });
+
+  it("renders 'manual' with neutral background", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemReadingSource" status="manual" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.className).toContain("bg-muted");
+    expect(container.textContent).toContain("Manual");
+  });
+
+  it("aria-label references the kind", () => {
+    const { container } = render(
+      <StatusChip kind="billingLineItemReadingSource" status="manual" />,
+    );
+    const chip = container.querySelector("span");
+    expect(chip?.getAttribute("aria-label")).toContain("billingLineItemReadingSource");
+  });
+});
+
 // #119 — Community Payment-provider health chip (4 states).
 describe("StatusChip — paymentHealth kind", () => {
   it("renders 'healthy' with success background + dot", () => {

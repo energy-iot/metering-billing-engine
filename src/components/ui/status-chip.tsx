@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 type Kind =
   | "billingPeriod"
   | "billingLineItemPaymentStatus"
+  | "billingLineItemReadingSource"
   | "edge"
   | "edgeSource"
   | "deviceType"
@@ -45,6 +46,17 @@ const MAPS: Record<Kind, StatusMap> = {
     paid:           { label: "Paid",           tone: "success", dot: true        },
     failed:         { label: "Failed",         tone: "alert",   dot: true        },
     refunded:       { label: "Refunded",       tone: "neutral"                   },
+  },
+  // BC2 (#174) — billing_line_items.reading_source provenance chip.
+  // Display-only: indicates whether a row's kWh values came from the edge
+  // device feed (auto-generated) or from operator manual entry. Tones:
+  //   edge   → success (the auto path "just works" — positive default)
+  //   manual → neutral (no `info` tone in BannerTone/Chip — neutral is the
+  //                     resting indicator for human-entered data; the
+  //                     entered-by caption beneath communicates "who").
+  billingLineItemReadingSource: {
+    edge:   { label: "Edge",   tone: "success" },
+    manual: { label: "Manual", tone: "neutral" },
   },
   billingPeriod: {
     draft:  { label: "Draft",  tone: "warn",    dot: true },

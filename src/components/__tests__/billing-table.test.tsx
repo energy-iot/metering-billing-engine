@@ -272,23 +272,25 @@ describe("BillingTable", () => {
     expect(hasUgxInCell).toBe(false);
   });
 
-  it("(d) Payment column header present; action button rendered for each row with line item", () => {
+  it("(d) Status column header present; row-actions kebab rendered for each row with line item", () => {
+    // BC2 (#174) — Payment column renamed to Status; per-row actions
+    // consolidated into a single kebab menu (replaces Payment link button).
     const { container } = render(
       <Wrapper>
         <BillingTable {...baseProps} isPaymentConfigured={true} />
       </Wrapper>
     );
 
-    // Column header "Payment" present
+    // Column header "Status" present (renamed from "Payment").
     const headers = Array.from(container.querySelectorAll("th[scope='col']"));
-    const paymentHeader = headers.find((h) => h.textContent === "Payment");
-    expect(paymentHeader).not.toBeNull();
+    const statusHeader = headers.find((h) => h.textContent === "Status");
+    expect(statusHeader).not.toBeNull();
 
-    // One Payment link button per row with a line item (3 households, all have items)
-    const paymentBtns = Array.from(container.querySelectorAll("button")).filter(
-      (b) => b.textContent?.toLowerCase().includes("payment link"),
+    // One row-actions kebab per row with a line item (3 households).
+    const kebabs = Array.from(container.querySelectorAll("button")).filter(
+      (b) => /row actions for/i.test(b.getAttribute("aria-label") ?? ""),
     );
-    expect(paymentBtns.length).toBe(3);
+    expect(kebabs.length).toBe(3);
   });
 
   it("(e) gate banner rendered for super_admin with go-to-payment link when !isPaymentConfigured", () => {
@@ -401,7 +403,74 @@ describe("BillingTable", () => {
     expect(numberInputs.length).toBe(0);
   });
 
-  it("(f) payment buttons disabled when !isPaymentConfigured", () => {
+  // BC2 (#174) AC3 — entered-by caption (3 cases).
+  describe("entered-by caption (BC2 #174 AC3)", () => {
+    function makeManualLineItem(
+      enteredBy: string | null,
+      enteredAt: string | null,
+    ): BillingLineItem[] {
+      return [
+        {
+          ...lineItems[0],
+          reading_source: "manual",
+          entered_by_user_id: enteredBy,
+          entered_at: enteredAt,
+        },
+        lineItems[1],
+        lineItems[2],
+      ];
+    }
+
+    it("manual + actor name → 'Updated by <name> · …' caption renders", () => {
+      const { container } = render(
+        <Wrapper>
+          <BillingTable
+            {...baseProps}
+            lineItems={makeManualLineItem(
+              "user-1",
+              new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+            )}
+            actorByLineItemId={{ "li-1": "Aaron" }}
+          />
+        </Wrapper>,
+      );
+      // Paragraph caption present beneath the kebab cell.
+      expect(container.textContent).toMatch(/Updated by Aaron/);
+    });
+
+    it("manual + actorDisplayName=null (deleted user) → 'Updated by a user · …'", () => {
+      const { container } = render(
+        <Wrapper>
+          <BillingTable
+            {...baseProps}
+            lineItems={makeManualLineItem(
+              "user-deleted",
+              new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            )}
+            actorByLineItemId={{ "li-1": null }}
+          />
+        </Wrapper>,
+      );
+      expect(container.textContent).toMatch(/Updated by a user/);
+    });
+
+    it("edge source → no caption rendered", () => {
+      const { container } = render(
+        <Wrapper>
+          <BillingTable
+            {...baseProps}
+            actorByLineItemId={{ "li-1": "Aaron" }}
+          />
+        </Wrapper>,
+      );
+      expect(container.textContent).not.toMatch(/Updated by/);
+    });
+  });
+
+  it("(f) row-actions kebab still renders when !isPaymentConfigured (gate banner explains the why)", () => {
+    // BC2 (#174) — payment-link generate items are HIDDEN inside the menu
+    // when !isPaymentConfigured, but the kebab itself still renders so the
+    // operator can mark-paid / view-history / view-household.
     const { container } = render(
       <Wrapper>
         <BillingTable
@@ -413,13 +482,9 @@ describe("BillingTable", () => {
       </Wrapper>
     );
 
-    const paymentBtns = Array.from(container.querySelectorAll("button")).filter(
-      (b) => b.textContent?.toLowerCase().includes("payment link"),
+    const kebabs = Array.from(container.querySelectorAll("button")).filter(
+      (b) => /row actions for/i.test(b.getAttribute("aria-label") ?? ""),
     );
-    expect(paymentBtns.length).toBe(3);
-    paymentBtns.forEach((btn) => {
-      expect((btn as HTMLButtonElement).disabled).toBe(true);
-      expect(btn.getAttribute("aria-describedby")).toBe("payment-gate-banner");
-    });
+    expect(kebabs.length).toBe(3);
   });
 });
