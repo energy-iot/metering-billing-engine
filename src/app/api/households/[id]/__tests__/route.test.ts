@@ -1,11 +1,12 @@
 /**
- * PATCH /api/households/[id] — route tests (#145).
+ * PATCH /api/households/[id] — route tests (#145 + #146).
  *
  * Covers:
  *   - 400: bad UUID, invalid JSON, empty diff, unsupported field, invalid display_name
  *   - 200: happy path (display_name only, no device touch)
  *   - 200: happy path (device_id link via delete-then-insert)
  *   - 200: happy path (device_id: null → unlink only, no field update)
+ *   - 200: #146 — address_city, address_region, address_country, address_postal_code, geography_notes accepted
  *   - 403: forbidden via currentUserCanAccessMicrogrid
  *   - 404: not found (household missing or RLS-hidden)
  *   - 409: device_id partial-unique-index conflict (23505)
@@ -273,6 +274,24 @@ describe("PATCH /api/households/[id]", () => {
     // No household-field update — refetch path
     expect(mockHouseholdsUpdateSingle).not.toHaveBeenCalled();
     expect(mockHouseholdsRefetchSingle).toHaveBeenCalledTimes(1);
+  });
+
+  it("200: #146 — address fields accepted (address_city, region, country, postal_code, geography_notes)", async () => {
+    const { PATCH } = await import("../route");
+    const res = await PATCH(
+      makePatchRequest(HH_UUID, {
+        address_city: "Kampala",
+        address_region: "Central Region",
+        address_country: "Uganda",
+        address_postal_code: "00256",
+        geography_notes: "Near the market",
+      }),
+      { params: Promise.resolve({ id: HH_UUID }) }
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.household).toBeDefined();
+    expect(mockHouseholdsUpdateSingle).toHaveBeenCalledTimes(1);
   });
 
   it("403: currentUserCanAccessMicrogrid returns false", async () => {

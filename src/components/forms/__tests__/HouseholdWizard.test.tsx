@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * HouseholdWizard component tests (UX2 / #74).
+ * HouseholdWizard component tests (UX2 / #74 + #146).
  *
  * Covers:
  *   (a) 4-step transitions (1 → 2 → 3 → 4) work with Next
@@ -10,6 +10,9 @@
  *   (e) Submit posts the expected payload via POST /api/households/with-meter
  *   (f) Cancel with unsaved data shows a confirm dialog
  *   (g) Cancel with all-empty fields closes immediately (no dialog)
+ *   (h) #146 — Step 2 renders 5 new address fields
+ *   (i) #146 — Step 4 review displays new address fields
+ *   (j) #146 — submit payload includes new address fields
  */
 
 import * as React from "react";
@@ -257,6 +260,21 @@ describe("HouseholdWizard", () => {
       fireEvent.change(screen.getByLabelText(/Unit label/i), {
         target: { value: "Unit 7" },
       });
+      fireEvent.change(screen.getByLabelText(/^City$/i), {
+        target: { value: "Kampala" },
+      });
+      fireEvent.change(screen.getByLabelText(/Region \/ state/i), {
+        target: { value: "Central Region" },
+      });
+      fireEvent.change(screen.getByLabelText(/^Country$/i), {
+        target: { value: "Uganda" },
+      });
+      fireEvent.change(screen.getByLabelText(/Postal code/i), {
+        target: { value: "00256" },
+      });
+      fireEvent.change(screen.getByLabelText(/Geography notes/i), {
+        target: { value: "Near the market" },
+      });
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       // Step 3 — pick dev-2
@@ -293,6 +311,11 @@ describe("HouseholdWizard", () => {
         address_line1: "Plot 14, Kisakye Ln",
         address_line2: "Block A",
         unit_label: "Unit 7",
+        address_city: "Kampala",
+        address_region: "Central Region",
+        address_country: "Uganda",
+        address_postal_code: "00256",
+        geography_notes: "Near the market",
         device_id: "dev-2",
       });
 
@@ -343,8 +366,75 @@ describe("HouseholdWizard", () => {
         address_line1: null,
         address_line2: null,
         unit_label: null,
+        address_city: null,
+        address_region: null,
+        address_country: null,
+        address_postal_code: null,
+        geography_notes: null,
         device_id: "dev-1",
       });
+    });
+  });
+
+  // ── #146 tests ────────────────────────────────────────────────────────────
+
+  describe("(h) #146 — Step 2 new address fields", () => {
+    it("renders City, Region/state, Country, Postal code, Geography notes in step 2", async () => {
+      renderWizard();
+      fillDisplayName("Household X");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+
+      expect(screen.getByLabelText(/^City$/i)).toBeDefined();
+      expect(screen.getByLabelText(/Region \/ state/i)).toBeDefined();
+      expect(screen.getByLabelText(/^Country$/i)).toBeDefined();
+      expect(screen.getByLabelText(/Postal code/i)).toBeDefined();
+      // Geography notes is a textarea
+      const notesField = screen.getByLabelText(/Geography notes/i);
+      expect(notesField.tagName.toLowerCase()).toBe("textarea");
+    });
+  });
+
+  describe("(i) #146 — Step 4 review shows address fields", () => {
+    it("displays new address fields in the review summary", async () => {
+      renderWizard();
+
+      // Step 1
+      fillDisplayName("Household X");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 2 — fill city + country
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.change(screen.getByLabelText(/^City$/i), {
+        target: { value: "Kampala" },
+      });
+      fireEvent.change(screen.getByLabelText(/^Country$/i), {
+        target: { value: "Uganda" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 — pick meter
+      await waitFor(() =>
+        expect(screen.getAllByRole("radio").length).toBe(METERS.length)
+      );
+      fireEvent.click(
+        screen.getByRole("radio", { name: /Household A Meter/i })
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 4 — values appear in review
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Create household/i })
+        ).toBeDefined()
+      );
+      expect(screen.getByText("Kampala")).toBeDefined();
+      expect(screen.getByText("Uganda")).toBeDefined();
     });
   });
 

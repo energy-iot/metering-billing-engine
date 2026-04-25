@@ -76,6 +76,11 @@ type FormState = {
   address_line1: string;
   address_line2: string;
   unit_label: string;
+  address_city: string;
+  address_region: string;
+  address_country: string;
+  address_postal_code: string;
+  geography_notes: string;
   device_id: string;
 };
 
@@ -86,6 +91,11 @@ const EMPTY_STATE: FormState = {
   address_line1: "",
   address_line2: "",
   unit_label: "",
+  address_city: "",
+  address_region: "",
+  address_country: "",
+  address_postal_code: "",
+  geography_notes: "",
   device_id: "",
 };
 
@@ -127,6 +137,11 @@ function hasAnyData(state: FormState): boolean {
     state.address_line1.trim().length > 0 ||
     state.address_line2.trim().length > 0 ||
     state.unit_label.trim().length > 0 ||
+    state.address_city.trim().length > 0 ||
+    state.address_region.trim().length > 0 ||
+    state.address_country.trim().length > 0 ||
+    state.address_postal_code.trim().length > 0 ||
+    state.geography_notes.trim().length > 0 ||
     state.device_id.length > 0
   );
 }
@@ -243,6 +258,11 @@ export function HouseholdWizard({
           address_line1: state.address_line1.trim() || null,
           address_line2: state.address_line2.trim() || null,
           unit_label: state.unit_label.trim() || null,
+          address_city: state.address_city.trim() || null,
+          address_region: state.address_region.trim() || null,
+          address_country: state.address_country.trim() || null,
+          address_postal_code: state.address_postal_code.trim() || null,
+          geography_notes: state.geography_notes.trim() || null,
           device_id: state.device_id,
         }),
       });
@@ -651,6 +671,86 @@ function StepAddress({
           />
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label
+            htmlFor="hh-address-city"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            City
+          </label>
+          <Input
+            id="hh-address-city"
+            type="text"
+            value={state.address_city}
+            onChange={(e) => update("address_city", e.target.value)}
+            placeholder="Kampala"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="hh-address-region"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Region / state
+          </label>
+          <Input
+            id="hh-address-region"
+            type="text"
+            value={state.address_region}
+            onChange={(e) => update("address_region", e.target.value)}
+            placeholder="Central Region"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label
+            htmlFor="hh-address-country"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Country
+          </label>
+          <Input
+            id="hh-address-country"
+            type="text"
+            value={state.address_country}
+            onChange={(e) => update("address_country", e.target.value)}
+            placeholder="Uganda"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="hh-address-postal"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Postal code
+          </label>
+          <Input
+            id="hh-address-postal"
+            type="text"
+            value={state.address_postal_code}
+            onChange={(e) => update("address_postal_code", e.target.value)}
+            placeholder="00256"
+          />
+        </div>
+      </div>
+      <div>
+        <label
+          htmlFor="hh-geography-notes"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Geography notes
+        </label>
+        <textarea
+          id="hh-geography-notes"
+          rows={2}
+          value={state.geography_notes}
+          onChange={(e) => update("geography_notes", e.target.value)}
+          placeholder="Directions, landmarks, or access notes"
+          className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+        />
+      </div>
     </fieldset>
   );
 }
@@ -811,6 +911,14 @@ function StepReview({
           value={state.address_line2 || "—"}
         />
         <ReviewRow label="Unit label" value={state.unit_label || "—"} />
+        <ReviewRow label="City" value={state.address_city || "—"} />
+        <ReviewRow label="Region / state" value={state.address_region || "—"} />
+        <ReviewRow label="Country" value={state.address_country || "—"} />
+        <ReviewRow label="Postal code" value={state.address_postal_code || "—"} />
+        <ReviewRow
+          label="Geography notes"
+          value={state.geography_notes || "—"}
+        />
       </ReviewSection>
 
       <ReviewSection title="Primary meter" onEdit={() => onJumpTo(3)}>

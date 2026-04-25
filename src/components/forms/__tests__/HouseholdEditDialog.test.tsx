@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * HouseholdEditDialog tests (#145).
+ * HouseholdEditDialog tests (#145 + #146).
  *
  * Coverage:
  *   (1) renders with current device assignment
@@ -11,6 +11,9 @@
  *   (6) at-least-one-contact validation blocks save and surfaces helper
  *   (7) display_name required (blank disables Save)
  *   (8) device_id change is included in PATCH diff
+ *   (9)  #146 — 5 new address fields render in Address section
+ *   (10) #146 — address fields included in PATCH diff
+ *   (11) #146 — geography_notes renders as textarea
  */
 
 import * as React from "react";
@@ -70,6 +73,11 @@ const HOUSEHOLD: Household = {
   address_line1: "Plot 14",
   address_line2: null,
   unit_label: null,
+  address_city: null,
+  address_region: null,
+  address_country: null,
+  address_postal_code: null,
+  geography_notes: null,
   created_at: "2026-01-01T00:00:00Z",
 } as Household;
 
@@ -231,5 +239,43 @@ describe("HouseholdEditDialog (#145)", () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(init?.body as string);
     expect(body).toEqual({ device_id: "dev-2" });
+  });
+
+  // ── #146 new field tests ───────────────────────────────────────────────
+
+  it("(9) #146 — 5 new address fields render in the Address section", () => {
+    renderDialog();
+    // All 5 new labels should appear in the address fieldset
+    expect(screen.getByLabelText(/^City$/i)).toBeDefined();
+    expect(screen.getByLabelText(/Region \/ state/i)).toBeDefined();
+    expect(screen.getByLabelText(/^Country$/i)).toBeDefined();
+    expect(screen.getByLabelText(/Postal code/i)).toBeDefined();
+    expect(screen.getByLabelText(/Geography notes/i)).toBeDefined();
+  });
+
+  it("(10) #146 — address_city change is included in PATCH diff", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ household: { id: HOUSEHOLD.id } }),
+    } as Response);
+
+    renderDialog({ currentDeviceId: "dev-1" });
+
+    const cityInput = screen.getByLabelText(/^City$/i) as HTMLInputElement;
+    fireEvent.change(cityInput, { target: { value: "Kampala" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    expect(body).toEqual({ address_city: "Kampala" });
+  });
+
+  it("(11) #146 — geography_notes renders as a textarea", () => {
+    renderDialog();
+    const textarea = screen.getByLabelText(/Geography notes/i);
+    expect(textarea.tagName.toLowerCase()).toBe("textarea");
   });
 });
