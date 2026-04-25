@@ -239,7 +239,11 @@ export async function GET(
     );
     if (!matchedNature) continue;
 
-    const suggestedDeviceType = classifyDeviceType(component.factoryId, matchedNature);
+    const suggestedDeviceType = classifyDeviceType(
+      component.factoryId,
+      matchedNature,
+      component.alias
+    );
     const openemsChannelAddress = channelAddressFor(componentId, suggestedDeviceType);
 
     discovered.push({
