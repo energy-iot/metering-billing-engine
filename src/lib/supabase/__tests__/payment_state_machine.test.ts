@@ -1,5 +1,5 @@
 /**
- * payment_state_machine.test.ts (#157, migration 00027)
+ * payment_state_machine.test.ts (#157, migrations 00027 (enum) + 00028 (rest))
  *
  * Verifies the Phase B state machine end-to-end against a live local Supabase:
  *   - `link_generated` enum value present.
@@ -44,7 +44,7 @@ const FIXTURE = {
   lineItemB: "cccccccc-cccc-4000-8007-000000000002",
 };
 
-desc("00027_payment_state_machine.sql (#157)", () => {
+desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#157)", () => {
   beforeAll(async () => {
     if (skip) return;
     await assertEnvironmentReady();

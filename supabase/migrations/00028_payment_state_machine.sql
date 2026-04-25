@@ -1,5 +1,15 @@
--- 00027_payment_state_machine.sql
+-- 00028_payment_state_machine.sql
 -- Pesapal IPN Phase B: payment state machine + payment_events audit (#157).
+--
+-- ── Why this file is split from 00027 ────────────────────────────────────────
+--
+-- This migration is the second half of the original 00027 — the "post enum
+-- add" half. The enum value `link_generated` is added in
+-- 00027_payment_state_machine_enum.sql so that Postgres commits the new value
+-- in a separate transaction before this file references it as a string
+-- literal (in the CHECK constraint and in `fn_apply_payment_event`). Older PG
+-- versions reject same-transaction references to a freshly added enum value;
+-- the file split sidesteps that sharp edge for safer cloud deploys.
 --
 -- ── Summary ───────────────────────────────────────────────────────────────────
 --
@@ -10,7 +20,7 @@
 -- audit row to `payment_events`.
 --
 -- Pre-migration enum (from 00021): 'unpaid' | 'paid' | 'failed' | 'refunded'.
--- This migration adds 'link_generated' (no-audit-fields tier — pre-payment).
+-- Post 00027 enum: adds 'link_generated' (no-audit-fields tier — pre-payment).
 --
 -- ── State machine ────────────────────────────────────────────────────────────
 --
@@ -63,21 +73,11 @@
 -- ── Idempotency ──────────────────────────────────────────────────────────────
 --
 -- All statements are guarded with IF NOT EXISTS / DROP CONSTRAINT IF EXISTS /
--- DROP POLICY IF EXISTS / CREATE OR REPLACE FUNCTION / ADD VALUE IF NOT EXISTS.
--- Re-running this migration is safe.
+-- DROP POLICY IF EXISTS / CREATE OR REPLACE FUNCTION. Re-running this
+-- migration is safe.
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 1. Enum: add 'link_generated' to billing_line_item_payment_status.
--- ═════════════════════════════════════════════════════════════════════════════
---
--- Postgres requires the new enum value to be committed before any code
--- references it. ALTER TYPE ADD VALUE auto-commits in this migration script
--- before the function definitions below.
-
-ALTER TYPE billing_line_item_payment_status ADD VALUE IF NOT EXISTS 'link_generated';
-
--- ═════════════════════════════════════════════════════════════════════════════
--- 2. Add Phase-B columns on billing_line_items.
+-- 1. Add Phase-B columns on billing_line_items.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- pesapal_order_id    — Pesapal merchant_reference echoed back from
@@ -112,7 +112,7 @@ END;
 $$;
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 3. Update CHECK constraint to include 'link_generated' in the no-audit tier.
+-- 2. Update CHECK constraint to include 'link_generated' in the no-audit tier.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- 'link_generated' is a pre-payment state — paid_at / paid_by_user_id MUST be
@@ -137,7 +137,7 @@ ALTER TABLE billing_line_items
   );
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 4. payment_events audit table.
+-- 3. payment_events audit table.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- Append-only log of every payment_status transition. INSERTs originate from
@@ -162,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_payment_events_line_item_at
   ON payment_events(line_item_id, at DESC);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 5. RLS on payment_events.
+-- 4. RLS on payment_events.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- Same chain as billing_line_items policy: line_item → billing_period →
@@ -192,7 +192,7 @@ CREATE POLICY "Authorized users can access payment_events"
   );
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 6. fn_apply_payment_event — authoritative state-transition RPC.
+-- 5. fn_apply_payment_event — authoritative state-transition RPC.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- SECURITY DEFINER: the function bypasses RLS, but it requires the caller to
@@ -392,7 +392,7 @@ END;
 $$;
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 7. Grants.
+-- 6. Grants.
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- `authenticated` + `service_role` only; `anon` is NOT granted. The route

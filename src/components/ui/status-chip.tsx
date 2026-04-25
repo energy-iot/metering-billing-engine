@@ -30,7 +30,7 @@ type StatusMap = Record<string, { label: string; tone: ChipProps["tone"]; dot?: 
 
 const MAPS: Record<Kind, StatusMap> = {
   // Billing line item payment status — maps the billing_line_item_payment_status
-  // enum (migrations 00021 + 00027) to chip tones for the manual mark-paid +
+  // enum (migrations 00021 + 00027/00028) to chip tones for the manual mark-paid +
   // IPN Phase B UI (#124, #157).
   //
   // Tone rationale (per Designer §3 evaluation lens, existing token set):
