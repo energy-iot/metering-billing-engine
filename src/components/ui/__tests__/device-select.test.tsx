@@ -48,10 +48,10 @@ beforeAll(() => {
     Element.prototype.scrollIntoView = function () {};
   }
   if (typeof Element.prototype.hasPointerCapture !== "function") {
-    (Element.prototype as { hasPointerCapture?: () => boolean }).hasPointerCapture = () => false;
+    Element.prototype.hasPointerCapture = (() => false) as Element["hasPointerCapture"];
   }
   if (typeof Element.prototype.releasePointerCapture !== "function") {
-    (Element.prototype as { releasePointerCapture?: () => void }).releasePointerCapture = () => {};
+    Element.prototype.releasePointerCapture = (() => {}) as Element["releasePointerCapture"];
   }
 });
 

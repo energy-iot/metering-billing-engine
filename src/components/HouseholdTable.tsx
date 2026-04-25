@@ -1,18 +1,63 @@
 "use client";
 
-import { useState } from "react";
+/**
+ * HouseholdTable — list of households on a microgrid (#145 refactor).
+ *
+ * What this file does NOT do anymore:
+ *   - No inline create form (HouseholdsSection wraps HouseholdWizard)
+ *   - No inline name/phone/email edit (HouseholdEditDialog covers it)
+ *   - No per-row inline billing-device <select> (HouseholdEditDialog covers
+ *     it via DeviceSelect; superseded the #144 <optgroup> work)
+ *
+ * What this file DOES:
+ *   - Renders one row per household with: stacked name + contact, address
+ *     summary, click-to-edit billing-device chip, kebab menu
+ *   - Kebab menu (Radix DropdownMenu, used directly per edge-row-actions
+ *     pattern; no ui/dropdown-menu wrapper exists):
+ *       Edit household           → opens HouseholdEditDialog
+ *       Change/Link billing dev. → opens HouseholdEditDialog
+ *       View detail →            → Link to detail page
+ *       — separator —
+ *       Delete household         → existing destructive flow
+ *   - Click-to-edit chip column:
+ *       Assigned   → <button> wrapping <Chip tone="success" dot>
+ *       Unassigned → <button> wrapping <Chip tone="warn" dot>
+ *     Real <button> + explicit aria-label so focus ring + keyboard
+ *     activation come for free.
+ *   - Address column: today's 3 fields joined; #146 widens.
+ *
+ * Permission: kebab + chip-button render only when canManage. For non-
+ * managers the chip is a non-interactive <span>.
+ *
+ * BillingDeviceOption was added in #144 for the now-superseded native
+ * <select>/<optgroup>. The shape carries the fields DeviceSelect needs
+ * (edge_id, edge_name, linkedToHouseholdName) so it is reused as the prop
+ * shape unchanged. Marking it deprecated would force callers to convert
+ * shapes for no reason — leave the type in place as the public surface.
+ */
+
+import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
 import type { Device, Household } from "@/lib/types/domain";
+import { Chip } from "@/components/ui/chip";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { HouseholdEditDialog } from "@/components/forms/HouseholdEditDialog";
 
 /**
- * An enriched device option for the billing-device <select>.
- * Carries edge_name (for disambiguation) and, when the device is already
- * the primary_consumption_meter of another household, the linked household
- * name so the operator knows they can't select it here.
+ * An enriched device option for the billing-device picker. Carries
+ * edge_id + edge_name (DeviceSelect groups by edge_id, labels with
+ * edge_name) and an optional linkedToHouseholdName when the device is
+ * already the primary_consumption_meter of a different household on this
+ * microgrid.
+ *
+ * Originally introduced in #144 for the native <select>/<optgroup>. After
+ * the #145 refactor the same shape feeds DeviceSelect — kept as the
+ * canonical billing-device shape rather than renamed to avoid a churning
+ * caller diff.
  */
 export type BillingDeviceOption = {
   id: string;
@@ -21,42 +66,24 @@ export type BillingDeviceOption = {
   edge_id: string;
   edge_name: string;
   /** Set when this device is already assigned as primary_consumption_meter
-   *  on a DIFFERENT household. The option renders disabled with a suffix. */
-  linkedToHouseholdName?: string;
+   *  on a DIFFERENT household. DeviceSelect renders these greyed + disabled. */
+  linkedToHouseholdName?: string | null;
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Group BillingDeviceOptions by edge_name, sorted alphabetically by edge name.
- * Within each group: available (unlocked) devices first (A-Z), then
- * linked-elsewhere devices (A-Z, disabled).
- */
-function groupByEdge(
-  options: BillingDeviceOption[]
-): Array<{ edgeName: string; items: BillingDeviceOption[] }> {
-  const map = new Map<string, BillingDeviceOption[]>();
-  for (const opt of options) {
-    const key = opt.edge_name || "(unknown edge)";
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(opt);
-  }
-  const groups = Array.from(map.entries()).map(([edgeName, items]) => ({
-    edgeName,
-    items,
-  }));
-  // Sort groups A-Z by edge name
-  groups.sort((a, b) => a.edgeName.localeCompare(b.edgeName));
-  // Within each group: available first (A-Z), linked-elsewhere last (A-Z)
-  for (const g of groups) {
-    g.items.sort((a, b) => {
-      const aLinked = Boolean(a.linkedToHouseholdName);
-      const bLinked = Boolean(b.linkedToHouseholdName);
-      if (aLinked !== bLinked) return aLinked ? 1 : -1;
-      return a.name.localeCompare(b.name);
-    });
-  }
-  return groups;
+interface Props {
+  microgridId: string;
+  households: Household[];
+  /** Flat device list — used by the "current device" lookup in chip column. */
+  devices: Device[];
+  /** Enriched device list for the edit dialog's DeviceSelect. */
+  billingDevices?: BillingDeviceOption[];
+  /** household_id → device_id for primary_consumption_meter rows */
+  primaryDeviceAssignments: Record<string, string>;
+  canManage?: boolean;
+  /** Called when the user clicks the "Add household" CTA in the empty state. */
+  onAdd?: () => void;
+  /** Edges discovery page href — surfaced in DeviceSelect's empty state. */
+  microgridEdgesSetupHref?: string;
 }
 
 export function HouseholdTable({
@@ -67,133 +94,94 @@ export function HouseholdTable({
   primaryDeviceAssignments,
   canManage = false,
   onAdd,
-}: {
-  microgridId: string;
-  households: Household[];
-  devices: Device[];
-  /**
-   * Enriched device list for the billing-device <select>. Each entry carries
-   * edge_name (for <optgroup> grouping and label disambiguation) and an
-   * optional linkedToHouseholdName (to mark already-assigned devices as
-   * disabled). When omitted the select falls back to the flat `devices` prop
-   * with no grouping (backward-compatible).
-   */
-  billingDevices?: BillingDeviceOption[];
-  /** Map of household_id → device_id for primary_consumption_meter rows */
-  primaryDeviceAssignments: Record<string, string>;
-  /** Whether the current user can manage households. Defaults to false. */
-  canManage?: boolean;
-  /** Called when the user clicks the "Add household" CTA in the empty state. */
-  onAdd?: () => void;
-}) {
+  microgridEdgesSetupHref,
+}: Props) {
   const router = useRouter();
   const supabase = createClient();
 
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Edit dialog
+  const [editing, setEditing] = React.useState<Household | null>(null);
 
-  // Add form state
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
-  const [newEmail, setNewEmail] = useState("");
-  const [addSaving, setAddSaving] = useState(false);
+  // Delete dialog
+  const [householdToDelete, setHouseholdToDelete] =
+    React.useState<Household | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
 
-  // Edit form state
-  const [editName, setEditName] = useState("");
-  const [editPhone, setEditPhone] = useState("");
-  const [editEmail, setEditEmail] = useState("");
-  const [editSaving, setEditSaving] = useState(false);
+  // Map of household_id → display_name (for DeviceSelect's "linked to"
+  // suffix). Use this to enrich billingDevices on the fly.
+  const householdNameById = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of households) m.set(h.id, h.display_name);
+    return m;
+  }, [households]);
 
-  // Delete dialog state
-  const [householdToDelete, setHouseholdToDelete] = useState<Household | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-
-  // Optimistic device assignment overlay (household_id → device_id)
-  const [localAssignments, setLocalAssignments] = useState<Record<string, string>>(
-    primaryDeviceAssignments
-  );
-
-  function getDeviceName(deviceId: string | undefined): string {
-    if (!deviceId) return "Unassigned";
-    // Prefer billingDevices (enriched) if available, fall back to devices
-    const device =
-      billingDevices?.find((d) => d.id === deviceId) ??
-      devices.find((d) => d.id === deviceId);
-    return device?.name ?? "Unknown device";
-  }
-
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    if (!newName.trim()) {
-      setError("Name is required");
-      return;
+  // device_id → owning household name (only for assigned devices that
+  // belong to another household on this microgrid).
+  const deviceLinkedHouseholdName = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [hhId, devId] of Object.entries(primaryDeviceAssignments)) {
+      const name = householdNameById.get(hhId);
+      if (name) m.set(devId, name);
     }
+    return m;
+  }, [primaryDeviceAssignments, householdNameById]);
 
-    setAddSaving(true);
+  /**
+   * Build the DeviceSelect prop list for THIS row. We rebuild rather than
+   * passing a global list because the linked-elsewhere set depends on the
+   * row's own currentDeviceId (the dialog component itself also strips
+   * linked-to on the matching id, but doing it here keeps the prop list
+   * small and deterministic per row).
+   */
+  function devicesForHousehold(householdId: string): BillingDeviceOption[] {
+    const ownDeviceId = primaryDeviceAssignments[householdId];
+    const source =
+      billingDevices ??
+      // Fallback: derive a thin list from the flat `devices` prop. Edge
+      // grouping degrades to a single "(unknown edge)" group when this
+      // path is used. Callers should always pass `billingDevices`.
+      devices.map<BillingDeviceOption>((d) => ({
+        id: d.id,
+        name: d.name,
+        device_type: d.device_type,
+        edge_id: d.edge_id,
+        edge_name: "",
+      }));
 
-    const { error: insertError } = await supabase.from("households").insert({
-      microgrid_id: microgridId,
-      display_name: newName.trim(),
-      primary_phone: newPhone.trim() || null,
-      primary_email: newEmail.trim() || null,
+    return source.map((d) => {
+      // The device that's CURRENTLY linked to this household must not
+      // appear with a "linked to …" suffix in this row's picker.
+      if (d.id === ownDeviceId) {
+        return { ...d, linkedToHouseholdName: null };
+      }
+      // Devices linked to OTHER households get the suffix.
+      const ownerName = deviceLinkedHouseholdName.get(d.id);
+      if (ownerName) {
+        return { ...d, linkedToHouseholdName: ownerName };
+      }
+      return { ...d, linkedToHouseholdName: null };
     });
-
-    if (insertError) {
-      setError(insertError.message);
-      setAddSaving(false);
-      return;
-    }
-
-    setNewName("");
-    setNewPhone("");
-    setNewEmail("");
-    setShowAddForm(false);
-    setAddSaving(false);
-    router.refresh();
   }
 
-  function startEdit(household: Household) {
-    setEditingId(household.id);
-    setEditName(household.display_name);
-    setEditPhone(household.primary_phone ?? "");
-    setEditEmail(household.primary_email ?? "");
+  function getDeviceForHousehold(
+    householdId: string
+  ): { name: string; edge_name: string } | null {
+    const deviceId = primaryDeviceAssignments[householdId];
+    if (!deviceId) return null;
+    const enriched = billingDevices?.find((d) => d.id === deviceId);
+    if (enriched) {
+      return { name: enriched.name, edge_name: enriched.edge_name };
+    }
+    const flat = devices.find((d) => d.id === deviceId);
+    if (flat) {
+      return { name: flat.name, edge_name: "" };
+    }
+    return null;
   }
 
-  function cancelEdit() {
-    setEditingId(null);
-  }
-
-  async function handleEditSave(householdId: string) {
-    setError(null);
-
-    if (!editName.trim()) {
-      setError("Name is required");
-      return;
-    }
-
-    setEditSaving(true);
-
-    const { error: updateError } = await supabase
-      .from("households")
-      .update({
-        display_name: editName.trim(),
-        primary_phone: editPhone.trim() || null,
-        primary_email: editEmail.trim() || null,
-      })
-      .eq("id", householdId);
-
-    if (updateError) {
-      setError(updateError.message);
-      setEditSaving(false);
-      return;
-    }
-
-    setEditingId(null);
-    setEditSaving(false);
-    router.refresh();
+  function addressSummary(h: Household): string {
+    const parts = [h.address_line1, h.unit_label].filter(Boolean) as string[];
+    return parts.length > 0 ? parts.join(" · ") : "—";
   }
 
   function openDeleteDialog(household: Household) {
@@ -215,62 +203,8 @@ export function HouseholdTable({
     router.refresh();
   }
 
-  /**
-   * Assign a primary-consumption-meter device to a household via the
-   * household_devices join table (delete + insert pattern).
-   *
-   * The partial unique index (household_one_primary_consumption_meter) ensures
-   * at most one primary_consumption_meter per household. We delete any existing
-   * row for this household+role pair, then insert the new assignment.
-   */
-  async function handleDeviceChange(householdId: string, deviceId: string) {
-    setError(null);
-
-    // Optimistic update
-    setLocalAssignments((prev) => {
-      const next = { ...prev };
-      if (deviceId) {
-        next[householdId] = deviceId;
-      } else {
-        delete next[householdId];
-      }
-      return next;
-    });
-
-    // Remove existing primary_consumption_meter row for this household
-    const { error: deleteError } = await supabase
-      .from("household_devices")
-      .delete()
-      .eq("household_id", householdId)
-      .eq("role", "primary_consumption_meter");
-
-    if (deleteError) {
-      setError(deleteError.message);
-      return;
-    }
-
-    if (deviceId) {
-      // Insert new assignment
-      const { error: insertError } = await supabase
-        .from("household_devices")
-        .insert({
-          household_id: householdId,
-          device_id: deviceId,
-          role: "primary_consumption_meter",
-        });
-
-      if (insertError) {
-        setError(insertError.message);
-        return;
-      }
-    }
-
-    router.refresh();
-  }
-
   return (
     <div className="rounded-lg border border-border bg-card p-6">
-      {/* Delete Household ConfirmDialog */}
       <ConfirmDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
@@ -285,73 +219,25 @@ export function HouseholdTable({
         onConfirm={handleDelete}
       />
 
+      {editing && (
+        <HouseholdEditDialog
+          open={Boolean(editing)}
+          onOpenChange={(o) => {
+            if (!o) setEditing(null);
+          }}
+          household={editing}
+          availableDevices={devicesForHousehold(editing.id)}
+          currentDeviceId={primaryDeviceAssignments[editing.id] ?? null}
+          edgesSetupHref={
+            microgridEdgesSetupHref ??
+            `/microgrids/${microgridId}/setup/edges`
+          }
+        />
+      )}
+
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-foreground">Households</h2>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
-        >
-          {showAddForm ? "Cancel" : "Add Household"}
-        </button>
       </div>
-
-      {error && (
-        <div className="mb-4 rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
-          {error}
-        </div>
-      )}
-
-      {showAddForm && (
-        <form
-          onSubmit={handleAdd}
-          className="mb-4 space-y-3 rounded-md border border-border bg-muted p-4"
-        >
-          <div>
-            <label className="block text-sm font-medium text-foreground">
-              Name
-            </label>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              required
-              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
-              placeholder="Household name"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground">
-              Phone
-            </label>
-            <input
-              type="text"
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
-              placeholder="Optional"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground">
-              Email
-            </label>
-            <input
-              type="email"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-border px-3 py-2 text-foreground shadow-sm focus:outline-none"
-              placeholder="Optional"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={addSaving}
-            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {addSaving ? "Adding..." : "Add Household"}
-          </button>
-        </form>
-      )}
 
       {households.length === 0 ? (
         <EmptyState
@@ -384,167 +270,218 @@ export function HouseholdTable({
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
+            <caption className="sr-only">
+              Households on this microgrid
+            </caption>
             <thead>
-              <tr className="border-b border-border">
-                <th className="pb-2 pr-4 font-medium text-muted-foreground">Name</th>
-                <th className="pb-2 pr-4 font-medium text-muted-foreground">Phone</th>
-                <th className="pb-2 pr-4 font-medium text-muted-foreground">Email</th>
-                <th className="pb-2 pr-4 font-medium text-muted-foreground">
-                  Billing Device
-                </th>
-                <th className="pb-2 font-medium text-muted-foreground">Actions</th>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="pb-2 pr-4 font-medium">Household</th>
+                <th className="pb-2 pr-4 font-medium">Address</th>
+                <th className="pb-2 pr-4 font-medium">Billing device</th>
+                <th className="pb-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {households.map((household) => (
-                <tr key={household.id} className="border-b border-border">
-                  {editingId === household.id ? (
-                    <>
-                      <td className="py-3 pr-4">
-                        <input
-                          type="text"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          required
-                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
-                        />
-                      </td>
-                      <td className="py-3 pr-4">
-                        <input
-                          type="text"
-                          value={editPhone}
-                          onChange={(e) => setEditPhone(e.target.value)}
-                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
-                        />
-                      </td>
-                      <td className="py-3 pr-4">
-                        <input
-                          type="email"
-                          value={editEmail}
-                          onChange={(e) => setEditEmail(e.target.value)}
-                          className="w-full rounded-md border border-border px-2 py-1 text-foreground focus:outline-none"
-                        />
-                      </td>
-                      <td className="py-3 pr-4">
-                        <span className="text-muted-foreground">
-                          {getDeviceName(localAssignments[household.id])}
-                        </span>
-                      </td>
-                      <td className="py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleEditSave(household.id)}
-                            disabled={editSaving}
-                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent disabled:opacity-50"
-                          >
-                            {editSaving ? "Saving..." : "Save"}
-                          </button>
-                          <button
-                            onClick={cancelEdit}
-                            className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className="py-3 pr-4 text-foreground">
+              {households.map((household) => {
+                const device = getDeviceForHousehold(household.id);
+                return (
+                  <tr
+                    key={household.id}
+                    className="border-b border-border align-top"
+                  >
+                    <td className="py-3 pr-4">
+                      <div className="font-medium text-foreground">
                         {household.display_name}
-                      </td>
-                      <td className="py-3 pr-4 text-muted-foreground">
-                        {household.primary_phone ?? "-"}
-                      </td>
-                      <td className="py-3 pr-4 text-muted-foreground">
-                        {household.primary_email ?? "-"}
-                      </td>
-                      <td className="py-3 pr-4">
-                        <div>
-                          <select
-                            value={localAssignments[household.id] ?? ""}
-                            onChange={(e) =>
-                              handleDeviceChange(household.id, e.target.value)
-                            }
-                            className="rounded-md border border-border px-2 py-1 text-sm text-foreground focus:outline-none"
-                          >
-                            <option value="">Unassigned</option>
-                            {billingDevices
-                              ? // Enriched path: group by edge with <optgroup>
-                                groupByEdge(billingDevices).map((group) => (
-                                  <optgroup
-                                    key={group.edgeName}
-                                    label={group.edgeName}
-                                  >
-                                    {group.items.map((device) => {
-                                      // A device is "linked elsewhere" only when
-                                      // it's assigned to a DIFFERENT household.
-                                      // When it's this row's own assignment it
-                                      // should appear selected and enabled.
-                                      const isOwnAssignment =
-                                        localAssignments[household.id] ===
-                                        device.id;
-                                      const linkedElsewhere =
-                                        !isOwnAssignment &&
-                                        Boolean(device.linkedToHouseholdName);
-                                      return (
-                                        <option
-                                          key={device.id}
-                                          value={device.id}
-                                          disabled={linkedElsewhere}
-                                        >
-                                          [{device.device_type}] {device.name} ·{" "}
-                                          {device.edge_name}
-                                          {linkedElsewhere
-                                            ? ` (linked: ${device.linkedToHouseholdName})`
-                                            : ""}
-                                        </option>
-                                      );
-                                    })}
-                                  </optgroup>
-                                ))
-                              : // Fallback: flat list (no edge context)
-                                devices.map((device) => (
-                                  <option key={device.id} value={device.id}>
-                                    [{device.device_type}] {device.name}
-                                  </option>
-                                ))}
-                          </select>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Assign a consumption_meter device to bill this household.
-                          </p>
-                        </div>
-                      </td>
-                      <td className="py-3">
-                        <div className="flex gap-2">
-                          <Link
-                            href={`/microgrids/${microgridId}/setup/households/${household.id}`}
-                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
-                          >
-                            View
-                          </Link>
-                          <button
-                            onClick={() => startEdit(household)}
-                            className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => openDeleteDialog(household)}
-                            className="rounded-md px-2 py-1 text-sm text-destructive hover:bg-destructive-muted"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </>
-                  )}
-                </tr>
-              ))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {[household.primary_email, household.primary_phone]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
+                      </div>
+                    </td>
+                    <td className="py-3 pr-4 text-muted-foreground">
+                      <span className="block max-w-[260px] truncate">
+                        {addressSummary(household)}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4">
+                      <BillingDeviceCell
+                        household={household}
+                        device={device}
+                        canManage={canManage}
+                        onEdit={() => setEditing(household)}
+                      />
+                    </td>
+                    <td className="py-3 text-right">
+                      {canManage ? (
+                        <HouseholdRowActions
+                          household={household}
+                          microgridId={microgridId}
+                          hasDevice={Boolean(device)}
+                          onEdit={() => setEditing(household)}
+                          onDelete={() => openDeleteDialog(household)}
+                        />
+                      ) : (
+                        <Link
+                          href={`/microgrids/${microgridId}/setup/households/${household.id}`}
+                          className="rounded-md px-2 py-1 text-sm text-primary hover:bg-accent"
+                        >
+                          View
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
     </div>
+  );
+}
+
+// ── Cell + actions ───────────────────────────────────────────────────────
+
+function BillingDeviceCell({
+  household,
+  device,
+  canManage,
+  onEdit,
+}: {
+  household: Household;
+  device: { name: string; edge_name: string } | null;
+  canManage: boolean;
+  onEdit: () => void;
+}) {
+  if (!canManage) {
+    if (device) {
+      return (
+        <Chip tone="success" dot>
+          {device.name}
+          {device.edge_name ? (
+            <span className="ml-1 text-[11px] text-muted-foreground">
+              · {device.edge_name}
+            </span>
+          ) : null}
+        </Chip>
+      );
+    }
+    return (
+      <Chip tone="warn" dot>
+        Unassigned
+      </Chip>
+    );
+  }
+
+  if (device) {
+    return (
+      <button
+        type="button"
+        onClick={onEdit}
+        aria-label={`Change billing device for ${household.display_name}`}
+        className="inline-flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Chip tone="success" dot>
+          {device.name}
+          {device.edge_name ? (
+            <span className="ml-1 text-[11px] text-muted-foreground">
+              · {device.edge_name}
+            </span>
+          ) : null}
+        </Chip>
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      aria-label={`Link a billing device for ${household.display_name}`}
+      className="inline-flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Chip tone="warn" dot>
+        Unassigned
+      </Chip>
+    </button>
+  );
+}
+
+function HouseholdRowActions({
+  household,
+  microgridId,
+  hasDevice,
+  onEdit,
+  onDelete,
+}: {
+  household: Household;
+  microgridId: string;
+  hasDevice: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Actions for ${household.display_name}`}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <KebabIcon />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={4}
+          className="z-50 min-w-[180px] rounded-md border border-border bg-card p-1 shadow-elev-2"
+        >
+          <DropdownMenu.Item
+            onSelect={onEdit}
+            className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-[13px] text-foreground outline-none data-[highlighted]:bg-muted"
+          >
+            Edit household
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            onSelect={onEdit}
+            className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-[13px] text-foreground outline-none data-[highlighted]:bg-muted"
+          >
+            {hasDevice ? "Change billing device" : "Link device"}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item asChild>
+            <Link
+              href={`/microgrids/${microgridId}/setup/households/${household.id}`}
+              className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-[13px] text-foreground outline-none data-[highlighted]:bg-muted"
+            >
+              View detail →
+            </Link>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            onSelect={onDelete}
+            className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-[13px] text-destructive-fg outline-none data-[highlighted]:bg-destructive-muted"
+          >
+            Delete household
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function KebabIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+    >
+      <circle cx="8" cy="3" r="1.25" />
+      <circle cx="8" cy="8" r="1.25" />
+      <circle cx="8" cy="13" r="1.25" />
+    </svg>
   );
 }

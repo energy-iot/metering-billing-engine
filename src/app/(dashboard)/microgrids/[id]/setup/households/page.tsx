@@ -82,11 +82,10 @@ export default async function SetupHouseholdsPage({
     primaryDeviceAssignments[row.household_id] = row.device_id;
   }
 
-  // Build the set of device_ids already assigned as primary_consumption_meter
-  // so we can exclude them from the wizard's available-meters list. The
-  // server-side RLS scope ensures we only see household_devices rows within
-  // this user's accessible orgs, but we additionally filter by this
-  // microgrid's edges below.
+  // The wizard's StepMeter still pre-filters out already-assigned devices
+  // (it asks "pick a meter for a NEW household"). The Household Edit dialog
+  // (#145) feeds DeviceSelect with the un-filtered list and greys assigned
+  // devices inline.
   const assignedPrimaryDeviceIds = new Set(
     (primaryAssignments ?? []).map((r) => r.device_id)
   );
@@ -134,18 +133,22 @@ export default async function SetupHouseholdsPage({
     ])
   );
 
-  // BillingDeviceOptions: ALL devices on this microgrid (not just unassigned),
-  // enriched with edge_name and (when assigned elsewhere) linkedToHouseholdName.
-  // HouseholdTable is responsible for suppressing the "linked" label on the
-  // device that is the CURRENT row's own assignment.
-  const billingDevices: BillingDeviceOption[] = (devices ?? []).map((d) => ({
-    id: d.id,
-    name: d.name,
-    device_type: d.device_type,
-    edge_id: d.edge_id,
-    edge_name: edgeNameById.get(d.edge_id) ?? "",
-    linkedToHouseholdName: deviceLinkedHouseholdName.get(d.id),
-  }));
+  // BillingDeviceOptions: ALL consumption meters on this microgrid (not just
+  // unassigned), enriched with edge_id + edge_name and (when assigned
+  // elsewhere) linkedToHouseholdName. The Edit dialog's DeviceSelect (#145)
+  // greys assigned-elsewhere devices inline; HouseholdTable additionally
+  // suppresses the "linked" label on the device that is the CURRENT row's
+  // own assignment.
+  const billingDevices: BillingDeviceOption[] = (devices ?? [])
+    .filter((d) => d.device_type === "consumption_meter")
+    .map((d) => ({
+      id: d.id,
+      name: d.name,
+      device_type: d.device_type,
+      edge_id: d.edge_id,
+      edge_name: edgeNameById.get(d.edge_id) ?? "",
+      linkedToHouseholdName: deviceLinkedHouseholdName.get(d.id) ?? null,
+    }));
 
   return (
     <>
