@@ -7,6 +7,7 @@ import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { DiscoverDevices } from "@/components/DiscoverDevices";
 import { EdgeDetailConfigureButton } from "./edge-detail-configure-button";
+import { DeviceRowActions } from "./device-row-actions";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -209,6 +210,11 @@ export default async function EdgeDetailPage({
                 <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Linked household
                 </th>
+                {canManage && (
+                  <th className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -238,6 +244,19 @@ export default async function EdgeDetailPage({
                         </span>
                       )}
                     </td>
+                    {canManage && (
+                      <td className="px-4 py-3 text-right">
+                        <DeviceRowActions
+                          device={{
+                            id: device.id,
+                            name: device.name,
+                            device_type: device.device_type,
+                            openems_component_id:
+                              device.openems_component_id ?? null,
+                          }}
+                        />
+                      </td>
+                    )}
                   </tr>
                 );
               })}
