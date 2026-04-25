@@ -135,10 +135,12 @@ describe("HouseholdEditDialog (#145)", () => {
     expect(triggers[0].textContent).toContain("Alpha Edge");
   });
 
-  it("(2) renders Unassigned state when currentDeviceId is null", () => {
+  it("(2) renders 'No meter (manual billing)' state when currentDeviceId is null (#158)", () => {
     renderDialog({ currentDeviceId: null });
     const triggers = screen.getAllByRole("combobox");
-    expect(triggers[0].textContent).toContain("Unassigned");
+    // #158 replaced the bare 'Unassigned' copy with explicit manual-billing
+    // language so an un-metered household reads as an intentional state.
+    expect(triggers[0].textContent).toContain("No meter (manual billing)");
   });
 
   it("(3) PATCH-diff sends only changed fields", async () => {
@@ -278,5 +280,79 @@ describe("HouseholdEditDialog (#145)", () => {
     renderDialog();
     const textarea = screen.getByLabelText(/Geography notes/i);
     expect(textarea.tagName.toLowerCase()).toBe("textarea");
+  });
+
+  // ── #158 — manual-billing cascade transitions ────────────────────────
+
+  it("(12) #158 — same-null device_id keeps Save disabled (dirty=false)", () => {
+    renderDialog({ currentDeviceId: null });
+    // No edits, currentDeviceId stays null → dirty must remain false.
+    const saveBtn = screen.getByRole("button", { name: /Save changes/i });
+    expect(saveBtn).toHaveProperty("disabled", true);
+  });
+
+  it("(12) #158 — same-device device_id keeps Save disabled (dirty=false)", () => {
+    renderDialog({ currentDeviceId: "dev-1" });
+    // No edits, currentDeviceId stays dev-1 → dirty must remain false.
+    const saveBtn = screen.getByRole("button", { name: /Save changes/i });
+    expect(saveBtn).toHaveProperty("disabled", true);
+  });
+
+  it("(13) #158 — metered → no-meter sends device_id: null in PATCH diff (cascade unlink)", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ household: { id: HOUSEHOLD.id } }),
+    } as Response);
+
+    renderDialog({ currentDeviceId: "dev-1" });
+
+    // Open dropdown and click the explicit "No meter (manual billing)" option.
+    const triggers = screen.getAllByRole("combobox");
+    fireEvent.click(triggers[0]);
+
+    const noMeterOption = await waitFor(() =>
+      screen
+        .getAllByRole("option")
+        .find((o) => o.textContent?.includes("No meter (manual billing)"))
+    );
+    expect(noMeterOption).toBeDefined();
+    fireEvent.click(noMeterOption!);
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    // Cascade unlink — the route deletes the existing household_devices row.
+    expect(body).toEqual({ device_id: null });
+  });
+
+  it("(14) #158 — no-meter → metered sends device_id: <uuid> in PATCH diff (cascade insert)", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ household: { id: HOUSEHOLD.id } }),
+    } as Response);
+
+    renderDialog({ currentDeviceId: null });
+
+    // Open dropdown, pick Meter A.
+    const triggers = screen.getAllByRole("combobox");
+    fireEvent.click(triggers[0]);
+
+    const meterAOption = await waitFor(() =>
+      screen.getAllByRole("option").find((o) => o.textContent?.includes("Meter A"))
+    );
+    fireEvent.click(meterAOption!);
+
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    // Cascade insert — the route inserts a new household_devices row for
+    // the chosen device_id.
+    expect(body).toEqual({ device_id: "dev-1" });
   });
 });

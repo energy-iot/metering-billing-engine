@@ -49,7 +49,7 @@ export type Database = {
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
-          usage_kwh: number
+          usage_kwh: number | null
         }
         Insert: {
           billing_period_id: string
@@ -65,7 +65,7 @@ export type Database = {
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
-          usage_kwh?: number
+          usage_kwh?: number | null
         }
         Update: {
           billing_period_id?: string
@@ -81,7 +81,7 @@ export type Database = {
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
-          usage_kwh?: number
+          usage_kwh?: number | null
         }
         Relationships: [
           {
@@ -785,6 +785,24 @@ export type Database = {
           p_user_id: string
         }
         Returns: undefined
+      }
+      fn_create_household: {
+        Args: {
+          p_address_city?: string
+          p_address_country?: string
+          p_address_line1?: string
+          p_address_line2?: string
+          p_address_postal_code?: string
+          p_address_region?: string
+          p_device_id?: string | null
+          p_display_name: string
+          p_geography_notes?: string
+          p_microgrid_id: string
+          p_primary_email?: string
+          p_primary_phone?: string
+          p_unit_label?: string
+        }
+        Returns: string
       }
       fn_create_household_with_meter: {
         Args: {

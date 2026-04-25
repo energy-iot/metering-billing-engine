@@ -109,7 +109,7 @@ export function DeviceSelect({
       >
         <SelectValue
           placeholder={
-            isEmpty ? "No devices on this microgrid yet" : "Unassigned"
+            isEmpty ? "No devices on this microgrid yet" : "— No meter (manual billing) —"
           }
         >
           {isEmpty ? (
@@ -127,7 +127,12 @@ export function DeviceSelect({
               </span>
             </span>
           ) : (
-            <span className="text-muted-foreground">Unassigned</span>
+            // #158: when value is null we render the explicit "no meter
+            // (manual billing)" copy so it reads as an intentional state,
+            // not a missing assignment.
+            <span className="text-muted-foreground">
+              — No meter (manual billing) —
+            </span>
           )}
         </SelectValue>
       </SelectTrigger>
@@ -137,9 +142,16 @@ export function DeviceSelect({
           <DropdownEmptyState edgesSetupHref={edgesSetupHref} />
         ) : (
           <>
-            {/* Sentinel "Unassigned" option — always first, outside groups */}
+            {/*
+              #158: explicit "No meter (manual billing)" option at the top of
+              the list. Maps to the existing UNASSIGNED_VALUE sentinel which
+              the onValueChange handler converts to `null`. Replaces the
+              previous bare "Unassigned" sentinel — same value, clearer intent.
+            */}
             <SelectItem value={UNASSIGNED_VALUE} className="py-1.5">
-              <span className="text-muted-foreground">Unassigned</span>
+              <span className="text-muted-foreground">
+                — No meter (manual billing) —
+              </span>
             </SelectItem>
 
             {grouped.map((group) => (

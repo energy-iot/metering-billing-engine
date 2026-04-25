@@ -43,6 +43,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
 import type { Device, Household } from "@/lib/types/domain";
 import { Chip } from "@/components/ui/chip";
+import { StatusChip } from "@/components/ui/status-chip";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { HouseholdEditDialog } from "@/components/forms/HouseholdEditDialog";
@@ -369,11 +370,10 @@ function BillingDeviceCell({
         </Chip>
       );
     }
-    return (
-      <Chip tone="warn" dot>
-        Unassigned
-      </Chip>
-    );
+    // #158: an un-metered household is an intentional manual-billing state,
+    // not a missing assignment. Render the canonical "No meter" status chip
+    // so it reads as a configured (if non-automated) lifecycle state.
+    return <StatusChip kind="meter" status="not_configured" />;
   }
 
   if (device) {
@@ -395,6 +395,8 @@ function BillingDeviceCell({
       </button>
     );
   }
+  // #158: clickable "No meter" chip — opens the edit dialog so the operator
+  // can link a meter retroactively if a physical install lands later.
   return (
     <button
       type="button"
@@ -402,9 +404,7 @@ function BillingDeviceCell({
       aria-label={`Link a billing device for ${household.display_name}`}
       className="inline-flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Chip tone="warn" dot>
-        Unassigned
-      </Chip>
+      <StatusChip kind="meter" status="not_configured" />
     </button>
   );
 }

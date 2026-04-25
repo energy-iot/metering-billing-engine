@@ -21,6 +21,7 @@ type Kind =
   | "deviceType"
   | "household"
   | "householdDeviceRole"
+  | "meter"
   | "meterType"
   | "openemsBackendHealth"
   | "paymentHealth";
@@ -101,6 +102,18 @@ const MAPS: Record<Kind, StatusMap> = {
     solar:                     { label: "Solar",           tone: "success" },
     ev_charger:                { label: "EV charger",      tone: "brand" },
     other:                     { label: "Other",           tone: "neutral" },
+  },
+  // #158: per-household meter assignment status. The HouseholdTable cell
+  // surfaces this so an entrepreneur can tell at a glance which households
+  // require a manual usage entry each period vs. the metered/automated flow.
+  //
+  // Tone rationale:
+  //   linked          → success (the OpenEMS reading flow is wired)
+  //   not_configured  → warn (manual billing is an active state, not an
+  //                     error — but it does need attention each period)
+  meter: {
+    linked:         { label: "Meter linked",   tone: "success", dot: true },
+    not_configured: { label: "No meter",       tone: "warn",    dot: true },
   },
   meterType: {
     // Lowercase keys (original)

@@ -329,7 +329,7 @@ describe("HouseholdTable — refactor surfaces (#145)", () => {
     void container;
   });
 
-  it("(i) chip — unassigned: warn tone + button + opens dialog on click", async () => {
+  it("(i) chip — unassigned: warn tone + button + 'No meter' copy + opens dialog on click (#158)", async () => {
     render(
       <HouseholdTable
         microgridId={MICROGRID_ID}
@@ -344,10 +344,13 @@ describe("HouseholdTable — refactor surfaces (#145)", () => {
       name: /Link a billing device for Household Beta/i,
     });
     expect(chipBtn).toBeTruthy();
+    // #158: chip copy changed from 'Unassigned' to 'No meter' (rendered via
+    // <StatusChip kind="meter" status="not_configured">). Tone (warn) and
+    // dot stay the same so the visual signal Aaron recognises is preserved.
     const chipSpan = chipBtn.querySelector("span");
     expect(chipSpan?.className).toContain("bg-warning-muted");
     expect(chipSpan?.className).toContain("text-warning-fg");
-    expect(chipSpan?.textContent).toContain("Unassigned");
+    expect(chipSpan?.textContent).toContain("No meter");
 
     fireEvent.click(chipBtn);
     await waitFor(() => {

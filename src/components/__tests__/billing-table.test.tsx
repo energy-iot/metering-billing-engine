@@ -319,6 +319,60 @@ describe("BillingTable", () => {
     expect(banner).toBeNull();
   });
 
+  it("(#158) un-metered row renders editable END/USAGE inputs; metered rows do not", () => {
+    // Mix of metered (h-1, h-2) + un-metered (h-3) to exercise both paths
+    // in the same render pass.
+    const mixedLineItems: BillingLineItem[] = [
+      {
+        ...lineItems[0],
+      },
+      {
+        ...lineItems[1],
+      },
+      {
+        ...lineItems[2],
+        // un-metered: device_id null, usage_kwh null, end_kwh null
+        device_id: null,
+        usage_kwh: null,
+        end_kwh: null,
+        tier_breakdown: [],
+        total_amount: 0,
+      } as BillingLineItem,
+    ];
+
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} lineItems={mixedLineItems} />
+      </Wrapper>
+    );
+
+    // Inline-edit inputs render only for the un-metered row → 2 inputs
+    // (end_kwh + usage_kwh). Metered rows render read-only spans.
+    const numberInputs = Array.from(
+      container.querySelectorAll("input[type='number']")
+    );
+    expect(numberInputs.length).toBe(2);
+
+    // Each input is associated with the un-metered line item id (li-3).
+    const labels = numberInputs.map((i) => i.getAttribute("aria-label"));
+    expect(labels.every((l) => l?.includes("li-3"))).toBe(true);
+    // One end_kwh + one usage_kwh
+    expect(labels.some((l) => l?.startsWith("End kWh"))).toBe(true);
+    expect(labels.some((l) => l?.startsWith("Usage kWh"))).toBe(true);
+  });
+
+  it("(#158) metered row's END/USAGE cells stay read-only when ALL rows are metered", () => {
+    const { container } = render(
+      <Wrapper>
+        <BillingTable {...baseProps} />
+      </Wrapper>
+    );
+    const numberInputs = Array.from(
+      container.querySelectorAll("input[type='number']")
+    );
+    expect(numberInputs.length).toBe(0);
+  });
+
   it("(f) payment buttons disabled when !isPaymentConfigured", () => {
     const { container } = render(
       <Wrapper>

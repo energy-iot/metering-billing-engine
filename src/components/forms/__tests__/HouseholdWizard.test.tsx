@@ -510,6 +510,132 @@ describe("HouseholdWizard", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
+  // #158 — no-meter (manual billing) checkbox path
+  // ──────────────────────────────────────────────────────────────────────
+  describe("#158 no_meter checkbox", () => {
+    it("checkbox checked → submit body sends device_id: null", async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ household_id: "manual-hh" }),
+      } as Response);
+
+      renderWizard();
+
+      // Step 1
+      fillDisplayName("Manual-Bill HH");
+      fillPhone("+256700000001");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 2 → Next
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 → tick "no meter" checkbox; Next must enable
+      await waitFor(() => {
+        expect(
+          screen.getByText(/This household does not have a meter/i)
+        ).toBeTruthy();
+      });
+      const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+      fireEvent.click(checkbox);
+      expect(checkbox.checked).toBe(true);
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", false);
+      fireEvent.click(next);
+
+      // Step 4 → review shows manual-billing string
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Create household/i })
+        ).toBeDefined()
+      );
+      expect(screen.getByText(/manual billing/i)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Create household/i }));
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init?.body as string);
+      // The submit body sends null (not "") for device_id when no_meter is on.
+      expect(body.device_id).toBeNull();
+    });
+
+    it("checkbox unchecked → existing meter-required path preserved", async () => {
+      // Step 3 with no checkbox toggle → must pick a meter to advance.
+      renderWizard();
+      fillDisplayName("Metered HH");
+      fillPhone("+256700000002");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 — Next is disabled until a radio is picked
+      await waitFor(() =>
+        expect(screen.getAllByRole("radio").length).toBe(METERS.length)
+      );
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", true);
+      // Picking a meter enables Next
+      fireEvent.click(screen.getByRole("radio", { name: /Household A Meter/i }));
+      expect(next).toHaveProperty("disabled", false);
+    });
+
+    it("checkbox checked + zero available meters → Save (Create) is enabled (manual-billing path)", async () => {
+      renderWizard({ availableMeters: [] });
+      fillDisplayName("Manual-only");
+      fillPhone("+256700000003");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 — empty-state banner shows by default; tick the no-meter
+      // checkbox to fall into the manual-billing branch.
+      await waitFor(() =>
+        expect(
+          screen.getByText(/This household does not have a meter/i)
+        ).toBeTruthy()
+      );
+      const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      // Banner is replaced by the manual-billing info panel
+      expect(screen.queryByText(/No available meters/i)).toBeNull();
+
+      // Next is enabled
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", false);
+      fireEvent.click(next);
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Create household/i })
+        ).toBeDefined()
+      );
+      const submit = screen.getByRole("button", { name: /Create household/i });
+      expect(submit).toHaveProperty("disabled", false);
+    });
+
+    it("blank phone STILL blocks Submit when no_meter is checked (#155 preserved)", async () => {
+      // Coordinated #155 + #158: phone-required gates step 1 regardless of
+      // step-3 path. Verify by setting display_name and going manual-billing
+      // — without phone, Next stays disabled in step 1 and the user never
+      // reaches step 3.
+      renderWizard();
+      fillDisplayName("No-phone HH");
+      // Leave phone blank
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", true);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
   // (g) Cancel with all-empty fields closes immediately
   // ──────────────────────────────────────────────────────────────────────
   describe("(g) cancel with all-empty fields", () => {

@@ -82,6 +82,13 @@ type FormState = {
   address_postal_code: string;
   geography_notes: string;
   device_id: string;
+  /**
+   * #158: when true, Step 3 surfaces no meter picker — the household will
+   * be created without a primary_consumption_meter link and Aaron enters
+   * usage manually each period from the BillingTable. Step 3 is treated as
+   * valid regardless of meter count when this is set.
+   */
+  no_meter: boolean;
 };
 
 const EMPTY_STATE: FormState = {
@@ -97,6 +104,7 @@ const EMPTY_STATE: FormState = {
   address_postal_code: "",
   geography_notes: "",
   device_id: "",
+  no_meter: false,
 };
 
 const STEP_LABELS: Record<Step, string> = {
@@ -121,16 +129,21 @@ function isStepValid(step: Step, state: FormState, meterCount: number): boolean 
       // All fields optional.
       return true;
     case 3:
-      // Must pick one of the available meters. Empty-state (zero meters) can
-      // never satisfy this — Save is disabled at the caller.
+      // #158: when no_meter is checked, Step 3 is valid regardless of
+      // meter count or device_id (the household will bill manually).
+      if (state.no_meter) return true;
+      // Otherwise: must pick one of the available meters. Empty-state (zero
+      // meters) can never satisfy this — Save is disabled at the caller.
       return meterCount > 0 && state.device_id.length > 0;
     case 4:
-      // Review is valid iff 1 + 3 are (address is always optional).
+      // Review folds rules from #155 (phone-required) and #158 (no-meter
+      // alternative path): step1 must pass AND step2 trivially passes AND
+      // either no_meter is set OR a valid meter is picked.
       return (
         state.display_name.trim().length > 0 &&
         state.primary_phone.trim().length > 0 &&
-        meterCount > 0 &&
-        state.device_id.length > 0
+        (state.no_meter ||
+          (meterCount > 0 && state.device_id.length > 0))
       );
   }
 }
@@ -148,7 +161,8 @@ function hasAnyData(state: FormState): boolean {
     state.address_country.trim().length > 0 ||
     state.address_postal_code.trim().length > 0 ||
     state.geography_notes.trim().length > 0 ||
-    state.device_id.length > 0
+    state.device_id.length > 0 ||
+    state.no_meter
   );
 }
 
@@ -173,7 +187,9 @@ export function HouseholdWizard({
   // Refs for focus management — each step's first required/focusable field.
   const step1FirstFieldRef = React.useRef<HTMLInputElement>(null);
   const step2FirstFieldRef = React.useRef<HTMLInputElement>(null);
-  const step3FirstFieldRef = React.useRef<HTMLButtonElement>(null);
+  // #158: step3FirstFieldRef may resolve to a checkbox (no-meter info path)
+  // or a radio (meter-pick path). Type it as the union accordingly.
+  const step3FirstFieldRef = React.useRef<HTMLButtonElement | HTMLInputElement | null>(null);
   const step4FirstElementRef = React.useRef<HTMLButtonElement>(null);
 
   // Reset wizard state when opened.
@@ -270,7 +286,10 @@ export function HouseholdWizard({
           address_country: state.address_country.trim() || null,
           address_postal_code: state.address_postal_code.trim() || null,
           geography_notes: state.geography_notes.trim() || null,
-          device_id: state.device_id,
+          // #158: send null when the user opted out of meter assignment.
+          // The route distinguishes the two paths and dispatches to
+          // fn_create_household vs fn_create_household_with_meter.
+          device_id: state.no_meter ? null : state.device_id,
         }),
       });
       if (!res.ok) {
@@ -291,6 +310,9 @@ export function HouseholdWizard({
 
   const canProceed = isStepValid(step, state, availableMeters.length);
   const noMeters = availableMeters.length === 0;
+  // #158: when no_meter is checked, the empty-meters condition no longer
+  // blocks Next/Save — the household path doesn't need a device.
+  const blockedByNoMeters = noMeters && !state.no_meter;
   const canSave = isStepValid(4, state, availableMeters.length);
 
   // Pre-computed completed-set for the progress indicator. A step is
@@ -389,6 +411,13 @@ export function HouseholdWizard({
                   onFirstRadio={(el) => {
                     step3FirstFieldRef.current = el;
                   }}
+                  onCheckboxRef={(el) => {
+                    // #158: when no_meter is the active path, the first
+                    // focusable element is the checkbox itself.
+                    if (state.no_meter || availableMeters.length === 0) {
+                      step3FirstFieldRef.current = el;
+                    }
+                  }}
                   meters={availableMeters}
                   edgesSetupHref={edgesSetupHref}
                   disabled={submitting}
@@ -434,7 +463,11 @@ export function HouseholdWizard({
                   <button
                     type="button"
                     onClick={handleNext}
-                    disabled={!canProceed || submitting || (step === 3 && noMeters)}
+                    disabled={
+                      !canProceed ||
+                      submitting ||
+                      (step === 3 && blockedByNoMeters)
+                    }
                     className={cn(
                       "inline-flex h-8 items-center rounded-md bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       "disabled:cursor-not-allowed disabled:opacity-50"
@@ -446,7 +479,7 @@ export function HouseholdWizard({
                   <button
                     type="button"
                     onClick={handleSubmit}
-                    disabled={!canSave || submitting || noMeters}
+                    disabled={!canSave || submitting || blockedByNoMeters}
                     className={cn(
                       "inline-flex h-8 items-center rounded-md bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       "disabled:cursor-not-allowed disabled:opacity-50"
@@ -790,6 +823,7 @@ function StepMeter({
   state,
   update,
   onFirstRadio,
+  onCheckboxRef,
   meters,
   edgesSetupHref,
   disabled,
@@ -797,75 +831,111 @@ function StepMeter({
   state: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   onFirstRadio: (el: HTMLButtonElement) => void;
+  onCheckboxRef: (el: HTMLInputElement | null) => void;
   meters: AvailableMeter[];
   edgesSetupHref: string;
   disabled: boolean;
 }) {
-  if (meters.length === 0) {
-    return (
-      <div className="space-y-3">
-        <Banner
-          tone="warn"
-          title="No available meters"
-          action={
-            <Link
-              href={edgesSetupHref}
-              className="inline-flex items-center rounded-md border border-warning bg-card px-3 py-1 text-xs font-medium text-warning-fg hover:bg-muted"
-            >
-              Go to Setup &gt; Edges
-            </Link>
-          }
-        >
-          All consumption meters on this microgrid are already assigned to a
-          household. Discover more devices on the edges setup page before
-          adding another household here.
-        </Banner>
-      </div>
-    );
-  }
+  // #158: top-of-step "no meter" checkbox. When checked we clear device_id
+  // defensively so an accidental prior pick doesn't leak into the submit
+  // body, then collapse the meter picker into an info panel.
+  const handleNoMeterToggle = (checked: boolean) => {
+    update("no_meter", checked);
+    if (checked) {
+      update("device_id", "");
+    }
+  };
 
   return (
-    <fieldset className="space-y-3" disabled={disabled}>
+    <fieldset className="space-y-4" disabled={disabled}>
       <legend className="sr-only">Step 3 of 4: Meter assignment</legend>
-      <p className="text-xs text-muted-foreground">
-        Pick the consumption meter that will produce this household&apos;s bill
-        each period.
-      </p>
-      <RadioGroup
-        value={state.device_id}
-        onValueChange={(v) => update("device_id", v)}
-        aria-label="Available consumption meters"
-        className="gap-2"
-      >
-        {meters.map((meter, idx) => {
-          // The first radio input needs to be a focus target when entering
-          // this step. We attach the ref to the first card only by wrapping
-          // the RadioCard's inner item via a side-effect — but RadioCard
-          // doesn't forward the inner radio ref. Instead we use a targetted
-          // DOM query after mount: we focus the first `role=radio` element
-          // in the list if this is the first card.
-          return (
-            <RadioCard
-              key={meter.id}
-              value={meter.id}
-              title={
-                <span className="flex items-center gap-2">
-                  <span>{meter.name}</span>
-                  <StatusChip
-                    kind="deviceType"
-                    status={meter.device_type}
-                  />
-                </span>
-              }
-              description={meter.edge_name}
-              meta={humanReadable(meter.device_type)}
-              // Mark the first card so we can locate it for focus.
-              id={idx === 0 ? "hh-meter-first" : undefined}
-            />
-          );
-        })}
-      </RadioGroup>
-      <FirstMeterFocuser onFound={onFirstRadio} meters={meters} />
+
+      {/* #158: no-meter (manual billing) checkbox. */}
+      <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 hover:bg-muted">
+        <input
+          id="hh-no-meter-checkbox"
+          ref={onCheckboxRef}
+          type="checkbox"
+          checked={state.no_meter}
+          onChange={(e) => handleNoMeterToggle(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="text-sm text-foreground">
+          <span className="font-medium">
+            This household does not have a meter
+          </span>{" "}
+          <span className="text-muted-foreground">(manual billing).</span>
+        </span>
+      </label>
+
+      {state.no_meter ? (
+        <div className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
+          Without a meter, you&apos;ll enter usage manually each period. You
+          can link a meter later from the household&apos;s edit dialog.
+        </div>
+      ) : meters.length === 0 ? (
+        <div className="space-y-3">
+          <Banner
+            tone="warn"
+            title="No available meters"
+            action={
+              <Link
+                href={edgesSetupHref}
+                className="inline-flex items-center rounded-md border border-warning bg-card px-3 py-1 text-xs font-medium text-warning-fg hover:bg-muted"
+              >
+                Go to Setup &gt; Edges
+              </Link>
+            }
+          >
+            All consumption meters on this microgrid are already assigned to a
+            household. Discover more devices on the edges setup page before
+            adding another household here, or check &ldquo;manual
+            billing&rdquo; above to skip the meter assignment.
+          </Banner>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Pick the consumption meter that will produce this household&apos;s
+            bill each period.
+          </p>
+          <RadioGroup
+            value={state.device_id}
+            onValueChange={(v) => update("device_id", v)}
+            aria-label="Available consumption meters"
+            className="gap-2"
+          >
+            {meters.map((meter, idx) => {
+              // The first radio input needs to be a focus target when
+              // entering this step. We attach the ref to the first card only
+              // by wrapping the RadioCard's inner item via a side-effect —
+              // but RadioCard doesn't forward the inner radio ref. Instead
+              // we use a targetted DOM query after mount: we focus the first
+              // `role=radio` element in the list if this is the first card.
+              return (
+                <RadioCard
+                  key={meter.id}
+                  value={meter.id}
+                  title={
+                    <span className="flex items-center gap-2">
+                      <span>{meter.name}</span>
+                      <StatusChip
+                        kind="deviceType"
+                        status={meter.device_type}
+                      />
+                    </span>
+                  }
+                  description={meter.edge_name}
+                  meta={humanReadable(meter.device_type)}
+                  // Mark the first card so we can locate it for focus.
+                  id={idx === 0 ? "hh-meter-first" : undefined}
+                />
+              );
+            })}
+          </RadioGroup>
+          <FirstMeterFocuser onFound={onFirstRadio} meters={meters} />
+        </div>
+      )}
     </fieldset>
   );
 }
@@ -951,7 +1021,13 @@ function StepReview({
       </ReviewSection>
 
       <ReviewSection title="Primary meter" onEdit={() => onJumpTo(3)}>
-        {selectedMeter ? (
+        {state.no_meter ? (
+          // #158: explicit no-meter review row (manual billing path).
+          <ReviewRow
+            label="Primary meter"
+            value="— (manual billing)"
+          />
+        ) : selectedMeter ? (
           <>
             <ReviewRow label="Device" value={selectedMeter.name} />
             <ReviewRow label="Edge" value={selectedMeter.edge_name} />
