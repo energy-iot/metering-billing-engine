@@ -1,46 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
-import { calculateTieredCost } from "@/lib/billing/calculations";
-import type { TierConfig } from "@/lib/types/domain";
+import {
+  isRunGenerationFatal,
+  runGenerationFor,
+} from "@/lib/billing/generate";
 
 /**
- * PATCH /api/billing-line-items/[lineItemId]/usage
+ * PATCH /api/billing-line-items/[lineItemId]/usage (#158, rewritten in #173)
  *
- * Manual usage entry for un-metered (manual-billing) households. Added in
- * #158 alongside the no-meter household-creation path. The route is the
- * single write surface for the BillingTable's inline-edit cells (END kWh,
- * USAGE kWh) on rows where `device_id IS NULL`.
+ * Manual usage entry for un-metered (manual-billing) households. Today's
+ * call surface is preserved exactly:
  *
- * Body:
- *   { usage_kwh?: number; end_kwh?: number }
- *   At least one of the two must be present (else 400).
+ *   Body:  { usage_kwh?: number; end_kwh?: number }   (at least one)
+ *   200:   { lineItem: <updated row> }
+ *   400:   invalid body / negative / non-numeric / underflow
+ *   403:   caller cannot access microgrid
+ *   404:   line item not found / RLS-hidden
+ *   409:   device_linked  (line_item.device_id != NULL OR household has a
+ *                          primary_consumption_meter link)
+ *   409:   period_closed  (per Out-of-Scope: closed-period regenerate ships
+ *                          via POST /generate, not this inline-edit path)
  *
- * Server-side semantics:
- *   - When both `usage_kwh` and `end_kwh` are provided, prefer the explicit
- *     values (no derivation override).
- *   - When only `end_kwh` is provided, derive `usage_kwh = end_kwh -
- *     start_kwh` (where start_kwh is read from the row).
- *   - When only `usage_kwh` is provided, leave `end_kwh` untouched.
+ * Internal change: the route delegates to `runGenerationFor` with
+ * `householdIds: [<resolved>]` + `manualReadings: [<resolved>]` so that
+ * the line-item write goes through `fn_record_line_item_with_audit`. This
+ * gives us:
+ *   - One audit log entry per manual cell edit (event_type =
+ *     line_item_regenerated, with previous_total_amount + new_total_amount).
+ *   - UPSERT-preserve semantics for payment fields (matches the bulk path).
  *
- * Recomputes `tier_breakdown` and `total_amount` via `calculateTieredCost`
- * using the microgrid's most recent rate_schedule (mirrors the Refresh
- * Readings code path in src/app/api/billing/generate/route.ts).
- *
- * Authorization:
- *   - currentUserCanAccessMicrogrid via the line-item → period → microgrid
- *     chain (mirrors households/[id]/route.ts pattern).
- *
- * Rejects:
- *   - 400 invalid JSON / missing both keys / negative or non-numeric values
- *   - 403 caller cannot access this microgrid
- *   - 404 line item not found / RLS-hidden
- *   - 409 device_linked — household has a primary_consumption_meter
- *     (Refresh Readings is the only valid update path for metered rows)
- *   - 409 period_closed — billing period status is 'closed'
- *
- * Response:
- *   200 { lineItem: <updated row> }
+ * Behavioral asymmetry preserved (Out of Scope): closed-period regenerate
+ * ships only via POST /generate. This inline cell-edit path continues to
+ * reject closed periods with 409 period_closed.
  */
 
 const UUID_RE =
@@ -135,8 +127,19 @@ export async function PATCH(
 
   const supabase = await createClient();
 
-  // 1. Resolve line item → period → microgrid in one shot. RLS-hidden rows
-  //    surface as null → 404.
+  // Explicit auth gate (BC1 AC6) — anonymous calls return 401 instead of
+  // a confusing 404 / 500-on-RLS.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json(
+      { error: "unauthorized", reason: "unauthorized" },
+      { status: 401 }
+    );
+  }
+
+  // 1. Resolve line item → period → microgrid.
   const { data: scopedRaw, error: scopeErr } = await supabase
     .from("billing_line_items")
     .select(
@@ -160,7 +163,10 @@ export async function PATCH(
 
   if (scopeErr) {
     return NextResponse.json(
-      { error: `Failed to look up line item: ${scopeErr.message}`, reason: "unknown_error" },
+      {
+        error: `Failed to look up line item: ${scopeErr.message}`,
+        reason: "unknown_error",
+      },
       { status: 500 }
     );
   }
@@ -171,8 +177,6 @@ export async function PATCH(
     );
   }
 
-  // PostgREST sometimes returns single relations as single-element arrays;
-  // normalize that just like the payment-status route does.
   const scoped = scopedRaw as unknown as LineItemScope;
   const period = Array.isArray(scoped.billing_periods)
     ? scoped.billing_periods[0]
@@ -187,12 +191,15 @@ export async function PATCH(
   // 2. Permission gate.
   if (!(await currentUserCanAccessMicrogrid(supabase, period.microgrid_id))) {
     return NextResponse.json(
-      { error: "You do not have permission to update this line item.", reason: "forbidden" },
+      {
+        error: "You do not have permission to update this line item.",
+        reason: "forbidden",
+      },
       { status: 403 }
     );
   }
 
-  // 3. Reject manual-edit on closed periods.
+  // 3. Closed-period reject preserved (Out of Scope contract).
   if (period.status === "closed") {
     return NextResponse.json(
       { error: "Cannot edit a closed period", reason: "period_closed" },
@@ -200,14 +207,16 @@ export async function PATCH(
     );
   }
 
-  // 4. Reject manual-edit on rows whose household has a primary_consumption_meter
-  //    link. The presence of a non-null device_id on the line item is a
-  //    fast first signal, but a household may have a meter linked WITHOUT
-  //    the line item having captured a device_id yet (e.g. between create
-  //    and first Refresh). The authoritative check is on household_devices.
+  // 4. Reject metered rows. Both signals must be checked: the line item's
+  //    own device_id AND the household's current primary_consumption_meter
+  //    link (a household may have a meter but the line item was inserted
+  //    pre-link).
   if (scoped.device_id !== null) {
     return NextResponse.json(
-      { error: "Use Refresh Readings for metered households", reason: "device_linked" },
+      {
+        error: "Use Refresh Readings for metered households",
+        reason: "device_linked",
+      },
       { status: 409 }
     );
   }
@@ -221,93 +230,118 @@ export async function PATCH(
 
   if (linkErr) {
     return NextResponse.json(
-      { error: `Failed to verify household meter link: ${linkErr.message}`, reason: "unknown_error" },
+      {
+        error: `Failed to verify household meter link: ${linkErr.message}`,
+        reason: "unknown_error",
+      },
       { status: 500 }
     );
   }
   if (meterLink) {
     return NextResponse.json(
-      { error: "Use Refresh Readings for metered households", reason: "device_linked" },
+      {
+        error: "Use Refresh Readings for metered households",
+        reason: "device_linked",
+      },
       { status: 409 }
     );
   }
 
-  // 5. Resolve final usage/end values.
-  //    - both provided → use both verbatim
-  //    - only end_kwh   → derive usage_kwh = end_kwh - start_kwh
-  //    - only usage_kwh → leave end_kwh as-is on the row
+  // 5. Resolve start/end/usage. Same matrix as before:
+  //   - both provided → use both verbatim (server-derives usage if it
+  //     differs from end - start; the BC1 generate engine always derives,
+  //     so we standardize to end_kwh authoritative when both provided)
+  //   - only end_kwh   → derive usage_kwh = end_kwh - start_kwh
+  //   - only usage_kwh → end_kwh = start_kwh + usage_kwh (so generate
+  //     engine sees a consistent {start, end, usage} triple)
   const startKwh = scoped.start_kwh ?? 0;
-  let nextUsage: number;
-  let nextEnd: number | null;
+  let nextEnd: number;
 
   if (parsed.usage_kwh !== undefined && parsed.end_kwh !== undefined) {
-    nextUsage = parsed.usage_kwh;
+    // Both provided — prefer end_kwh as authoritative input. The generate
+    // engine will derive usage_kwh = end_kwh - start_kwh.
     nextEnd = parsed.end_kwh;
   } else if (parsed.end_kwh !== undefined) {
     nextEnd = parsed.end_kwh;
-    const derived = parsed.end_kwh - startKwh;
-    if (derived < 0) {
+    if (parsed.end_kwh - startKwh < 0) {
       return NextResponse.json(
-        { error: "end_kwh must be greater than or equal to start_kwh", reason: "invalid_body" },
+        {
+          error: "end_kwh must be greater than or equal to start_kwh",
+          reason: "invalid_body",
+        },
         { status: 400 }
       );
     }
-    nextUsage = derived;
   } else {
-    nextUsage = parsed.usage_kwh as number;
-    nextEnd = scoped.end_kwh;
+    // usage_kwh only — derive end_kwh = start_kwh + usage_kwh.
+    nextEnd = startKwh + (parsed.usage_kwh as number);
   }
 
-  // 6. Re-fetch the microgrid's latest rate_schedule + recompute the bill.
-  const { data: schedule, error: scheduleError } = await supabase
-    .from("rate_schedules")
-    .select("*")
-    .eq("microgrid_id", period.microgrid_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // 6. Delegate to runGenerationFor (mode='write') with this household.
+  const out = await runGenerationFor({
+    supabase,
+    periodId: period.id,
+    householdIds: [scoped.household_id],
+    manualReadings: [
+      {
+        householdId: scoped.household_id,
+        startKwh,
+        endKwh: nextEnd,
+      },
+    ],
+    mode: "write",
+    actorUserId: user.id,
+  });
 
-  if (scheduleError || !schedule) {
+  if (isRunGenerationFatal(out)) {
+    // Pass-through fatal status (e.g. 400 missing rate schedule).
+    const reason =
+      out.status === 400
+        ? "missing_rate_schedule"
+        : out.status === 404
+          ? "not_found"
+          : "unknown_error";
     return NextResponse.json(
-      { error: "No rate schedule found for this microgrid", reason: "missing_rate_schedule" },
-      { status: 400 }
+      {
+        error: out.body.error,
+        reason,
+        ...(out.body.code ? { code: out.body.code } : {}),
+      },
+      { status: out.status }
     );
   }
 
-  const calc = calculateTieredCost(
-    nextUsage,
-    schedule.tiers as TierConfig[],
-    schedule.service_charge,
-    schedule.tax_rate
-  );
-
-  // 7. Update the row + return the fresh payload.
-  const updatePayload = {
-    usage_kwh: nextUsage,
-    end_kwh: nextEnd,
-    tier_breakdown: calc.tierBreakdown,
-    total_amount: calc.totalAmount,
-  };
-
-  const { data: updated, error: updateError } = await supabase
-    .from("billing_line_items")
-    .update(updatePayload)
-    .eq("id", lineItemId)
-    .select()
-    .single();
-
-  if (updateError) {
-    if (updateError.code === "42501" || updateError.message.includes("row-level security")) {
+  // Locate the per-household result for our line item.
+  const result = out.results.find((r) => r.householdId === scoped.household_id);
+  if (!result) {
+    return NextResponse.json(
+      {
+        error: "Failed to update line item: no result returned.",
+        reason: "unknown_error",
+      },
+      { status: 500 }
+    );
+  }
+  if (result.kind === "error") {
+    // Preserve the historical 400 invalid_body shape for invalid_manual_reading.
+    if (result.code === "invalid_manual_reading") {
       return NextResponse.json(
-        { error: "Not authorized to update this line item.", reason: "rls_denied" },
-        { status: 403 }
+        { error: result.error, reason: "invalid_body" },
+        { status: 400 }
       );
     }
     return NextResponse.json(
-      { error: `Failed to update line item: ${updateError.message}`, reason: "unknown_error" },
+      { error: result.error, reason: "unknown_error" },
+      { status: 500 }
+    );
+  }
+  if (result.kind === "preview") {
+    // Should never happen — we requested write mode.
+    return NextResponse.json(
+      { error: "Internal error: preview returned in write mode.", reason: "unknown_error" },
       { status: 500 }
     );
   }
 
-  return NextResponse.json({ lineItem: updated }, { status: 200 });
+  return NextResponse.json({ lineItem: result.lineItem }, { status: 200 });
 }

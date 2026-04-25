@@ -16,6 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
+import { calculateTieredCost } from "@/lib/billing/calculations";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
@@ -24,8 +25,12 @@ let canAccessMicrogridReturn = true;
 const mockLineItemMaybeSingle = vi.fn();
 const mockMeterLinkMaybeSingle = vi.fn();
 const mockRateScheduleMaybeSingle = vi.fn();
+// BC1 (#173): the route now delegates to runGenerationFor instead of doing
+// its own UPDATE. We capture the call args (so the existing assertions on
+// the resulting tier_breakdown / total_amount / usage_kwh stay meaningful)
+// and synthesize a written-result row whose calc mirrors the route's
+// derivation (manualReading.endKwh - startKwh → calculateTieredCost).
 let capturedUpdatePayload: Record<string, unknown> | null = null;
-const mockUpdateResult = vi.fn();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeFromImpl(): any {
@@ -37,16 +42,6 @@ function makeFromImpl(): any {
             maybeSingle: () => mockLineItemMaybeSingle(),
           }),
         }),
-        update: (payload: Record<string, unknown>) => {
-          capturedUpdatePayload = payload;
-          return {
-            eq: () => ({
-              select: () => ({
-                single: () => mockUpdateResult(),
-              }),
-            }),
-          };
-        },
       };
     }
     if (table === "household_devices") {
@@ -79,8 +74,87 @@ function makeFromImpl(): any {
 
 const mockFrom = vi.fn(makeFromImpl());
 
+// Stub runGenerationFor so the route's pre-flight assertions can be tested
+// without spinning up the full generate-engine mock surface (which would
+// duplicate the integration test in src/lib/billing/__tests__/generate.test.ts).
+// The stub captures the call args, runs `calculateTieredCost` against the
+// fixture rate schedule for fidelity with the historical assertions, and
+// returns a synthesized written line item.
+//
+// Note: vi.mock factory is hoisted; references inside use only top-level
+// imports (calculateTieredCost) and module-scope `let` (capturedUpdatePayload,
+// capturedRunGenerationCall) — the constants LI_UUID / FIXTURE_RATE_SCHEDULE
+// are inlined verbatim because hoisting evaluates the factory before the
+// const declarations.
+vi.mock("@/lib/billing/generate", async () => {
+  return {
+    isRunGenerationFatal: (out: { kind?: string }) =>
+      Boolean(out && out.kind === "fatal"),
+    runGenerationFor: vi.fn(async (params: {
+      periodId: string;
+      householdIds?: string[];
+      manualReadings?: Array<{ householdId: string; startKwh: number; endKwh: number; reason?: string }>;
+    }) => {
+      const m = params.manualReadings?.[0];
+      if (!m) {
+        return { results: [] };
+      }
+      // Two-tier schedule: 0–50 kWh at 500/kWh, 51+ at 800/kWh — kept in
+      // sync with FIXTURE_RATE_SCHEDULE below.
+      const tiers = [
+        { label: "Tier 1", min_kwh: 1, max_kwh: 50, rate_per_kwh: 500 },
+        { label: "Tier 2", min_kwh: 51, max_kwh: null, rate_per_kwh: 800 },
+      ];
+      const calc = calculateTieredCost(
+        m.endKwh - m.startKwh,
+        tiers as never,
+        0,
+        0,
+      );
+      // Synthesized "written" line item — populates the captured update
+      // payload that the historical assertions inspect (usage_kwh,
+      // tier_breakdown, total_amount, end_kwh).
+      capturedUpdatePayload = {
+        usage_kwh: m.endKwh - m.startKwh,
+        end_kwh: m.endKwh,
+        tier_breakdown: calc.tierBreakdown,
+        total_amount: calc.totalAmount,
+      };
+      return {
+        results: [
+          {
+            kind: "written" as const,
+            householdId: m.householdId,
+            householdName: "Stub HH",
+            lineItem: {
+              id: "660e8400-e29b-41d4-a716-446655440111",
+              device_id: null,
+              ...capturedUpdatePayload,
+            },
+            previousTotalAmount: null,
+            previousPaymentStatus: null,
+            previousReadingSource: null,
+          },
+        ],
+      };
+    }),
+  };
+});
+
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ from: mockFrom }),
+  createClient: async () => ({
+    from: mockFrom,
+    // BC1 (#173) added an explicit auth gate at the top of the route. Tests
+    // mock the session as a stable test user — RLS isn't exercised by the
+    // unit suite (covered by RLS tests against live Supabase).
+    auth: {
+      getUser: async () => ({
+        data: { user: { id: "11111111-1111-4111-8111-111111111111" } },
+        error: null,
+      }),
+    },
+    rpc: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/auth/access", () => ({
@@ -149,16 +223,6 @@ describe("PATCH /api/billing-line-items/[lineItemId]/usage (#158)", () => {
       data: FIXTURE_RATE_SCHEDULE,
       error: null,
     });
-    mockUpdateResult.mockImplementation(() =>
-      Promise.resolve({
-        data: {
-          id: LI_UUID,
-          device_id: null,
-          ...(capturedUpdatePayload ?? {}),
-        },
-        error: null,
-      })
-    );
   });
 
   it("400: invalid UUID", async () => {

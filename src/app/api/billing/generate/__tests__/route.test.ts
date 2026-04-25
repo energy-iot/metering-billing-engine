@@ -1,133 +1,80 @@
 /**
- * POST /api/billing/generate — Refresh Readings tests (#158).
+ * POST /api/billing/generate — route tests (#158 + #173 BC1).
  *
- * Coverage focus: the LEFT-join shape change introduced for un-metered
- * (manual-billing) households. Specifically:
- *   - Un-metered households now appear in the result set with an empty
- *     `household_devices` array. The route must skip the OpenEMS query for
- *     them but STILL insert a `billing_line_items` row with null device_id,
- *     null end_kwh, null usage_kwh, [] tier_breakdown, total_amount=0.
- *   - Metered households produce identical line items to pre-#158
- *     (regression: same start_kwh, end_kwh, usage_kwh, tier_breakdown,
- *     total_amount given the same OpenEMS reading).
+ * Coverage:
+ *   - 401 unauthorized when supabase.auth.getUser() returns no user.
+ *   - 400 invalid_body for malformed manualReadings.
+ *   - Bulk path delegates to fn_record_line_item_with_audit (one RPC call
+ *     per processed household; `mode='write'`).
+ *   - manualReadings override path sets reading_source='manual' on the RPC
+ *     payload (`_reading_source: 'manual'`) plus entered_by_user_id from
+ *     auth.uid().
+ *   - Empty householdIds (`[]`) writes nothing AND returns
+ *     `{ lineItems: 0, errors: [] }` (AC3 explicit no-op).
+ *   - Cross-microgrid manualReadings entry surfaces in errors[] with
+ *     code='unknown_household' (AC3 attack defense).
+ *   - bulk-regenerate of a manual-source household without manualReadings
+ *     surfaces in errors[] with code='currently_manual' (AC3 Q5).
  *
- * Note on mocking strategy: the route is heavily Supabase-chained. We
- * stub each from(table) entry-point and capture the row payload passed
- * to insert(). That gives us a per-row assertion surface against the spec.
+ * Test pattern: the route is mocked at the supabase + auth + runGenerationFor
+ * boundaries — the runGenerationFor *internals* are exercised end-to-end by
+ * the live-DB suite at `src/lib/supabase/__tests__/billing_audit_log.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-// ── Mocks ─────────────────────────────────────────────────────────────────
+// ── Mock controls ──────────────────────────────────────────────────────────
 
-const mockPeriodSingle = vi.fn();
-const mockRateScheduleMaybeSingle = vi.fn();
-const mockHouseholdsResult = vi.fn();
-const mockPriorPeriods = vi.fn();
-const mockPriorItems = vi.fn();
-let capturedDeleteFilter: { period_id?: string } = {};
-let capturedInsertRows: Record<string, unknown>[] | null = null;
-const mockGetReadings = vi.fn();
-
-const mockFrom = vi.fn((table: string) => {
-  if (table === "billing_periods") {
-    return {
-      select: (cols: string) => ({
-        eq: (col: string, val: string) => ({
-          single: () => mockPeriodSingle(),
-          // The "list prior periods" path:
-          lte: () => ({
-            neq: () => ({
-              order: () => mockPriorPeriods(),
-            }),
-          }),
-          // Caught by the closer:
-          _meta: { table, cols, col, val },
-        }),
-      }),
-    };
-  }
-  if (table === "rate_schedules") {
-    return {
-      select: () => ({
-        eq: () => ({
-          order: () => ({
-            limit: () => ({
-              maybeSingle: () => mockRateScheduleMaybeSingle(),
-            }),
-          }),
-        }),
-      }),
-    };
-  }
-  if (table === "households") {
-    return {
-      select: () => ({
-        eq: () => ({
-          eq: () => mockHouseholdsResult(),
-        }),
-      }),
-    };
-  }
-  if (table === "billing_line_items") {
-    return {
-      select: () => ({
-        in: () => ({
-          in: () => ({
-            not: () => mockPriorItems(),
-          }),
-        }),
-      }),
-      delete: () => ({
-        eq: (_col: string, val: string) => {
-          capturedDeleteFilter = { period_id: val };
-          return Promise.resolve({ error: null });
-        },
-      }),
-      insert: (rows: Record<string, unknown> | Record<string, unknown>[]) => {
-        capturedInsertRows = Array.isArray(rows) ? rows : [rows];
-        return Promise.resolve({ error: null });
-      },
-    };
-  }
-  throw new Error(`Unexpected table: ${table}`);
-});
+let mockUserOverride: { id: string } | null = {
+  id: "11111111-1111-4111-8111-111111111111",
+};
+let mockGenerateResult: { kind?: "fatal"; status?: number; body?: unknown; results?: unknown[] } = {
+  results: [],
+};
+let lastGenerateCall: {
+  periodId?: string;
+  householdIds?: string[];
+  manualReadings?: unknown[];
+  mode?: string;
+  actorUserId?: string | null;
+} | null = null;
 
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ from: mockFrom }),
-}));
-
-vi.mock("@/lib/openems/config", () => ({
-  getMicrogridEmsConfig: async () => ({
-    backendUrl: "https://example.test",
-    authStrategy: "basic",
-    auth: { username: "u", password: "p" },
+  createClient: async () => ({
+    from: vi.fn(),
+    auth: {
+      getUser: async () => ({
+        data: { user: mockUserOverride },
+        error: null,
+      }),
+    },
   }),
 }));
 
-vi.mock("@/lib/openems", () => ({
-  createOpenEmsClient: () => ({ getReadings: mockGetReadings }),
-  OpenEmsError: class OpenEmsError extends Error {
-    code = "test_error";
-    statusCode = 500;
-  },
+vi.mock("@/lib/billing/generate", async () => ({
+  isRunGenerationFatal: (out: { kind?: string }) =>
+    Boolean(out && out.kind === "fatal"),
+  runGenerationFor: vi.fn(async (params: {
+    periodId: string;
+    householdIds?: string[];
+    manualReadings?: unknown[];
+    mode: string;
+    actorUserId: string | null;
+  }) => {
+    lastGenerateCall = {
+      periodId: params.periodId,
+      householdIds: params.householdIds,
+      manualReadings: params.manualReadings,
+      mode: params.mode,
+      actorUserId: params.actorUserId,
+    };
+    return mockGenerateResult;
+  }),
 }));
 
-// ── Fixtures ───────────────────────────────────────────────────────────────
-
 const PERIOD_ID = "660e8400-e29b-41d4-a716-446655441000";
-const MG_ID = "660e8400-e29b-41d4-a716-446655442000";
-const RATE_SCHEDULE = {
-  id: "rs-1",
-  microgrid_id: MG_ID,
-  tiers: [
-    { label: "Tier 1", min_kwh: 1, max_kwh: 50, rate_per_kwh: 500 },
-    { label: "Tier 2", min_kwh: 51, max_kwh: null, rate_per_kwh: 800 },
-  ],
-  service_charge: 0,
-  tax_rate: 0,
-};
+const HH_A = "660e8400-e29b-41d4-a716-446655442001";
 
 function makePostRequest(body: unknown): NextRequest {
   return new NextRequest("http://localhost/api/billing/generate", {
@@ -137,177 +84,204 @@ function makePostRequest(body: unknown): NextRequest {
   });
 }
 
-describe("POST /api/billing/generate (#158 LEFT join + manual-billing rows)", () => {
+describe("POST /api/billing/generate (#173 BC1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    capturedInsertRows = null;
-    capturedDeleteFilter = {};
-
-    mockPeriodSingle.mockResolvedValue({
-      data: {
-        id: PERIOD_ID,
-        microgrid_id: MG_ID,
-        start_date: "2026-04-01",
-        end_date: "2026-04-30",
-        status: "draft",
-      },
-      error: null,
-    });
-    mockRateScheduleMaybeSingle.mockResolvedValue({
-      data: RATE_SCHEDULE,
-      error: null,
-    });
-    mockPriorPeriods.mockResolvedValue({ data: [], error: null });
-    mockPriorItems.mockResolvedValue({ data: [], error: null });
-    mockGetReadings.mockResolvedValue([]);
+    mockUserOverride = { id: "11111111-1111-4111-8111-111111111111" };
+    mockGenerateResult = { results: [] };
+    lastGenerateCall = null;
   });
 
-  it("inserts an un-metered placeholder row when a household has no primary_consumption_meter (#158)", async () => {
-    // LEFT-join shape: household_devices array is empty for un-metered.
-    mockHouseholdsResult.mockResolvedValue({
-      data: [
-        {
-          id: "hh-unmetered",
-          display_name: "Manual Family",
-          household_devices: [],
-        },
-      ],
-      error: null,
-    });
-
+  it("401 when no auth user", async () => {
+    mockUserOverride = null;
     const { POST } = await import("../route");
     const res = await POST(makePostRequest({ billingPeriodId: PERIOD_ID }));
-    expect(res.status).toBe(200);
-
-    expect(capturedDeleteFilter.period_id).toBe(PERIOD_ID);
-    expect(capturedInsertRows).not.toBeNull();
-    expect(capturedInsertRows).toHaveLength(1);
-    const row = (capturedInsertRows as Record<string, unknown>[])[0];
-    // Manual-billing placeholder shape from AC-5:
-    //   device_id null, start_kwh 0, end_kwh null, usage_kwh null,
-    //   tier_breakdown [], total_amount 0.
-    expect(row).toMatchObject({
-      billing_period_id: PERIOD_ID,
-      household_id: "hh-unmetered",
-      device_id: null,
-      start_kwh: 0,
-      end_kwh: null,
-      usage_kwh: null,
-      total_amount: 0,
-    });
-    expect((row as Record<string, unknown>).tier_breakdown).toEqual([]);
+    expect(res.status).toBe(401);
   });
 
-  it("regression: metered household produces identical line item shape to pre-#158", async () => {
-    // The metered fixture mirrors the production-pinned period
-    // (912c684e-7db1-4543-b02e-cd6d35cad46c) shape: one household with a
-    // valid primary_consumption_meter device + edge.
-    mockHouseholdsResult.mockResolvedValue({
-      data: [
-        {
-          id: "hh-metered",
-          display_name: "Metered Family",
-          household_devices: [
-            {
-              role: "primary_consumption_meter",
-              devices: {
-                id: "dev-1",
-                openems_component_id: "meter1",
-                edges: { openems_edge_id: "edge0" },
-              },
-            },
-          ],
-        },
-      ],
-      error: null,
-    });
-    mockGetReadings.mockResolvedValue([
-      { deviceId: "dev-1", usageKwh: 80 },
-    ]);
-
+  it("400 invalid_body for malformed billingPeriodId", async () => {
     const { POST } = await import("../route");
-    const res = await POST(makePostRequest({ billingPeriodId: PERIOD_ID }));
-    expect(res.status).toBe(200);
-
-    expect(capturedInsertRows).toHaveLength(1);
-    const row = (capturedInsertRows as Record<string, unknown>[])[0];
-    expect(row).toMatchObject({
-      billing_period_id: PERIOD_ID,
-      household_id: "hh-metered",
-      device_id: "dev-1",
-      usage_kwh: 80,
-      start_kwh: 0,
-      end_kwh: 80, // start_kwh + usage_kwh
-      total_amount: 49000, // 50 × 500 + 30 × 800
-    });
-    const breakdown = (row as Record<string, unknown>).tier_breakdown as {
-      label: string;
-      kwh: number;
-      amount: number;
-    }[];
-    expect(breakdown).toEqual([
-      { label: "Tier 1", kwh: 50, amount: 25000 },
-      { label: "Tier 2", kwh: 30, amount: 24000 },
-    ]);
+    const res = await POST(makePostRequest({ billingPeriodId: "not-a-uuid" }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe("invalid_body");
   });
 
-  it("inserts BOTH metered + un-metered rows in the same Refresh run (#158)", async () => {
-    mockHouseholdsResult.mockResolvedValue({
-      data: [
-        {
-          id: "hh-metered",
-          display_name: "Metered Family",
-          household_devices: [
-            {
-              role: "primary_consumption_meter",
-              devices: {
-                id: "dev-1",
-                openems_component_id: "meter1",
-                edges: { openems_edge_id: "edge0" },
-              },
-            },
-          ],
-        },
-        {
-          id: "hh-unmetered",
-          display_name: "Manual Family",
-          household_devices: [],
-        },
-      ],
-      error: null,
-    });
-    mockGetReadings.mockResolvedValue([
-      { deviceId: "dev-1", usageKwh: 80 },
-    ]);
-
+  it("400 invalid_body when manualReadings.endKwh < startKwh", async () => {
     const { POST } = await import("../route");
-    const res = await POST(makePostRequest({ billingPeriodId: PERIOD_ID }));
-    expect(res.status).toBe(200);
-
-    expect(capturedInsertRows).toHaveLength(2);
-    const byHousehold = new Map(
-      (capturedInsertRows as Record<string, unknown>[]).map((r) => [
-        r.household_id,
-        r,
-      ])
+    const res = await POST(
+      makePostRequest({
+        billingPeriodId: PERIOD_ID,
+        manualReadings: [
+          { householdId: HH_A, startKwh: 100, endKwh: 50 },
+        ],
+      })
     );
-    // Metered row preserved exactly.
-    const metered = byHousehold.get("hh-metered");
-    expect(metered).toBeDefined();
-    expect(metered).toMatchObject({
-      device_id: "dev-1",
-      usage_kwh: 80,
-      end_kwh: 80,
-      total_amount: 49000,
-    });
-    // Un-metered placeholder.
-    const unmetered = byHousehold.get("hh-unmetered");
-    expect(unmetered).toBeDefined();
-    expect(unmetered).toMatchObject({
-      device_id: null,
-      usage_kwh: null,
-      end_kwh: null,
-      total_amount: 0,
-    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe("invalid_body");
+  });
+
+  it("400 invalid_body when manualReadings.startKwh negative", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        billingPeriodId: PERIOD_ID,
+        manualReadings: [
+          { householdId: HH_A, startKwh: -1, endKwh: 50 },
+        ],
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("happy bulk: delegates to runGenerationFor with mode='write' + actorUserId", async () => {
+    mockGenerateResult = {
+      results: [
+        {
+          kind: "written",
+          householdId: HH_A,
+          householdName: "HH A",
+          lineItem: { id: "li-x" },
+          previousTotalAmount: null,
+          previousPaymentStatus: null,
+          previousReadingSource: null,
+        },
+      ],
+    };
+    const { POST } = await import("../route");
+    const res = await POST(makePostRequest({ billingPeriodId: PERIOD_ID }));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.lineItems).toBe(1);
+    expect(json.errors).toEqual([]);
+    expect(lastGenerateCall?.mode).toBe("write");
+    expect(lastGenerateCall?.actorUserId).toBe(
+      "11111111-1111-4111-8111-111111111111"
+    );
+    expect(lastGenerateCall?.periodId).toBe(PERIOD_ID);
+    expect(lastGenerateCall?.householdIds).toBeUndefined();
+    expect(lastGenerateCall?.manualReadings).toBeUndefined();
+  });
+
+  it("forwards manualReadings (with reason) to runGenerationFor", async () => {
+    mockGenerateResult = {
+      results: [
+        {
+          kind: "written",
+          householdId: HH_A,
+          householdName: "HH A",
+          lineItem: { id: "li-x" },
+          previousTotalAmount: null,
+          previousPaymentStatus: null,
+          previousReadingSource: null,
+        },
+      ],
+    };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        billingPeriodId: PERIOD_ID,
+        manualReadings: [
+          {
+            householdId: HH_A,
+            startKwh: 100,
+            endKwh: 180,
+            reason: "Aaron read the meter manually",
+          },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(lastGenerateCall?.manualReadings).toEqual([
+      {
+        householdId: HH_A,
+        startKwh: 100,
+        endKwh: 180,
+        reason: "Aaron read the meter manually",
+      },
+    ]);
+  });
+
+  it("manualReadings.endKwh === startKwh succeeds (zero-usage edge case)", async () => {
+    mockGenerateResult = {
+      results: [
+        {
+          kind: "written",
+          householdId: HH_A,
+          householdName: "HH A",
+          lineItem: { id: "li-x" },
+          previousTotalAmount: null,
+          previousPaymentStatus: null,
+          previousReadingSource: null,
+        },
+      ],
+    };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        billingPeriodId: PERIOD_ID,
+        manualReadings: [
+          { householdId: HH_A, startKwh: 100, endKwh: 100 },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("response shape splits results into lineItems count + errors[] (with code field)", async () => {
+    mockGenerateResult = {
+      results: [
+        {
+          kind: "written",
+          householdId: HH_A,
+          householdName: "HH A",
+          lineItem: { id: "li-x" },
+          previousTotalAmount: null,
+          previousPaymentStatus: null,
+          previousReadingSource: null,
+        },
+        {
+          kind: "error",
+          householdId: "660e8400-e29b-41d4-a716-446655442002",
+          householdName: "HH B",
+          error: "Currently set to manual entry — use per-row regenerate to change.",
+          code: "currently_manual",
+        },
+        {
+          kind: "error",
+          householdId: "660e8400-e29b-41d4-a716-446655442003",
+          householdName: "660e8400-e29b-41d4-a716-446655442003",
+          error: "Household 660e8400-e29b-41d4-a716-446655442003 is not in this microgrid.",
+          code: "unknown_household",
+        },
+      ],
+    };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        billingPeriodId: PERIOD_ID,
+        householdIds: [HH_A, "660e8400-e29b-41d4-a716-446655442002"],
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.lineItems).toBe(1);
+    expect(json.errors).toHaveLength(2);
+    expect(json.errors[0].code).toBe("currently_manual");
+    expect(json.errors[1].code).toBe("unknown_household");
+  });
+
+  it("propagates fatal status from runGenerationFor", async () => {
+    mockGenerateResult = {
+      kind: "fatal",
+      status: 404,
+      body: { error: "Billing period not found" },
+    };
+    const { POST } = await import("../route");
+    const res = await POST(makePostRequest({ billingPeriodId: PERIOD_ID }));
+    expect(res.status).toBe(404);
+    const json = await res.json();
+    expect(json.error).toBe("Billing period not found");
   });
 });

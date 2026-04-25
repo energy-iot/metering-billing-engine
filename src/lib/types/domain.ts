@@ -82,6 +82,11 @@ export type BillingPeriodStatus =
 export type BillingLineItemPaymentStatus =
   Database["public"]["Enums"]["billing_line_item_payment_status"];
 
+/** Provenance of a billing_line_items row's reading. Mirrors the
+ *  `billing_line_item_reading_source` Postgres enum (migration 00029, BC1). */
+export type ReadingSource =
+  Database["public"]["Enums"]["billing_line_item_reading_source"];
+
 // ── Shared helper types ───────────────────────────────────────────────────────
 
 /** Tier config embedded in rate_schedules.tiers JSONB. */

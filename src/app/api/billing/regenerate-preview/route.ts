@@ -7,45 +7,37 @@ import {
 } from "@/lib/billing/generate";
 
 /**
- * POST /api/billing/generate (#173, BC1)
+ * POST /api/billing/regenerate-preview (#173, BC1)
+ *
+ * Same request body as /api/billing/generate. Pure compute path — performs
+ * NO database writes. The OpenEMS read still happens (it's an HTTP call,
+ * not a transaction). Returns the per-household preview that BC3's
+ * compute-then-confirm dialog (Q6) renders.
  *
  * Body:
- *   billingPeriodId: string                                — required
- *   householdIds?: string[]                                — optional
- *     - undefined → process every household on the period's microgrid
- *       (legacy bulk Refresh-Readings behavior)
- *     - []        → explicit no-op (writes nothing, returns empty arrays)
- *     - [uuid…]   → only those households are processed
- *   manualReadings?: Array<{
- *     householdId: string;
- *     startKwh: number;
- *     endKwh: number;
- *     reason?: string;
- *   }>
- *     - implicitly adds each household to the processed set
- *     - skips the OpenEMS call for that household; uses startKwh/endKwh
- *       as provided; usage_kwh is server-derived (endKwh - startKwh)
- *
- * AC3 changes from the legacy route:
- *   - Closed periods are NOT rejected (Q4=B logs `period_was_closed: true`).
- *   - The bulk legacy delete-then-insert is REPLACED with UPSERT-preserve
- *     via fn_record_line_item_with_audit (preserves payment_status, paid_at,
- *     paid_by_user_id, payment_notes, pesapal_order_id, payment_failed_at,
- *     payment_refunded_at — and the payment_events history that would
- *     otherwise CASCADE away).
- *   - A bulk-regenerate target with reading_source='manual' currently AND no
- *     manualReadings entry → skipped + surfaced in errors[] with
- *     code='currently_manual'. Q5 enforcement.
- *   - manualReadings for a household NOT in the period's microgrid → skipped
- *     + surfaced in errors[] with code='unknown_household'. Cross-microgrid
- *     attack defense.
- *
- * Auth (NEW): explicit getUser() gate before any business logic — today's
- * route relies entirely on RLS. Returning 401 explicitly gives BC2/BC3 a
- * predictable upstream signal.
+ *   { billingPeriodId: string;
+ *     householdIds?: string[];
+ *     manualReadings?: Array<{
+ *       householdId: string;
+ *       startKwh: number;
+ *       endKwh: number;
+ *       reason?: string;
+ *     }>;
+ *   }
  *
  * Response:
- *   { lineItems: number; errors: Array<...> }
+ *   { preview: Array<{
+ *       householdId, householdName, startKwh, endKwh, usageKwh,
+ *       tierBreakdown, totalAmount,
+ *       previousTotalAmount, previousPaymentStatus,
+ *     }>;
+ *     errors: Array<{ householdId, householdName, error, code? }>;
+ *   }
+ *
+ * `previousPaymentStatus` is the row's state BEFORE the regenerate would
+ * write — preserved across the regenerate (AC3). DO NOT rename to
+ * `currentPaymentStatus` — BC3 #175 already drafts `previousPaymentStatus`
+ * consumption.
  */
 
 const UUID_RE =
@@ -58,7 +50,7 @@ type RawManualReading = {
   reason?: unknown;
 };
 
-type ParseError = { error: string; details?: unknown };
+type ParseError = { error: string };
 
 type ParsedBody = {
   billingPeriodId: string;
@@ -66,25 +58,22 @@ type ParsedBody = {
   manualReadings?: ManualReadingInput[];
 };
 
-/**
- * Manual validation mirroring the Zod schema spec'd in #173 AC3 (Zod is not
- * a project dependency yet — same behavior, hand-rolled). Returns either
- * `{ parsed }` or `{ error, details }` — the route surfaces the error tree
- * verbatim as `{ error: 'invalid_body', details }`.
- */
+/** Same shape as the generate route's parser — kept inline because the
+ * route surface is small and the validation matrix is identical. */
 function parseBody(raw: unknown): { parsed: ParsedBody } | ParseError {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { error: "Body must be an object" };
   }
   const rec = raw as Record<string, unknown>;
 
-  // billingPeriodId — required UUID.
-  if (typeof rec.billingPeriodId !== "string" || !UUID_RE.test(rec.billingPeriodId)) {
+  if (
+    typeof rec.billingPeriodId !== "string" ||
+    !UUID_RE.test(rec.billingPeriodId)
+  ) {
     return { error: "billingPeriodId must be a UUID string" };
   }
   const billingPeriodId = rec.billingPeriodId;
 
-  // householdIds — optional UUID array (empty array allowed).
   let householdIds: string[] | undefined;
   if (rec.householdIds !== undefined) {
     if (!Array.isArray(rec.householdIds)) {
@@ -98,7 +87,6 @@ function parseBody(raw: unknown): { parsed: ParsedBody } | ParseError {
     householdIds = rec.householdIds as string[];
   }
 
-  // manualReadings — optional array of { householdId, startKwh, endKwh, reason? }.
   let manualReadings: ManualReadingInput[] | undefined;
   if (rec.manualReadings !== undefined) {
     if (!Array.isArray(rec.manualReadings)) {
@@ -132,9 +120,7 @@ function parseBody(raw: unknown): { parsed: ParsedBody } | ParseError {
         };
       }
       if (m.endKwh < m.startKwh) {
-        return {
-          error: `manualReadings[${i}].endKwh must be >= startKwh`,
-        };
+        return { error: `manualReadings[${i}].endKwh must be >= startKwh` };
       }
       let reason: string | undefined;
       if (m.reason !== undefined) {
@@ -178,8 +164,6 @@ export async function POST(request: NextRequest) {
 
   const supabase = await createClient();
 
-  // Explicit auth gate (AC6). The legacy route relied on RLS only; this is
-  // belt-and-suspenders so anonymous calls return 401, not 500-on-RLS.
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -192,7 +176,7 @@ export async function POST(request: NextRequest) {
     periodId: parsed.billingPeriodId,
     householdIds: parsed.householdIds,
     manualReadings: parsed.manualReadings,
-    mode: "write",
+    mode: "preview",
     actorUserId: user.id,
   });
 
@@ -200,8 +184,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(out.body, { status: out.status });
   }
 
-  // Shape the response: split written + errors.
-  const lineItems = out.results.filter((r) => r.kind === "written").length;
+  const preview = out.results
+    .filter((r) => r.kind === "preview")
+    .map((p) => ({
+      householdId: p.householdId,
+      householdName: p.householdName,
+      startKwh: p.startKwh,
+      endKwh: p.endKwh,
+      usageKwh: p.usageKwh,
+      tierBreakdown: p.tierBreakdown,
+      totalAmount: p.totalAmount,
+      previousTotalAmount: p.previousTotalAmount,
+      previousPaymentStatus: p.previousPaymentStatus,
+    }));
+
   const errors = out.results
     .filter((r) => r.kind === "error")
     .map((e) => ({
@@ -211,5 +207,5 @@ export async function POST(request: NextRequest) {
       code: e.code,
     }));
 
-  return NextResponse.json({ lineItems, errors });
+  return NextResponse.json({ preview, errors });
 }
