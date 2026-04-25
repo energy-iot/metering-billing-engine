@@ -59,10 +59,15 @@ const mockFrom = vi.fn();
 const mockGetUser = vi
   .fn()
   .mockResolvedValue({ data: { user: { id: "actor-user-1" } } });
+// Phase B: link route also calls supabase.rpc("fn_apply_payment_event") to
+// record the unpaid → link_generated transition. Default to a no-error
+// resolution; specific tests can override via mockRpc.mockResolvedValueOnce.
+const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     from: mockFrom,
+    rpc: mockRpc,
     auth: { getUser: mockGetUser },
   }),
 }));
@@ -311,6 +316,55 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(String(body.error)).toMatch(/Save & test/i);
     // generatePaymentLink must NOT be reached — config-parse rejected first.
     expect(generatePaymentLinkMock).not.toHaveBeenCalled();
+  });
+
+  // ─── (10) Phase B: writes audit row + persists pesapal_order_id ──────────
+  it("(10) calls fn_apply_payment_event with source='generate_link' and pesapal_order_id payload", async () => {
+    mockRpc.mockClear();
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    const [fn, args] = mockRpc.mock.calls[0];
+    expect(fn).toBe("fn_apply_payment_event");
+    expect(args._line_item_id).toBe(LINE_ITEM_ID);
+    expect(args._to_status).toBe("link_generated");
+    expect(args._source).toBe("generate_link");
+    expect(args._actor_user_id).toBe("actor-user-1");
+    expect(args._raw_payload.pesapal_order_id).toBe(GOOD_RESULT.providerReference);
+    // redirect_url MUST NOT be persisted (contains session token).
+    expect(JSON.stringify(args._raw_payload)).not.toContain(
+      GOOD_RESULT.redirectUrl,
+    );
+  });
+
+  it("(10) ack 200 with redirect URL even if the audit RPC fails", async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: "P0001", message: "invalid_transition: ..." },
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.redirectUrl).toBe(GOOD_RESULT.redirectUrl);
+
+    // Warning emitted for audit failure.
+    const matched = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("audit_write_failed"));
+    expect(matched).toBeTruthy();
+
+    warnSpy.mockRestore();
   });
 
   // ─── (8) Log scrubber strips secret + token + URL ─────────────────────────

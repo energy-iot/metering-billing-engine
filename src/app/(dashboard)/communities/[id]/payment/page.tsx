@@ -80,9 +80,36 @@ export default async function PaymentPage({
     ipn_id: typeof cfgObj.ipn_id === "string" ? cfgObj.ipn_id : "",
   };
 
+  // Phase B (#157): include the most-recent failed IPN timestamp so the
+  // health chip can flip to `failing` after a webhook reports failure.
+  const { data: latestFailed } = await supabase
+    .from("payment_events")
+    .select(
+      `
+      at,
+      billing_line_items!inner (
+        billing_periods!inner (
+          microgrids!inner (
+            community_id
+          )
+        )
+      )
+    `,
+    )
+    .eq("source", "ipn")
+    .eq("to_status", "failed")
+    .eq(
+      "billing_line_items.billing_periods.microgrids.community_id",
+      id,
+    )
+    .order("at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ at: string }>();
+
   const health = derivePaymentHealth({
     payment_provider: community.payment_provider,
     payment_last_configured_at: community.payment_last_configured_at,
+    most_recent_failed_ipn_at: latestFailed?.at ?? null,
   });
 
   // Server-derived public callback URL surfaced in the configured-mode panel

@@ -45,9 +45,41 @@ export default async function CommunityLayout({
 
   if (!community) notFound();
 
+  // Phase B (#157): the `failing` health state is emitted when this
+  // community has at least one payment_events row with `to_status='failed'`
+  // AND `source='ipn'` within the last 24h. We resolve "this community" by
+  // walking microgrid_id → microgrids.community_id, but for the chip we only
+  // need the most-recent timestamp — fetch a single row, ordered DESC. RLS
+  // on payment_events enforces access; we further filter by communityId to
+  // avoid pulling the entire org's events.
+  const { data: latestFailed } = await supabase
+    .from("payment_events")
+    .select(
+      `
+      at,
+      billing_line_items!inner (
+        billing_periods!inner (
+          microgrids!inner (
+            community_id
+          )
+        )
+      )
+    `,
+    )
+    .eq("source", "ipn")
+    .eq("to_status", "failed")
+    .eq(
+      "billing_line_items.billing_periods.microgrids.community_id",
+      id,
+    )
+    .order("at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ at: string }>();
+
   const health = derivePaymentHealth({
     payment_provider: community.payment_provider,
     payment_last_configured_at: community.payment_last_configured_at,
+    most_recent_failed_ipn_at: latestFailed?.at ?? null,
   });
 
   const relativeTime = community.payment_last_configured_at

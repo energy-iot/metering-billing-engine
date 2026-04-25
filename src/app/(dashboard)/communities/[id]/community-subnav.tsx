@@ -46,8 +46,10 @@ function tooltipFor(data: PaymentChipData): string | null {
         ? `Last save: ${data.relativeTime}. Run Save & test again to verify.`
         : "Run Save & test again to verify.";
     case "failing":
-      // Reserved for #121; derivePaymentHealth never returns this today.
-      return "Payment provider is failing. Reconfigure or test again.";
+      // Phase B (#157): emitted when the most recent IPN webhook for any
+      // microgrid in this community reported `to_status='failed'` within
+      // the last 24h.
+      return "Recent payment failed. Investigate the latest IPN delivery in payment_events.";
     case "not_configured":
       return "No payment provider connected yet.";
   }

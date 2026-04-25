@@ -69,6 +69,47 @@ export interface SubmitOrderResponse {
 }
 
 /**
+ * Response from /api/Transactions/GetTransactionStatus?orderTrackingId=<id>.
+ *
+ * Pesapal's verify endpoint returns a snapshot of the payment state, including
+ * a textual `payment_status_description` (PENDING / COMPLETED / FAILED /
+ * REVERSED / INVALID) and a numeric `status_code`. We rely on
+ * `payment_status_description` because it is the documented enum.
+ *
+ * Treated as untrusted by callers — the IPN route maps known descriptions to
+ * MBE state transitions and ignores everything else (no-op + ack 200).
+ */
+export interface GetTransactionStatusResponse {
+  payment_method?: string;
+  amount?: number;
+  created_date?: string;
+  confirmation_code?: string;
+  /**
+   * Pesapal's textual status. Documented values (subset we care about):
+   *   "COMPLETED" → MBE 'paid'
+   *   "FAILED"    → MBE 'failed'
+   *   "REVERSED"  → MBE 'refunded'
+   *   "PENDING"   → no-op
+   *   "INVALID"   → no-op
+   */
+  payment_status_description?: string;
+  description?: string;
+  message?: string;
+  payment_account?: string;
+  call_back_url?: string;
+  status_code?: number;
+  merchant_reference?: string;
+  payment_status_code?: string;
+  currency?: string;
+  /**
+   * Some Pesapal responses include `error` as a non-empty object on failure.
+   * Treat as opaque diagnostic.
+   */
+  error?: unknown;
+  status?: string;
+}
+
+/**
  * Response from /api/URLSetup/RegisterIPN.
  *
  * Pesapal returns the canonical record for the registered IPN, including the

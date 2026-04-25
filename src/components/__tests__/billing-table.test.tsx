@@ -30,11 +30,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Mock Supabase client (BillingTable calls createClient() on render)
+// Phase B (#157): also stubs `select().eq()` for the IPN-paid poller
+// (which fires every 30s; we never flush the timer in the test, but the
+// setup must accept the call shape if it does).
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     from: () => ({
       delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
       update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      select: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }),
     }),
   }),
 }));
@@ -143,6 +147,9 @@ const lineItems: BillingLineItem[] = [
     paid_at: null,
     paid_by_user_id: null,
     payment_notes: null,
+    pesapal_order_id: null,
+    payment_failed_at: null,
+    payment_refunded_at: null,
   },
   {
     id: "li-2",
@@ -162,6 +169,9 @@ const lineItems: BillingLineItem[] = [
     paid_at: null,
     paid_by_user_id: null,
     payment_notes: null,
+    pesapal_order_id: null,
+    payment_failed_at: null,
+    payment_refunded_at: null,
   },
   {
     id: "li-3",
@@ -181,6 +191,9 @@ const lineItems: BillingLineItem[] = [
     paid_at: null,
     paid_by_user_id: null,
     payment_notes: null,
+    pesapal_order_id: null,
+    payment_failed_at: null,
+    payment_refunded_at: null,
   },
 ];
 

@@ -32,7 +32,12 @@ import { Currency } from "@/components/format/currency";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type PaymentStatus = "unpaid" | "paid" | "failed" | "refunded";
+export type PaymentStatus =
+  | "unpaid"
+  | "paid"
+  | "failed"
+  | "refunded"
+  | "link_generated";
 
 export interface PaymentStatusControlLineItem {
   id: string;
@@ -327,6 +332,7 @@ function getDropdownItems(
   switch (status) {
     case "unpaid":
     case "failed":
+    case "link_generated":
       return [
         {
           key: "mark-paid",

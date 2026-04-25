@@ -1,6 +1,7 @@
 import { PesapalError } from "./errors";
 import type {
   AuthTokenResponse,
+  GetTransactionStatusResponse,
   IpnEntry,
   RegisterIpnResponse,
   SubmitOrderParams,
@@ -162,6 +163,53 @@ export class PesapalClient {
       );
     }
     return data;
+  }
+
+  /**
+   * Phase B: server-to-server verify of a pending order.
+   *
+   * Called by `/api/payments/ipn` to authoritatively resolve the payment
+   * status of an OrderTrackingId — Pesapal's webhook body is untrusted, so the
+   * webhook receiver re-fetches state via this endpoint before mutating any
+   * local state.
+   *
+   * Endpoint: GET /api/Transactions/GetTransactionStatus?orderTrackingId={id}
+   * with `Authorization: Bearer <token>`. The response includes the canonical
+   * `payment_status_description` (COMPLETED / FAILED / REVERSED / PENDING /
+   * INVALID).
+   *
+   * Errors:
+   *   - non-2xx → PESAPAL_HTTP_ERROR (502)
+   *   - network failure → PESAPAL_UNREACHABLE (503)
+   * Other downstream values (PENDING / INVALID / unknown) are NOT treated as
+   * errors here — they're returned to the caller, which decides the policy
+   * (the IPN route maps them to no-op).
+   */
+  async getTransactionStatus(
+    token: string,
+    orderTrackingId: string,
+  ): Promise<GetTransactionStatusResponse> {
+    if (!orderTrackingId || !orderTrackingId.trim()) {
+      throw new PesapalError(
+        "getTransactionStatus called without orderTrackingId",
+        "PESAPAL_HTTP_ERROR",
+        400,
+      );
+    }
+    const path = `/api/Transactions/GetTransactionStatus?orderTrackingId=${encodeURIComponent(
+      orderTrackingId,
+    )}`;
+    return this.pesapalFetch<GetTransactionStatusResponse>(
+      path,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      "PESAPAL_HTTP_ERROR",
+    );
   }
 
   /** Step 3: Submit order request. */

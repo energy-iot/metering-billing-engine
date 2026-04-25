@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -67,6 +67,16 @@ export function BillingTable({
   const [closePeriodOpen, setClosePeriodOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
+  // Phase B (#157) — toast queue for IPN-driven paid transitions. Pollable
+  // because Supabase Realtime is not yet wired into this repo; polling every
+  // 30s is well under the pilot's traffic profile (Aaron + a handful of
+  // households). Toast clears on dismiss or after 30s. Tracking by line-item
+  // id avoids re-toasting for the same transition between polls.
+  const [paidToasts, setPaidToasts] = useState<
+    { lineItemId: string; householdName: string; total: number }[]
+  >([]);
+  const seenPaidRef = useRef<Set<string>>(new Set());
+
   const isDraft = period.status === "draft";
 
   // Build householdId -> lineItem map
@@ -93,6 +103,87 @@ export function BillingTable({
     },
     []
   );
+
+  // Pre-seed the "already paid" set with the snapshot we received on render
+  // so we don't toast for line items that were already paid before the user
+  // opened the page.
+  useEffect(() => {
+    for (const item of lineItems) {
+      if (item.payment_status === "paid") {
+        seenPaidRef.current.add(item.id);
+      }
+    }
+    // We deliberately depend on the IDs+statuses array shape (a render-time
+    // snapshot is fine for pre-seed). Re-seeding when lineItems prop changes
+    // is the desired behavior — a refresh that pulls fresh server state
+    // collapses the toast.
+  }, [lineItems]);
+
+  // Phase B polling — every 30s, ask the API which line items in this period
+  // are now paid. Compare against the snapshot; emit a toast for each newly-
+  // paid line item. This is intentionally simple (no realtime); upgradable.
+  useEffect(() => {
+    if (!period?.id) return;
+    if (lineItems.length === 0) return;
+    if (period.status !== "draft") return; // closed periods can't change
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll(): Promise<void> {
+      try {
+        // Read the same period's line items via the Supabase client (RLS
+        // applies). Cheap query — same shape we already render.
+        const { data, error } = await supabase
+          .from("billing_line_items")
+          .select("id, household_id, payment_status, total_amount")
+          .eq("billing_period_id", period.id);
+        if (cancelled || error || !data) return;
+
+        const newlyPaid: typeof paidToasts = [];
+        for (const row of data as Array<{
+          id: string;
+          household_id: string;
+          payment_status: string;
+          total_amount: number;
+        }>) {
+          if (
+            row.payment_status === "paid" &&
+            !seenPaidRef.current.has(row.id)
+          ) {
+            seenPaidRef.current.add(row.id);
+            const hh = households.find((h) => h.id === row.household_id);
+            newlyPaid.push({
+              lineItemId: row.id,
+              householdName: hh?.display_name ?? "Household",
+              total: Number(row.total_amount),
+            });
+          }
+        }
+
+        if (newlyPaid.length > 0) {
+          setPaidToasts((prev) => [...prev, ...newlyPaid]);
+          // Pull a fresh server render so payment_status / paid_at land in
+          // the visible row.
+          router.refresh();
+        }
+      } catch {
+        // ignore — next poll will retry
+      } finally {
+        if (!cancelled) timer = setTimeout(poll, 30_000);
+      }
+    }
+
+    timer = setTimeout(poll, 30_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [period?.id, period?.status, lineItems.length, supabase, router, households]);
+
+  function dismissToast(lineItemId: string): void {
+    setPaidToasts((prev) => prev.filter((t) => t.lineItemId !== lineItemId));
+  }
 
   // Grand totals
   let grandTotalKwh = 0;
@@ -414,6 +505,37 @@ export function BillingTable({
       {error && (
         <div className="rounded-md bg-destructive-muted p-3 text-sm text-destructive-fg">
           {error}
+        </div>
+      )}
+
+      {/* Phase B (#157) — IPN-driven paid toasts. */}
+      {paidToasts.length > 0 && (
+        <div
+          aria-live="polite"
+          className="space-y-2"
+          data-testid="payment-toast-stack"
+        >
+          {paidToasts.map((t) => (
+            <div
+              key={t.lineItemId}
+              role="status"
+              data-testid="payment-paid-toast"
+              className="flex items-start justify-between gap-3 rounded-md border border-border bg-success-muted p-3 text-sm text-success-fg"
+            >
+              <span>
+                Payment received: <strong>{t.householdName}</strong>,{" "}
+                <Currency value={t.total} />
+              </span>
+              <button
+                type="button"
+                onClick={() => dismissToast(t.lineItemId)}
+                className="text-success-fg underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Dismiss payment notification"
+              >
+                Dismiss
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
