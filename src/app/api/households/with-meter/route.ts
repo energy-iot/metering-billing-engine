@@ -19,7 +19,7 @@ import { createClient } from "@/lib/supabase/server";
  *   microgrid_id:         string;
  *   display_name:         string;
  *   device_id:            string;
- *   primary_phone?:       string | null;
+ *   primary_phone:        string;            // required (#155)
  *   primary_email?:       string | null;
  *   address_line1?:       string | null;
  *   address_line2?:       string | null;
@@ -33,7 +33,7 @@ import { createClient } from "@/lib/supabase/server";
  *
  * Response:
  *   201 { household_id: string }
- *   400 invalid JSON
+ *   400 invalid JSON | household_phone_required (#155)
  *   403 RLS denial (42501) or "device does not belong" / "not a consumption_meter"
  *   409 partial unique index collision (meter already assigned)
  *   422 missing required field
@@ -74,6 +74,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // #155: primary_phone is required. Defense-in-depth — the RPC also raises
+  // 'household_phone_required', but rejecting at the route gives non-form
+  // callers (bulk imports, scripts, future API consumers) a structured 400
+  // before any DB round-trip.
+  const primary_phone =
+    typeof body.primary_phone === "string" ? body.primary_phone.trim() : "";
+  if (!primary_phone) {
+    return NextResponse.json(
+      { error: "household_phone_required", field: "primary_phone" },
+      { status: 400 }
+    );
+  }
+
   const optional = (v: unknown): string | null => {
     if (typeof v !== "string") return null;
     const t = v.trim();
@@ -86,7 +99,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     p_microgrid_id: microgrid_id,
     p_display_name: display_name,
     p_device_id: device_id,
-    p_primary_phone: optional(body.primary_phone) ?? undefined,
+    p_primary_phone: primary_phone,
     p_primary_email: optional(body.primary_email) ?? undefined,
     p_address_line1: optional(body.address_line1) ?? undefined,
     p_address_line2: optional(body.address_line2) ?? undefined,
@@ -113,6 +126,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // RPC safety guards raise generic EXCEPTION (no SQLSTATE) → map known
     // substrings to 403. These are client-side failures, not server errors.
     const msg = error.message || "";
+    if (msg.includes("household_phone_required")) {
+      // Should be unreachable — the route's own guard rejects empty phones
+      // first. Kept for defense-in-depth when the RPC is called directly.
+      return NextResponse.json(
+        { error: "household_phone_required", field: "primary_phone" },
+        { status: 400 }
+      );
+    }
     if (msg.includes("does not belong to microgrid")) {
       return NextResponse.json(
         {

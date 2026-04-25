@@ -78,6 +78,16 @@ function fillDisplayName(value: string) {
   fireEvent.change(input, { target: { value } });
 }
 
+/**
+ * #155 — fill the phone field. Phone is required to advance past step 1.
+ * Tests that need to reach step 2+ must also call this helper after
+ * fillDisplayName().
+ */
+function fillPhone(value: string) {
+  const input = screen.getByLabelText(/Primary phone/i) as HTMLInputElement;
+  fireEvent.change(input, { target: { value } });
+}
+
 describe("HouseholdWizard", () => {
   let fetchMock: ReturnType<typeof vi.spyOn>;
 
@@ -99,6 +109,7 @@ describe("HouseholdWizard", () => {
       // Step 1
       expect(screen.getByLabelText(/Display name/i)).toBeDefined();
       fillDisplayName("Block A, Unit 1");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       // Step 2
@@ -131,7 +142,44 @@ describe("HouseholdWizard", () => {
       const next = screen.getByRole("button", { name: /^Next$/ });
       expect(next).toHaveProperty("disabled", true);
       fillDisplayName("Some household");
+      // Phone is also required (#155) — Next stays disabled until phone is set.
+      expect(next).toHaveProperty("disabled", true);
+      const phone = screen.getByLabelText(
+        /Primary phone/i
+      ) as HTMLInputElement;
+      fireEvent.change(phone, { target: { value: "+256 700" } });
       expect(next).toHaveProperty("disabled", false);
+    });
+
+    it("(#155) blank phone shows inline error AND blocks Next", () => {
+      renderWizard();
+      // Step 1 is visited from open → inline error visible immediately.
+      expect(
+        screen.getByText(/Phone is required for payment links/i)
+      ).toBeTruthy();
+
+      fillDisplayName("Block A, Unit 1");
+      // display_name set, phone still blank → Next disabled
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", true);
+
+      // Fill phone → error clears and Next enables
+      const phone = screen.getByLabelText(
+        /Primary phone/i
+      ) as HTMLInputElement;
+      fireEvent.change(phone, { target: { value: "+256 700 000 000" } });
+      expect(
+        screen.queryByText(/Phone is required for payment links/i)
+      ).toBeNull();
+      expect(next).toHaveProperty("disabled", false);
+    });
+
+    it("(#155) phone input has aria-required", () => {
+      renderWizard();
+      const phone = screen.getByLabelText(
+        /Primary phone/i
+      ) as HTMLInputElement;
+      expect(phone.getAttribute("aria-required")).toBe("true");
     });
   });
 
@@ -150,6 +198,7 @@ describe("HouseholdWizard", () => {
     it("focuses address_line1 input on step 2", async () => {
       renderWizard();
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       await waitFor(() => {
@@ -161,6 +210,7 @@ describe("HouseholdWizard", () => {
     it("focuses first meter radio on step 3", async () => {
       renderWizard();
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
       await waitFor(() =>
         expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
@@ -181,6 +231,7 @@ describe("HouseholdWizard", () => {
     it("renders one radio per available meter", async () => {
       renderWizard();
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
       await waitFor(() =>
         expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
@@ -206,6 +257,7 @@ describe("HouseholdWizard", () => {
     it("renders the warn Banner and Next is disabled when no meters exist", async () => {
       renderWizard({ availableMeters: [] });
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
       await waitFor(() =>
         expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
@@ -325,7 +377,7 @@ describe("HouseholdWizard", () => {
       });
     });
 
-    it("sends null for optional fields left empty", async () => {
+    it("sends null for optional fields left empty (phone is required #155)", async () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         status: 201,
@@ -334,6 +386,8 @@ describe("HouseholdWizard", () => {
 
       renderWizard();
       fillDisplayName("Minimal Household");
+      // Phone is required (#155) — set it; everything else stays empty.
+      fillPhone("+256700000000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       await waitFor(() =>
@@ -361,7 +415,7 @@ describe("HouseholdWizard", () => {
       const body = JSON.parse(init?.body as string);
       expect(body).toMatchObject({
         display_name: "Minimal Household",
-        primary_phone: null,
+        primary_phone: "+256700000000",
         primary_email: null,
         address_line1: null,
         address_line2: null,
@@ -382,6 +436,7 @@ describe("HouseholdWizard", () => {
     it("renders City, Region/state, Country, Postal code, Geography notes in step 2", async () => {
       renderWizard();
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       await waitFor(() =>
@@ -404,6 +459,7 @@ describe("HouseholdWizard", () => {
 
       // Step 1
       fillDisplayName("Household X");
+      fillPhone("+256 700 000 000");
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
       // Step 2 — fill city + country

@@ -113,7 +113,7 @@ const HOUSEHOLD_BETA: Household = {
   id: "hh-2",
   microgrid_id: MICROGRID_ID,
   display_name: "Household Beta",
-  primary_phone: null,
+  primary_phone: "+256700000002",
   primary_email: "beta@example.com",
   address_line1: null,
   address_line2: null,
