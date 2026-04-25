@@ -8,10 +8,62 @@ import type { Device, Household } from "@/lib/types/domain";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 
+/**
+ * An enriched device option for the billing-device <select>.
+ * Carries edge_name (for disambiguation) and, when the device is already
+ * the primary_consumption_meter of another household, the linked household
+ * name so the operator knows they can't select it here.
+ */
+export type BillingDeviceOption = {
+  id: string;
+  name: string;
+  device_type: string;
+  edge_id: string;
+  edge_name: string;
+  /** Set when this device is already assigned as primary_consumption_meter
+   *  on a DIFFERENT household. The option renders disabled with a suffix. */
+  linkedToHouseholdName?: string;
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Group BillingDeviceOptions by edge_name, sorted alphabetically by edge name.
+ * Within each group: available (unlocked) devices first (A-Z), then
+ * linked-elsewhere devices (A-Z, disabled).
+ */
+function groupByEdge(
+  options: BillingDeviceOption[]
+): Array<{ edgeName: string; items: BillingDeviceOption[] }> {
+  const map = new Map<string, BillingDeviceOption[]>();
+  for (const opt of options) {
+    const key = opt.edge_name || "(unknown edge)";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(opt);
+  }
+  const groups = Array.from(map.entries()).map(([edgeName, items]) => ({
+    edgeName,
+    items,
+  }));
+  // Sort groups A-Z by edge name
+  groups.sort((a, b) => a.edgeName.localeCompare(b.edgeName));
+  // Within each group: available first (A-Z), linked-elsewhere last (A-Z)
+  for (const g of groups) {
+    g.items.sort((a, b) => {
+      const aLinked = Boolean(a.linkedToHouseholdName);
+      const bLinked = Boolean(b.linkedToHouseholdName);
+      if (aLinked !== bLinked) return aLinked ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  return groups;
+}
+
 export function HouseholdTable({
   microgridId,
   households,
   devices,
+  billingDevices,
   primaryDeviceAssignments,
   canManage = false,
   onAdd,
@@ -19,6 +71,14 @@ export function HouseholdTable({
   microgridId: string;
   households: Household[];
   devices: Device[];
+  /**
+   * Enriched device list for the billing-device <select>. Each entry carries
+   * edge_name (for <optgroup> grouping and label disambiguation) and an
+   * optional linkedToHouseholdName (to mark already-assigned devices as
+   * disabled). When omitted the select falls back to the flat `devices` prop
+   * with no grouping (backward-compatible).
+   */
+  billingDevices?: BillingDeviceOption[];
   /** Map of household_id → device_id for primary_consumption_meter rows */
   primaryDeviceAssignments: Record<string, string>;
   /** Whether the current user can manage households. Defaults to false. */
@@ -56,7 +116,10 @@ export function HouseholdTable({
 
   function getDeviceName(deviceId: string | undefined): string {
     if (!deviceId) return "Unassigned";
-    const device = devices.find((d) => d.id === deviceId);
+    // Prefer billingDevices (enriched) if available, fall back to devices
+    const device =
+      billingDevices?.find((d) => d.id === deviceId) ??
+      devices.find((d) => d.id === deviceId);
     return device?.name ?? "Unknown device";
   }
 
@@ -406,11 +469,46 @@ export function HouseholdTable({
                             className="rounded-md border border-border px-2 py-1 text-sm text-foreground focus:outline-none"
                           >
                             <option value="">Unassigned</option>
-                            {devices.map((device) => (
-                              <option key={device.id} value={device.id}>
-                                [{device.device_type}] {device.name}
-                              </option>
-                            ))}
+                            {billingDevices
+                              ? // Enriched path: group by edge with <optgroup>
+                                groupByEdge(billingDevices).map((group) => (
+                                  <optgroup
+                                    key={group.edgeName}
+                                    label={group.edgeName}
+                                  >
+                                    {group.items.map((device) => {
+                                      // A device is "linked elsewhere" only when
+                                      // it's assigned to a DIFFERENT household.
+                                      // When it's this row's own assignment it
+                                      // should appear selected and enabled.
+                                      const isOwnAssignment =
+                                        localAssignments[household.id] ===
+                                        device.id;
+                                      const linkedElsewhere =
+                                        !isOwnAssignment &&
+                                        Boolean(device.linkedToHouseholdName);
+                                      return (
+                                        <option
+                                          key={device.id}
+                                          value={device.id}
+                                          disabled={linkedElsewhere}
+                                        >
+                                          [{device.device_type}] {device.name} ·{" "}
+                                          {device.edge_name}
+                                          {linkedElsewhere
+                                            ? ` (linked: ${device.linkedToHouseholdName})`
+                                            : ""}
+                                        </option>
+                                      );
+                                    })}
+                                  </optgroup>
+                                ))
+                              : // Fallback: flat list (no edge context)
+                                devices.map((device) => (
+                                  <option key={device.id} value={device.id}>
+                                    [{device.device_type}] {device.name}
+                                  </option>
+                                ))}
                           </select>
                           <p className="mt-1 text-xs text-muted-foreground">
                             Assign a consumption_meter device to bill this household.

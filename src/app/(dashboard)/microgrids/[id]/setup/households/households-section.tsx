@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { Device, Household } from "@/lib/types/domain";
-import { HouseholdTable } from "@/components/HouseholdTable";
+import { HouseholdTable, type BillingDeviceOption } from "@/components/HouseholdTable";
 import {
   HouseholdWizard,
   type AvailableMeter,
@@ -25,6 +25,8 @@ type Props = {
   devices: Device[];
   primaryDeviceAssignments: Record<string, string>;
   availableMeters: AvailableMeter[];
+  /** Enriched device list for the per-row billing-device <select>. */
+  billingDevices?: BillingDeviceOption[];
   canManage?: boolean;
 };
 
@@ -34,6 +36,7 @@ export function HouseholdsSection({
   devices,
   primaryDeviceAssignments,
   availableMeters,
+  billingDevices,
   canManage = false,
 }: Props) {
   const [wizardOpen, setWizardOpen] = React.useState(false);
@@ -70,6 +73,7 @@ export function HouseholdsSection({
         microgridId={microgridId}
         households={households}
         devices={devices}
+        billingDevices={billingDevices}
         primaryDeviceAssignments={primaryDeviceAssignments}
         canManage={canManage}
         onAdd={() => setWizardOpen(true)}

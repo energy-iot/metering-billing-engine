@@ -5,6 +5,7 @@ import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import type { AvailableMeter } from "@/components/forms/HouseholdWizard";
+import type { BillingDeviceOption } from "@/components/HouseholdTable";
 
 // Setup > Households (D2 / #53, upgraded in UX2 / #74).
 // Lists households for this microgrid and exposes the 4-step Add-Household
@@ -112,6 +113,32 @@ export default async function SetupHouseholdsPage({
       return e !== 0 ? e : a.name.localeCompare(b.name);
     });
 
+  // Build a map of household_id → display_name so we can resolve linked-to
+  // household names for the billing-device <select>.
+  const householdNameById = new Map<string, string>(
+    (households ?? []).map((h) => [h.id, h.display_name])
+  );
+  // device_id → household display_name for devices already assigned somewhere
+  const deviceLinkedHouseholdName = new Map<string, string>(
+    (primaryAssignments ?? []).map((r) => [
+      r.device_id,
+      householdNameById.get(r.household_id) ?? r.household_id,
+    ])
+  );
+
+  // BillingDeviceOptions: ALL devices on this microgrid (not just unassigned),
+  // enriched with edge_name and (when assigned elsewhere) linkedToHouseholdName.
+  // HouseholdTable is responsible for suppressing the "linked" label on the
+  // device that is the CURRENT row's own assignment.
+  const billingDevices: BillingDeviceOption[] = (devices ?? []).map((d) => ({
+    id: d.id,
+    name: d.name,
+    device_type: d.device_type,
+    edge_id: d.edge_id,
+    edge_name: edgeNameById.get(d.edge_id) ?? "",
+    linkedToHouseholdName: deviceLinkedHouseholdName.get(d.id),
+  }));
+
   return (
     <>
       <HierarchyNav levels={levels} className="mb-4" />
@@ -121,6 +148,7 @@ export default async function SetupHouseholdsPage({
         devices={devices ?? []}
         primaryDeviceAssignments={primaryDeviceAssignments}
         availableMeters={availableMeters}
+        billingDevices={billingDevices}
         canManage={canManage}
       />
     </>
