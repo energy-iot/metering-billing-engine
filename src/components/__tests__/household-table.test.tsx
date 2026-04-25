@@ -17,7 +17,7 @@
  *     (i) Click-to-edit chip: unassigned → warn tone, opens dialog
  *     (j) Kebab menu present per row when canManage
  *     (k) Kebab hidden when canManage=false (View link instead)
- *     (l) Address summary uses address_line1 · unit_label
+ *     (l) Address summary uses address_city · address_region · address_country (#146)
  */
 
 import * as React from "react";
@@ -101,6 +101,11 @@ const HOUSEHOLD: Household = {
   address_line1: "Plot 14",
   address_line2: null,
   unit_label: "Unit 1",
+  address_city: "Kampala",
+  address_region: "Central",
+  address_country: "Uganda",
+  address_postal_code: null,
+  geography_notes: null,
   created_at: "2026-01-01T00:00:00Z",
 } as Household;
 
@@ -113,6 +118,11 @@ const HOUSEHOLD_BETA: Household = {
   address_line1: null,
   address_line2: null,
   unit_label: null,
+  address_city: null,
+  address_region: null,
+  address_country: null,
+  address_postal_code: null,
+  geography_notes: null,
   created_at: "2026-01-02T00:00:00Z",
 } as Household;
 
@@ -444,7 +454,7 @@ describe("HouseholdTable — refactor surfaces (#145)", () => {
     ).toBeNull();
   });
 
-  it("(l) address summary uses address_line1 · unit_label", () => {
+  it("(l) address summary uses address_city · address_region · address_country (#146)", () => {
     render(
       <HouseholdTable
         microgridId={MICROGRID_ID}
@@ -455,7 +465,8 @@ describe("HouseholdTable — refactor surfaces (#145)", () => {
         canManage={true}
       />
     );
-    expect(screen.getByText(/Plot 14 · Unit 1/)).toBeTruthy();
+    // HOUSEHOLD has address_city="Kampala", address_region="Central", address_country="Uganda"
+    expect(screen.getByText(/Kampala · Central · Uganda/)).toBeTruthy();
   });
 
   it("(l) address summary renders '—' when blank", () => {

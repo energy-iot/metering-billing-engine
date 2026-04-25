@@ -180,7 +180,9 @@ export function HouseholdTable({
   }
 
   function addressSummary(h: Household): string {
-    const parts = [h.address_line1, h.unit_label].filter(Boolean) as string[];
+    const parts = [h.address_city, h.address_region, h.address_country].filter(
+      Boolean
+    ) as string[];
     return parts.length > 0 ? parts.join(" · ") : "—";
   }
 

@@ -64,6 +64,11 @@ type FormState = {
   address_line1: string;
   address_line2: string;
   unit_label: string;
+  address_city: string;
+  address_region: string;
+  address_country: string;
+  address_postal_code: string;
+  geography_notes: string;
   device_id: string | null;
 };
 
@@ -75,6 +80,11 @@ function initialState(h: Household, deviceId: string | null): FormState {
     address_line1: h.address_line1 ?? "",
     address_line2: h.address_line2 ?? "",
     unit_label: h.unit_label ?? "",
+    address_city: h.address_city ?? "",
+    address_region: h.address_region ?? "",
+    address_country: h.address_country ?? "",
+    address_postal_code: h.address_postal_code ?? "",
+    geography_notes: h.geography_notes ?? "",
     device_id: deviceId,
   };
 }
@@ -87,6 +97,11 @@ function isDirty(cur: FormState, init: FormState): boolean {
     cur.address_line1 !== init.address_line1 ||
     cur.address_line2 !== init.address_line2 ||
     cur.unit_label !== init.unit_label ||
+    cur.address_city !== init.address_city ||
+    cur.address_region !== init.address_region ||
+    cur.address_country !== init.address_country ||
+    cur.address_postal_code !== init.address_postal_code ||
+    cur.geography_notes !== init.geography_notes ||
     cur.device_id !== init.device_id
   );
 }
@@ -119,6 +134,26 @@ function buildDiff(
   if (cur.unit_label !== init.unit_label) {
     const v = cur.unit_label.trim();
     out.unit_label = v.length > 0 ? v : null;
+  }
+  if (cur.address_city !== init.address_city) {
+    const v = cur.address_city.trim();
+    out.address_city = v.length > 0 ? v : null;
+  }
+  if (cur.address_region !== init.address_region) {
+    const v = cur.address_region.trim();
+    out.address_region = v.length > 0 ? v : null;
+  }
+  if (cur.address_country !== init.address_country) {
+    const v = cur.address_country.trim();
+    out.address_country = v.length > 0 ? v : null;
+  }
+  if (cur.address_postal_code !== init.address_postal_code) {
+    const v = cur.address_postal_code.trim();
+    out.address_postal_code = v.length > 0 ? v : null;
+  }
+  if (cur.geography_notes !== init.geography_notes) {
+    const v = cur.geography_notes.trim();
+    out.geography_notes = v.length > 0 ? v : null;
   }
   if (cur.device_id !== init.device_id) {
     out.device_id = cur.device_id;
@@ -476,10 +511,16 @@ function Field({
 }
 
 /**
- * AddressSubsection — extracted so #146's address widening
- * (address_city, address_region, address_country, address_postal_code,
- * geography_notes) can be slotted in here without touching the parent
- * form skeleton or the diff machinery.
+ * AddressSubsection — widened in #146 to include address_city,
+ * address_region, address_country, address_postal_code, geography_notes.
+ *
+ * Layout (per Designer mockup 02-household-edit-dialog.tsx):
+ *   1. Address line 1 — full width
+ *   2. Address line 2 — full width
+ *   3. City + Region/state — 2-col pair
+ *   4. Country + Postal code — 2-col pair
+ *   5. Geography notes — full-width textarea, rows=2, last
+ *   Unit label — kept in its pre-existing slot (separate row with line 2).
  */
 function AddressSubsection({
   state,
@@ -514,20 +555,67 @@ function AddressSubsection({
           value={state.address_line1}
           onChange={(v) => update("address_line1", v)}
         />
+        <Field
+          id="hh-edit-line2"
+          label="Address line 2"
+          value={state.address_line2}
+          onChange={(v) => update("address_line2", v)}
+        />
         <Pair>
           <Field
-            id="hh-edit-line2"
-            label="Address line 2"
-            value={state.address_line2}
-            onChange={(v) => update("address_line2", v)}
+            id="hh-edit-city"
+            label="City"
+            value={state.address_city}
+            onChange={(v) => update("address_city", v)}
+            placeholder="Kampala"
           />
           <Field
-            id="hh-edit-unit-label"
-            label="Unit label"
-            value={state.unit_label}
-            onChange={(v) => update("unit_label", v)}
+            id="hh-edit-region"
+            label="Region / state"
+            value={state.address_region}
+            onChange={(v) => update("address_region", v)}
+            placeholder="Central Region"
           />
         </Pair>
+        <Pair>
+          <Field
+            id="hh-edit-country"
+            label="Country"
+            value={state.address_country}
+            onChange={(v) => update("address_country", v)}
+            placeholder="Uganda"
+          />
+          <Field
+            id="hh-edit-postal"
+            label="Postal code"
+            value={state.address_postal_code}
+            onChange={(v) => update("address_postal_code", v)}
+            placeholder="00256"
+          />
+        </Pair>
+        <div>
+          <label
+            htmlFor="hh-edit-geography-notes"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Geography notes
+          </label>
+          <textarea
+            id="hh-edit-geography-notes"
+            rows={2}
+            value={state.geography_notes}
+            onChange={(e) => update("geography_notes", e.target.value)}
+            placeholder="Directions, landmarks, or access notes"
+            disabled={disabled}
+            className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </div>
+        <Field
+          id="hh-edit-unit-label"
+          label="Unit label"
+          value={state.unit_label}
+          onChange={(v) => update("unit_label", v)}
+        />
       </fieldset>
     </details>
   );
