@@ -95,6 +95,10 @@ export default async function SetupHouseholdsPage({
     (edgesForMg ?? []).map((e) => [e.id, e.name ?? ""])
   );
 
+  // The wizard call site still filters out devices that are already linked
+  // (StepMeter expects only assignable meters). DeviceSelect (used by the
+  // Household Edit dialog from #145) consumes the *un-filtered* list so it
+  // can grey already-assigned devices inline.
   const availableMeters: AvailableMeter[] = (devices ?? [])
     .filter(
       (d) =>
@@ -105,7 +109,11 @@ export default async function SetupHouseholdsPage({
       id: d.id,
       name: d.name,
       device_type: d.device_type,
+      edge_id: d.edge_id,
       edge_name: edgeNameById.get(d.edge_id) ?? "",
+      // Always null in the wizard path — the wizard pre-filters linked
+      // devices out so this field has no caller-visible effect here.
+      linked_household_name: null,
     }))
     // Sort by (edge_name, device name) as per the spec query.
     .sort((a, b) => {
