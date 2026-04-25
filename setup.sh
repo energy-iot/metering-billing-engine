@@ -233,6 +233,21 @@ elif [ "$MODE" = "local" ]; then
     log "Supabase already configured. Skipping db reset (use --force to reset database)."
   else
     generate_seed_migration
+
+    # Opt the local database into the dev-DEK fallback so migration 00025's
+    # hardened bootstrap permits a random DEK here. `ALTER DATABASE ... SET`
+    # makes the GUC a session-default for every subsequent connection,
+    # including the migration runner spawned by `supabase db reset`.
+    # See supabase/migrations/00025_dek_bootstrap_hardening.sql header.
+    log "Enabling local dev DEK fallback (app.allow_dev_dek=1)..."
+    LOCAL_DB_URL="$(supabase status -o env 2>/dev/null | awk -F= '/^DB_URL=/ {print substr($0, index($0,"=")+1)}')"
+    if [ -z "$LOCAL_DB_URL" ]; then
+      err "Could not resolve local DB_URL from 'supabase status'. Is Supabase running?"
+      exit 1
+    fi
+    psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 \
+      -c "ALTER DATABASE postgres SET app.allow_dev_dek = '1';" >/dev/null
+
     log "Applying migrations and seed data..."
     supabase db reset --yes
   fi
