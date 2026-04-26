@@ -7,6 +7,7 @@ import {
   currentUserCanAccessOrg,
 } from "@/lib/auth/access";
 import { SUPER_ADMIN, ORG_MANAGER } from "@/lib/roles";
+import { buildInviteDataPayload } from "@/lib/auth/invite-data-payload";
 import type { UserRole } from "@/lib/types/domain";
 
 /**
@@ -141,9 +142,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   // ── Step 2: invite via GoTrue admin API ──────────────────────────────
+  //
+  // The `data` payload (UX5b / #184) is forwarded to the email template
+  // so the rendered invitation includes the inviter name, org name, and
+  // a humanized role label. GoTrue persists this on
+  // auth.users.raw_user_meta_data — see invite-data-payload.ts.
+  const {
+    data: { user: caller },
+  } = await userClient.auth.getUser();
+  if (!caller) {
+    // Should not happen — RLS in the perm checks above already requires
+    // an authenticated session — but guard for type-narrowing.
+    return NextResponse.json(
+      { error: "Authentication required." },
+      { status: 401 }
+    );
+  }
+
+  const inviteData = await buildInviteDataPayload({
+    caller,
+    targetRole: role,
+    targetOrgId: scopeId,
+    supabase: userClient,
+  });
+
   const svc = createServiceClient();
 
-  const inviteRes = await svc.auth.admin.inviteUserByEmail(email);
+  const inviteRes = await svc.auth.admin.inviteUserByEmail(email, {
+    data: inviteData,
+  });
   let targetUserId: string | null = null;
 
   if (inviteRes.error) {

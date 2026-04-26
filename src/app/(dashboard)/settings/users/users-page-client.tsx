@@ -3,18 +3,24 @@
 /**
  * UsersPageClient — client component for Settings > Users.
  *
- * Holds the Invite + Edit dialog state and the recent-invite success
- * banner. Receives pre-resolved row data + caller context from the
- * server component parent.
+ * Holds the Invite + Edit dialog state and the recent-action banner.
+ * Receives pre-resolved row data + caller context from the server
+ * component parent.
+ *
+ * UX5b (#184): added a per-row "Resend" action and a discriminated
+ * `feedback` state replacing the prior `recentInvite: string | null`,
+ * so the banner can render with the correct tone for invite-success /
+ * resend-success / rate-limit / error.
  */
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Banner } from "@/components/ui/banner";
 import {
   InviteUserDialog,
   type OrgOption,
 } from "@/components/users/InviteUserDialog";
 import { EditUserDialog } from "@/components/users/EditUserDialog";
-import { SUPER_ADMIN } from "@/lib/roles";
+import { SUPER_ADMIN, ORG_MANAGER, SCOPE_ORG } from "@/lib/roles";
 import type { UserDirectoryRow, UserRole } from "@/lib/types/domain";
 
 export interface UsersPageClientProps {
@@ -25,12 +31,29 @@ export interface UsersPageClientProps {
   currentUserId: string;
 }
 
+/**
+ * Discriminated union for the page-level banner. The `kind` keeps the
+ * UX-tone-to-state mapping in a single place — see render block.
+ */
+type PageFeedback =
+  | { kind: "invite"; email: string }
+  | { kind: "resend"; email: string }
+  | { kind: "rate-limit"; email: string }
+  | { kind: "error"; email: string; message: string };
+
 export function UsersPageClient(props: UsersPageClientProps) {
+  const router = useRouter();
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<UserDirectoryRow | null>(
     null
   );
-  const [recentInvite, setRecentInvite] = React.useState<string | null>(null);
+  const [feedback, setFeedback] = React.useState<PageFeedback | null>(null);
+
+  // Per-row in-flight resend state. A Set keeps the membership check
+  // O(1) and avoids per-row component state explosion.
+  const [resendingIds, setResendingIds] = React.useState<Set<string>>(
+    () => new Set()
+  );
 
   const orgNameById = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -55,6 +78,31 @@ export function UsersPageClient(props: UsersPageClientProps) {
     return false;
   }
 
+  /**
+   * Mirror the resend-route permission rule (AC1):
+   *   - super_admin: always allowed.
+   *   - org_manager: only when the row is org_manager-scoped to an
+   *     org the caller can access. Orphans (role === null) are hidden
+   *     for org_managers — they would 403 at the route.
+   *
+   * Hidden (not disabled) on Active rows so the action surface only
+   * shows up where it is meaningful.
+   */
+  function canResendFor(row: UserDirectoryRow): boolean {
+    if (!row.user_id) return false;
+    if (row.email_confirmed_at != null) return false; // Active
+    if (props.callerRole === SUPER_ADMIN) return true;
+    if (
+      row.role === ORG_MANAGER &&
+      row.scope_type === SCOPE_ORG &&
+      row.scope_id != null &&
+      props.callerOrgIds.includes(row.scope_id)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   function roleLabel(role: UserRole | null): string {
     if (role === "super_admin") return "Super admin";
     if (role === "org_manager") return "Org manager";
@@ -71,6 +119,53 @@ export function UsersPageClient(props: UsersPageClientProps) {
     return row.email_confirmed_at == null ? "Invited" : "Active";
   }
 
+  async function handleResendRow(row: UserDirectoryRow) {
+    if (!row.user_id) return;
+    const userId = row.user_id;
+    const email = row.email ?? "";
+    setFeedback(null);
+    setResendingIds((prev) => {
+      const next = new Set(prev);
+      next.add(userId);
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/users/${userId}/resend-invite`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setFeedback({ kind: "resend", email });
+        router.refresh();
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
+      if (res.status === 429 || data.code === "rate_limited") {
+        setFeedback({ kind: "rate-limit", email });
+        return;
+      }
+      setFeedback({
+        kind: "error",
+        email,
+        message: data.error ?? "Could not resend invitation.",
+      });
+    } catch {
+      setFeedback({
+        kind: "error",
+        email,
+        message: "Network error. Please retry.",
+      });
+    } finally {
+      setResendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(userId);
+        return next;
+      });
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -83,9 +178,24 @@ export function UsersPageClient(props: UsersPageClientProps) {
         </button>
       </div>
 
-      {recentInvite && (
+      {feedback?.kind === "invite" && (
         <Banner tone="success" title="Invitation sent">
-          Invitation sent to {recentInvite}.
+          Invitation sent to {feedback.email}.
+        </Banner>
+      )}
+      {feedback?.kind === "resend" && (
+        <Banner tone="success" title="Invitation resent">
+          Invitation resent to {feedback.email}.
+        </Banner>
+      )}
+      {feedback?.kind === "rate-limit" && (
+        <Banner tone="warn" title="Rate limited">
+          Too many invitations sent recently. Try again in a few minutes.
+        </Banner>
+      )}
+      {feedback?.kind === "error" && (
+        <Banner tone="destructive" title="Could not resend invitation">
+          {feedback.message}
         </Banner>
       )}
 
@@ -131,42 +241,58 @@ export function UsersPageClient(props: UsersPageClientProps) {
               </tr>
             </thead>
             <tbody>
-              {props.rows.map((row, idx) => (
-                <tr
-                  key={row.user_id ?? row.email ?? `row-${idx}`}
-                  className="border-t border-border"
-                >
-                  <td className="px-4 py-2 text-foreground">
-                    {row.first_name ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {row.last_name ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {row.email ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {row.phone ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {roleLabel(row.role)}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {scopeLabel(row)}
-                  </td>
-                  <td className="px-4 py-2 text-foreground">
-                    {statusLabel(row)}
-                  </td>
-                  <td className="px-4 py-2 text-right">
-                    <button
-                      onClick={() => setEditTarget(row)}
-                      className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {props.rows.map((row, idx) => {
+                const showResend = canResendFor(row);
+                const isResending =
+                  row.user_id != null && resendingIds.has(row.user_id);
+                return (
+                  <tr
+                    key={row.user_id ?? row.email ?? `row-${idx}`}
+                    className="border-t border-border"
+                  >
+                    <td className="px-4 py-2 text-foreground">
+                      {row.first_name ?? "—"}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {row.last_name ?? "—"}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {row.email ?? "—"}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {row.phone ?? "—"}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {roleLabel(row.role)}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {scopeLabel(row)}
+                    </td>
+                    <td className="px-4 py-2 text-foreground">
+                      {statusLabel(row)}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <div className="inline-flex items-center gap-2">
+                        {showResend && (
+                          <button
+                            onClick={() => handleResendRow(row)}
+                            disabled={isResending}
+                            className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {isResending ? "Sending…" : "Resend"}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setEditTarget(row)}
+                          className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -178,7 +304,7 @@ export function UsersPageClient(props: UsersPageClientProps) {
         callerRole={props.callerRole}
         orgs={props.orgs}
         callerOrgIds={props.callerOrgIds}
-        onSuccess={({ email }) => setRecentInvite(email)}
+        onSuccess={({ email }) => setFeedback({ kind: "invite", email })}
       />
 
       {editTarget && editTarget.user_id && (
@@ -195,6 +321,7 @@ export function UsersPageClient(props: UsersPageClientProps) {
             phone: editTarget.phone,
             role: editTarget.role,
             scope_id: editTarget.scope_id,
+            email_confirmed_at: editTarget.email_confirmed_at,
           }}
           callerRole={props.callerRole}
           canChangeRole={canChangeRoleAny}
