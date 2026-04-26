@@ -24,6 +24,13 @@
  * Read-only fallback: when `editable={false}`, renders a plain right-
  * aligned span matching the copy-cell visual style. This keeps metered-row
  * cells visually identical to the rest of the BillingTable.
+ *
+ * BC3 (#175 AC1): The cell's `editable` prop is computed by `BillingTable`
+ * as `(item.device_id === null || switchedToManual.has(item.id)) && isDraft`.
+ * Closed periods are EXCLUDED — the PATCH route hard-rejects with 409
+ * `period_closed`, and closed-period manual edits go through
+ * `<RegenerateRowDialog mode="manual">` which uses /api/billing/generate.
+ * The cell's PATCH call surface is unchanged.
  */
 
 import * as React from "react";

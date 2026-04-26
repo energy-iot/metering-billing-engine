@@ -22,6 +22,20 @@ import {
   type RowBannerEntry,
 } from "@/components/billing/row-banner-stack";
 import { ManualUsageCell } from "@/components/billing/manual-usage-cell";
+import {
+  RegenerateRowDialog,
+  type RegenerateRowMode,
+} from "@/components/billing/regenerate-row-dialog";
+import {
+  RegenerateMultiDialog,
+  type ParentBannerInput,
+} from "@/components/billing/regenerate-multi-dialog";
+import { PreflightPanel } from "@/components/billing/preflight-panel";
+import { StickySelectionBar } from "@/components/billing/sticky-selection-bar";
+import {
+  buildMultiSelectColumn,
+  HeaderCheckbox,
+} from "@/components/billing/multi-select-column";
 import type {
   BillingLineItem,
   BillingPeriod,
@@ -76,7 +90,10 @@ export function BillingTable({
   const supabase = createClient();
   const { locale, currency: localeCurrency } = useLocale();
 
-  const [generating, setGenerating] = useState(false);
+  // BC3 (#175 AC5): `generating` flag no longer toggled here — the
+  // pre-flight panel owns its own submit state. Kept for the disabled-
+  // state semantics on the header buttons.
+  const [generating] = useState(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +142,69 @@ export function BillingTable({
     },
     [lineItems, households],
   );
+
+  // BC3 (#175 AC1) — per-line-item flag for "Switch to manual entry…" on
+  // a DRAFT-period metered row. While set, the cell becomes editable so
+  // the operator can save the manual reading without leaving the table.
+  // Cleared after a successful manual save (the row's prop renders with
+  // reading_source='manual') OR after a successful regenerate that touches
+  // the row OR on unmount (component re-mount).
+  const [switchedToManual, setSwitchedToManual] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const clearSwitchedToManual = React.useCallback((lineItemId: string) => {
+    setSwitchedToManual((prev) => {
+      if (!prev.has(lineItemId)) return prev;
+      const next = new Set(prev);
+      next.delete(lineItemId);
+      return next;
+    });
+  }, []);
+
+  // BC3 (#175 AC3) — multi-select state. Keyed by household id so the
+  // selection survives a server round-trip even if line item ids change.
+  // Cleared on successful regenerate (any path), Esc inside the table,
+  // and "Clear selection" in the sticky bar.
+  const [selectedHouseholdIds, setSelectedHouseholdIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  // BC3 (#175 AC5) — pre-flight panel open/close.
+  const [preflightOpen, setPreflightOpen] = useState(false);
+
+  // BC3 (#175 AC2) — per-row regenerate dialog state.
+  const [regenerateRowDialog, setRegenerateRowDialog] = useState<
+    | { open: false }
+    | {
+        open: true;
+        lineItemId: string;
+        householdId: string;
+        mode: RegenerateRowMode;
+      }
+  >({ open: false });
+
+  // BC3 (#175 AC4) — multi-select bulk regenerate dialog state.
+  const [regenerateMultiOpen, setRegenerateMultiOpen] = useState(false);
+
+  // BC3 (#175 AC4 / AC7) — parent-level banner stack for bulk-success /
+  // bulk-failure surfaces. Per-line-item banners go through
+  // <RowBannerStack>. Auto-dismiss after `durationMs`.
+  const [parentBanners, setParentBanners] = useState<
+    Array<{
+      id: string;
+      tone: "info" | "destructive";
+      message: string;
+      action?: { label: string; onClick: () => void };
+      durationMs: number;
+    }>
+  >([]);
+  const pushParentBanner = React.useCallback((entry: ParentBannerInput) => {
+    const id = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setParentBanners((prev) => [...prev, { ...entry, id }]);
+  }, []);
+  const dismissParentBanner = React.useCallback((id: string) => {
+    setParentBanners((prev) => prev.filter((b) => b.id !== id));
+  }, []);
 
   // #158: per-row error message surfaced from the inline-edit cells. Keyed
   // by line item id so a failure on one un-metered row doesn't clobber the
@@ -246,42 +326,55 @@ export function BillingTable({
     }
   }
 
-  async function handleGenerate() {
+  // BC3 (#175 AC5) — `handleGenerate` now opens the pre-flight panel
+  // instead of firing the bulk POST. The actual /api/billing/generate
+  // call lives inside <PreflightPanel> on submit.
+  function handleGenerate() {
     setError(null);
     setGenerateErrors([]);
-    setGenerating(true);
-
-    try {
-      const res = await fetch("/api/billing/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ billingPeriodId: period.id }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Failed to generate billing data");
-        setGenerating(false);
-        return;
-      }
-
-      if (data.errors && data.errors.length > 0) {
-        setGenerateErrors(
-          data.errors.map((e: { householdName: string; error: string }) => ({
-            householdName: e.householdName,
-            error: e.error,
-          }))
-        );
-      }
-
-      setGenerating(false);
-      router.refresh();
-    } catch {
-      setError("Network error while generating billing data");
-      setGenerating(false);
-    }
+    setPreflightOpen(true);
   }
+
+  // BC3 (#175 AC1) — auto-clear `switchedToManual` for a line item when
+  // its server-confirmed `reading_source` becomes 'manual' (the persisted
+  // state caught up with the local flag).
+  useEffect(() => {
+    if (switchedToManual.size === 0) return;
+    setSwitchedToManual((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const item of lineItems) {
+        if (next.has(item.id) && item.reading_source === "manual") {
+          next.delete(item.id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [lineItems, switchedToManual.size]);
+
+  // BC3 (#175 AC3 / AC7) — Esc inside the table clears the selection.
+  useEffect(() => {
+    if (selectedHouseholdIds.size === 0) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setSelectedHouseholdIds(new Set());
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedHouseholdIds.size]);
+
+  // BC3 (#175 AC4 / AC7) — auto-dismiss parent banners.
+  useEffect(() => {
+    if (parentBanners.length === 0) return;
+    const timers = parentBanners
+      .filter((b) => b.durationMs > 0)
+      .map((b) =>
+        setTimeout(() => dismissParentBanner(b.id), b.durationMs),
+      );
+    return () => timers.forEach(clearTimeout);
+  }, [parentBanners, dismissParentBanner]);
 
   async function handleDelete() {
     setError(null);
@@ -364,7 +457,37 @@ export function BillingTable({
   const amountFormat = (v: number | string | null) =>
     formatCurrency(v == null ? null : Number(v), locale, localeCurrency, { bareNumber: true });
 
+  // Households with line items for the CopyTable (only households that have data)
+  const householdsWithItems = households.filter((h) => lineItemMap.has(h.id));
+
+  // BC3 (#175 AC3) — leading checkbox column. Hidden while pre-flight is
+  // open (the operator is generating, not regenerating).
+  const visibleHouseholdIds = householdsWithItems.map((h) => h.id);
+  const multiSelectColumn = buildMultiSelectColumn<Household>({
+    getRowId: (h) => h.id,
+    getRowName: (h) => h.display_name,
+    selectedIds: selectedHouseholdIds,
+    visibleIds: visibleHouseholdIds,
+    onToggleRow: (id) =>
+      setSelectedHouseholdIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    onSetAll: (ids) => setSelectedHouseholdIds(new Set(ids)),
+    hidden: preflightOpen,
+  });
+  const headerSelectionState: "checked" | "unchecked" | "indeterminate" =
+    selectedHouseholdIds.size === 0
+      ? "unchecked"
+      : selectedHouseholdIds.size === visibleHouseholdIds.length &&
+          visibleHouseholdIds.length > 0
+        ? "checked"
+        : "indeterminate";
+
   const columns: ColumnDef<Household>[] = [
+    ...(multiSelectColumn ? [multiSelectColumn] : []),
     {
       kind: "row-header",
       header: "Household",
@@ -390,13 +513,18 @@ export function BillingTable({
         const item = lineItemMap.get(h.id);
         if (!item) return <span className="text-muted-foreground">—</span>;
         const isUnmetered = item.device_id == null;
+        // BC3 (#175 AC1) — also editable when the operator picked
+        // "Switch to manual entry…" from the kebab on a draft row.
+        // Closed periods stay read-only (PATCH /usage 409s on closed).
+        const editable =
+          (isUnmetered || switchedToManual.has(item.id)) && isDraft;
         return (
           <ManualUsageCell
             lineItemId={item.id}
             field="end_kwh"
             value={item.end_kwh}
             format={(v) => (v == null ? "—" : kwhFormat(v))}
-            editable={isUnmetered && isDraft}
+            editable={editable}
             onError={recordRowError}
           />
         );
@@ -410,13 +538,16 @@ export function BillingTable({
         const item = lineItemMap.get(h.id);
         if (!item) return <span className="text-muted-foreground">—</span>;
         const isUnmetered = item.device_id == null;
+        // BC3 (#175 AC1) — same OR-branch as End (kWh) above.
+        const editable =
+          (isUnmetered || switchedToManual.has(item.id)) && isDraft;
         return (
           <ManualUsageCell
             lineItemId={item.id}
             field="usage_kwh"
             value={item.usage_kwh}
             format={(v) => (v == null ? "—" : kwhFormat(v))}
-            editable={isUnmetered && isDraft}
+            editable={editable}
             onError={recordRowError}
           />
         );
@@ -486,6 +617,34 @@ export function BillingTable({
               edgeAvailable={edgeAvailable}
               isPaymentConfigured={isPaymentConfigured}
               onRowBanner={pushRowBanner}
+              onRequestRegenerate={(mode) =>
+                setRegenerateRowDialog({
+                  open: true,
+                  lineItemId: item.id,
+                  householdId: h.id,
+                  mode,
+                })
+              }
+              onRequestSwitchToManual={() => {
+                // BC3 (#175 AC1) — On a CLOSED period, the kebab item
+                // opens <RegenerateRowDialog mode='manual'> (the cell is
+                // not editable on closed). On a DRAFT period, flip the
+                // per-row flag so the cell becomes inline-editable.
+                if (period.status === "closed") {
+                  setRegenerateRowDialog({
+                    open: true,
+                    lineItemId: item.id,
+                    householdId: h.id,
+                    mode: "manual",
+                  });
+                } else {
+                  setSwitchedToManual((prev) => {
+                    const next = new Set(prev);
+                    next.add(item.id);
+                    return next;
+                  });
+                }
+              }}
             />
             {showCaption && item.entered_at && (
               <p className="text-[11px] text-muted-foreground">
@@ -498,9 +657,6 @@ export function BillingTable({
       },
     },
   ];
-
-  // Households with line items for the CopyTable (only households that have data)
-  const householdsWithItems = households.filter((h) => lineItemMap.has(h.id));
 
   return (
     <div className="space-y-4">
@@ -524,6 +680,52 @@ export function BillingTable({
         grandTotal={grandTotal}
         onConfirm={handleClose}
         unfilledHouseholdNames={unfilledHouseholdNames}
+      />
+
+      {/* BC3 (#175 AC2) — per-row regenerate dialog. Mounts only when
+          open so the immediate-fire path (edge unpaid) doesn't fire on
+          mount of the parent. */}
+      {regenerateRowDialog.open && (() => {
+        const li = lineItems.find((x) => x.id === regenerateRowDialog.lineItemId);
+        const hh = households.find((h) => h.id === regenerateRowDialog.householdId);
+        if (!li || !hh) return null;
+        return (
+          <RegenerateRowDialog
+            open
+            onOpenChange={(o) => {
+              if (!o) setRegenerateRowDialog({ open: false });
+            }}
+            mode={regenerateRowDialog.mode}
+            household={{ id: hh.id, display_name: hh.display_name }}
+            period={{
+              id: period.id,
+              status: period.status,
+              start_date: period.start_date,
+              end_date: period.end_date,
+            }}
+            lineItem={{ id: li.id, payment_status: li.payment_status }}
+            pushBanner={pushRowBanner}
+            dismissBanner={dismissRowBanner}
+            onSuccess={(lineItemId) => {
+              clearSwitchedToManual(lineItemId);
+            }}
+          />
+        );
+      })()}
+
+      {/* BC3 (#175 AC4) — multi-select bulk regenerate dialog. */}
+      <RegenerateMultiDialog
+        open={regenerateMultiOpen}
+        onOpenChange={setRegenerateMultiOpen}
+        billingPeriodId={period.id}
+        selectedHouseholdIds={Array.from(selectedHouseholdIds)}
+        households={households}
+        lineItemsByHouseholdId={lineItemMap}
+        pushParentBanner={pushParentBanner}
+        pushRowBanner={pushRowBanner}
+        onSuccess={() => {
+          setSelectedHouseholdIds(new Set());
+        }}
       />
 
       {/* Header */}
@@ -644,6 +846,61 @@ export function BillingTable({
         </div>
       )}
 
+      {/* BC3 (#175 AC4 / AC7) — parent-level banners (bulk-success +
+          bulk-failure). Per-line-item banners go through <RowBannerStack>
+          below the table. Auto-dismissed by the effect above. */}
+      {parentBanners.length > 0 && (
+        <div
+          aria-live="polite"
+          className="space-y-2"
+          data-testid="parent-banner-stack"
+        >
+          {parentBanners.map((b) => (
+            <Banner
+              key={b.id}
+              tone={b.tone}
+              title={b.message}
+              action={
+                <div className="flex items-center gap-2">
+                  {b.action && (
+                    <button
+                      type="button"
+                      onClick={b.action.onClick}
+                      className="text-sm font-medium underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {b.action.label}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => dismissParentBanner(b.id)}
+                    className="text-sm font-medium underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              }
+            >
+              <span className="sr-only">{b.message}</span>
+            </Banner>
+          ))}
+        </div>
+      )}
+
+      {/* BC3 (#175 AC5) — Pre-flight panel. Mounted under the header,
+          above the CopyTable. Closed periods can't open it (the
+          "Generate" / "Refresh Readings" button is hidden by the existing
+          isDraft gate). */}
+      {isDraft && (
+        <PreflightPanel
+          open={preflightOpen}
+          onClose={() => setPreflightOpen(false)}
+          billingPeriodId={period.id}
+          households={households}
+          edgeAvailableByHouseholdId={edgeAvailableByHouseholdId ?? {}}
+        />
+      )}
+
       {/* Billing Table */}
       <div className="rounded-lg border border-border bg-card p-6">
         {lineItems.length === 0 && households.length > 0 ? (
@@ -689,6 +946,27 @@ export function BillingTable({
                   "Ask a super admin to configure Payment for this community."
                 )}
               </Banner>
+            )}
+
+            {/* BC3 (#175 AC3) — Tri-state "Select all" header checkbox.
+                Rendered ABOVE the table because <CopyTable>'s `header`
+                prop only accepts strings. The action-column checkbox
+                column header itself stays blank to pair visually. */}
+            {!preflightOpen && (
+              <div className="flex items-center justify-between gap-2">
+                <HeaderCheckbox
+                  state={headerSelectionState}
+                  onToggle={() =>
+                    setSelectedHouseholdIds((prev) =>
+                      prev.size === visibleHouseholdIds.length &&
+                      visibleHouseholdIds.length > 0
+                        ? new Set()
+                        : new Set(visibleHouseholdIds),
+                    )
+                  }
+                  visibleCount={visibleHouseholdIds.length}
+                />
+              </div>
             )}
 
             <CopyTable
@@ -769,6 +1047,24 @@ export function BillingTable({
           </div>
         )}
       </div>
+
+      {/* BC3 (#175 AC3 / AC6) — sticky selection bar. Mounted as the last
+          child of the BillingTable container so document-flow layering is
+          unambiguous. On a closed period the bar still renders (selection
+          is allowed) but the regenerate button is disabled with the
+          gating tooltip. */}
+      <StickySelectionBar
+        visibleCount={visibleHouseholdIds.length}
+        selectedCount={selectedHouseholdIds.size}
+        onRegenerate={() => setRegenerateMultiOpen(true)}
+        onClear={() => setSelectedHouseholdIds(new Set())}
+        disabled={!isDraft}
+        disabledTooltip={
+          !isDraft
+            ? "Use per-row regenerate on a closed period — bulk regenerate is draft-only."
+            : undefined
+        }
+      />
     </div>
   );
 }
