@@ -44,9 +44,16 @@ export default async function BillingPeriodDetailPage({
   };
 
   // BC2 (#174) — line-items query type with the user_directory join
-  // for the entered-by caption.
+  // for the entered-by caption. The `user_directory` view exposes
+  // first_name / last_name / email (no `display_name` column); we
+  // compose the display string client-side via `pickDisplayName`,
+  // mirroring `src/lib/billing/audit-log-fetch.ts:75-82`.
   type LineItemWithActor = BillingLineItem & {
-    user_directory: { display_name: string | null } | null;
+    user_directory: {
+      first_name: string | null;
+      last_name: string | null;
+      email: string | null;
+    } | null;
   };
 
   const [
@@ -68,7 +75,7 @@ export default async function BillingPeriodDetailPage({
     supabase
       .from("billing_line_items")
       .select(
-        "*, payment_status, paid_at, paid_by_user_id, payment_notes, user_directory!entered_by_user_id(display_name)",
+        "*, payment_status, paid_at, paid_by_user_id, payment_notes, user_directory!entered_by_user_id(first_name, last_name, email)",
       )
       .eq("billing_period_id", periodId)
       .returns<LineItemWithActor[]>(),
@@ -192,8 +199,15 @@ export default async function BillingPeriodDetailPage({
   const actorByLineItemId: Record<string, string | null> = {};
   for (const li of lineItemsWithActors) {
     // PostgREST may return the joined row as an object or null.
+    // Mirror `pickDisplayName` from src/lib/billing/audit-log-fetch.ts:75-82:
+    // first_name + last_name (joined with a space), fallback to email,
+    // fallback to null.
     const join = li.user_directory;
-    actorByLineItemId[li.id] = join?.display_name ?? null;
+    const parts = [join?.first_name, join?.last_name].filter(
+      (s): s is string => typeof s === "string" && s.length > 0,
+    );
+    actorByLineItemId[li.id] =
+      parts.length > 0 ? parts.join(" ") : (join?.email ?? null);
   }
   const cleanLineItems: BillingLineItem[] = lineItemsWithActors.map((li) => {
     // Strip the join field so the prop type stays narrow.
