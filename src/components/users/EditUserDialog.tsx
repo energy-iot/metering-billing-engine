@@ -44,6 +44,12 @@ export interface EditUserDialogProps {
     phone: string | null;
     role: UserRole | null;
     scope_id: string | null;
+    /**
+     * NULL when the invited user has not yet accepted (status "Invited"),
+     * non-null timestamp once accepted (status "Active"). The Resend
+     * invitation button (UX5b / #184) only renders when this is null.
+     */
+    email_confirmed_at: string | null;
   };
   callerRole: "super_admin" | "org_manager";
   canChangeRole: boolean;
@@ -72,6 +78,19 @@ export function EditUserDialog(props: EditUserDialogProps) {
   const [submitting, setSubmitting] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
 
+  // Resend-invitation state (UX5b / #184). Mirrors the
+  // `submitting`/`topError` pattern used by the profile/role PATCH flow
+  // so the dialog has a single, consistent async-state shape.
+  type ResendFeedback =
+    | { kind: "success" }
+    | { kind: "rate-limit" }
+    | { kind: "error"; message: string };
+  const [resending, setResending] = React.useState(false);
+  const [resendFeedback, setResendFeedback] =
+    React.useState<ResendFeedback | null>(null);
+
+  const showResend = t.email_confirmed_at == null;
+
   React.useEffect(() => {
     if (props.open) {
       setFirstName(t.first_name ?? "");
@@ -83,6 +102,8 @@ export function EditUserDialog(props: EditUserDialogProps) {
       setTopError(null);
       setSubmitting(false);
       setConfirmOpen(false);
+      setResending(false);
+      setResendFeedback(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.open, t.user_id]);
@@ -180,6 +201,42 @@ export function EditUserDialog(props: EditUserDialogProps) {
     props.onSuccess?.();
     router.refresh();
     props.onOpenChange(false);
+  }
+
+  // Resend invitation handler (UX5b / #184). Stays in the dialog (no
+  // dismissal) so the operator gets explicit in-context confirmation
+  // via an inline <Banner>.
+  async function handleResend() {
+    setResending(true);
+    setResendFeedback(null);
+    try {
+      const res = await fetch(`/api/users/${t.user_id}/resend-invite`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setResendFeedback({ kind: "success" });
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
+      if (res.status === 429 || data.code === "rate_limited") {
+        setResendFeedback({ kind: "rate-limit" });
+        return;
+      }
+      setResendFeedback({
+        kind: "error",
+        message: data.error ?? "Could not resend invitation.",
+      });
+    } catch {
+      setResendFeedback({
+        kind: "error",
+        message: "Network error. Please retry.",
+      });
+    } finally {
+      setResending(false);
+    }
   }
 
   return (
@@ -343,6 +400,51 @@ export function EditUserDialog(props: EditUserDialogProps) {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Resend invitation (UX5b / #184) — only when status is "Invited".
+                  Positioned ABOVE the destructive Revoke action so the
+                  constructive option is reached first. */}
+              {showResend && (
+                <div className="border-t border-border pt-4">
+                  {resendFeedback?.kind === "success" && (
+                    <div className="mb-3">
+                      <Banner tone="success" title="Invitation resent">
+                        Invitation resent to {t.email}.
+                      </Banner>
+                    </div>
+                  )}
+                  {resendFeedback?.kind === "rate-limit" && (
+                    <div className="mb-3">
+                      <Banner tone="warn" title="Rate limited">
+                        Too many invitations sent recently. Try again in a
+                        few minutes.
+                      </Banner>
+                    </div>
+                  )}
+                  {resendFeedback?.kind === "error" && (
+                    <div className="mb-3">
+                      <Banner
+                        tone="destructive"
+                        title="Could not resend invitation"
+                      >
+                        {resendFeedback.message}
+                      </Banner>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    disabled={resending}
+                    className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3.5 text-[13px] font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {resending ? "Sending…" : "Resend invitation"}
+                  </button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Re-issues the magic-link email. The previous link is
+                    superseded.
+                  </p>
                 </div>
               )}
 

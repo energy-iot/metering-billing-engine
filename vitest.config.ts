@@ -50,6 +50,7 @@ export default defineConfig({
             "src/lib/supabase/__tests__/payment_state_machine.test.ts",
             "src/lib/supabase/__tests__/billing_audit_log.test.ts",
             "src/lib/__tests__/invite-user-rpc.test.ts",
+            "src/app/api/users/[id]/resend-invite/__tests__/rls-route.test.ts",
           ],
           environment: "node",
           fileParallelism: false,
@@ -61,6 +62,11 @@ export default defineConfig({
           name: "app",
           // Server-component tests (node environment) co-located with page files.
           include: ["src/app/**/*.test.{ts,tsx}"],
+          // Exclude RLS-mode integration tests that live under src/app — they
+          // run in the `rls` project (live local Supabase, sequential).
+          exclude: [
+            "src/app/api/users/[id]/resend-invite/__tests__/rls-route.test.ts",
+          ],
           environment: "node",
         },
       },
