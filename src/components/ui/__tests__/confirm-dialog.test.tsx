@@ -188,4 +188,66 @@ describe("ConfirmDialog", () => {
     expect(describedBy).toContain("confirm-dialog-body");
     expect(describedBy).toContain("confirm-dialog-desc");
   });
+
+  // ── #183 optional eyebrow extensions ──────────────────────────────────
+
+  it("(h) eyebrow undefined → renders per-tone default ('Confirm' for neutral, 'Irreversible action' for destructive)", () => {
+    const { unmount } = render(
+      <ConfirmDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        title="Save and test?"
+        confirmLabel="Save"
+        tone="neutral"
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(screen.getByText("Confirm")).toBeTruthy();
+    unmount();
+
+    render(
+      <ConfirmDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        title="Delete meter?"
+        confirmLabel="Delete"
+        tone="destructive"
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(screen.getByText("Irreversible action")).toBeTruthy();
+  });
+
+  it("(i) eyebrow='Custom label' → renders the supplied string verbatim", () => {
+    render(
+      <ConfirmDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        title="Save and test?"
+        confirmLabel="Save"
+        tone="neutral"
+        eyebrow="Custom label"
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(screen.getByText("Custom label")).toBeTruthy();
+    // Default neutral eyebrow must NOT appear when overridden.
+    expect(screen.queryByText("Confirm")).toBeNull();
+  });
+
+  it("(j) eyebrow={null} → no eyebrow node renders (neither default literal appears)", () => {
+    render(
+      <ConfirmDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        title="Regenerate this bill?"
+        confirmLabel="Regenerate"
+        tone="neutral"
+        eyebrow={null}
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(screen.queryByText("Confirm")).toBeNull();
+    expect(screen.queryByText("Irreversible action")).toBeNull();
+  });
 });

@@ -63,6 +63,18 @@ export interface ConfirmDialogProps {
     label: string;
     expected: string;
   };
+  /**
+   * Optional eyebrow label rendered above the title. 3-state semantic:
+   *   - `undefined` (default): renders the per-tone default —
+   *     `"Irreversible action"` for destructive, `"Confirm"` for neutral.
+   *   - `string`: renders the supplied string verbatim as the eyebrow.
+   *   - `null`: explicit opt-out — no eyebrow `<span>` is rendered (no
+   *     DOM node, no reserved spacing). Use this when the dialog body
+   *     itself is the primary visual focus and the eyebrow would add
+   *     noise (e.g. BC3 paid-edge regenerate dialog where the diff body
+   *     should be the first thing the operator sees).
+   */
+  eyebrow?: string | null;
 }
 
 type State = "idle" | "loading" | "error";
@@ -82,6 +94,7 @@ export function ConfirmDialog({
   tone,
   onConfirm,
   requireTypedConfirmation,
+  eyebrow,
 }: ConfirmDialogProps) {
   const [state, setState] = React.useState<State>("idle");
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
@@ -162,14 +175,24 @@ export function ConfirmDialog({
           />
 
           <div className="px-6 pb-2 pt-5">
-            <span
-              className={cn(
-                "text-[11px] font-semibold uppercase tracking-wide",
-                tone === "destructive" ? "text-destructive" : "text-primary",
-              )}
-            >
-              {tone === "destructive" ? "Irreversible action" : "Confirm"}
-            </span>
+            {/* Eyebrow — 3-state semantic via the `eyebrow` prop:
+                  undefined → per-tone default ("Irreversible action" / "Confirm")
+                  string    → render supplied label
+                  null      → suppress the <span> entirely (no DOM, no spacing) */}
+            {eyebrow !== null && (
+              <span
+                className={cn(
+                  "text-[11px] font-semibold uppercase tracking-wide",
+                  tone === "destructive" ? "text-destructive" : "text-primary",
+                )}
+              >
+                {typeof eyebrow === "string"
+                  ? eyebrow
+                  : tone === "destructive"
+                    ? "Irreversible action"
+                    : "Confirm"}
+              </span>
+            )}
             <Dialog.Title className="mt-1.5 text-xl font-semibold tracking-tight">
               {title}
             </Dialog.Title>

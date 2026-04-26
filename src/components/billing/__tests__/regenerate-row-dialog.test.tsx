@@ -207,6 +207,11 @@ describe("RegenerateRowDialog — edge paid path (2b)", () => {
     const diff = document.querySelector('[data-testid="regenerate-preview-diff"]');
     expect(diff?.textContent).toMatch(/\+/); // 22000 - 20000 = +2000
 
+    // #183 — paid-edge dialog passes eyebrow={null}; the neutral-tone
+    // default "Confirm" eyebrow should NOT appear in the dialog header.
+    // ("Regenerate" is the confirm-button label, which still renders.)
+    expect(screen.queryByText("Confirm")).toBeNull();
+
     // /api/billing/generate should NOT have been called yet.
     const generateCalls = fetchMock.mock.calls.filter(
       (c) => c[0] === "/api/billing/generate",
