@@ -22,6 +22,15 @@
  * On submit: single POST /api/billing/generate with the manualReadings
  * array and NO householdIds filter (the implicit-add semantic in
  * runGenerationFor processes everything).
+ *
+ * View-state machine (BC3 polish #182):
+ *   - `view === 'form'`   → render the form section (default).
+ *   - `view === 'result'` → render a result section showing per-household
+ *     failures + a Close button. Switched into when the response has
+ *     errors.length > 0 (partial OR full failure). Per AC2 the panel is
+ *     NOT a Radix dialog — view-state mutation is applied to the inline
+ *     <section> markup directly. The all-success branch still calls
+ *     `onClose()` (existing behavior preserved).
  */
 
 import * as React from "react";
@@ -29,6 +38,10 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Banner } from "@/components/ui/banner";
 import { StatusChip } from "@/components/ui/status-chip";
+import {
+  errorCodeCopy,
+  type PartialFailureError,
+} from "@/components/billing/error-code-copy";
 import type { Household } from "@/lib/types/domain";
 
 export interface PreflightPanelProps {
@@ -48,12 +61,20 @@ interface RowFormState {
   overrideEnabled: boolean;
 }
 
+interface ResultState {
+  errors: PartialFailureError[];
+  successCount: number;
+  attemptedCount: number;
+}
+
 const EMPTY_ROW: RowFormState = {
   startKwh: "",
   endKwh: "",
   reason: "",
   overrideEnabled: false,
 };
+
+const MAX_FAILURES_INLINE = 5;
 
 function parseField(raw: string): { ok: true; value: number } | { ok: false } {
   const trimmed = raw.trim();
@@ -80,6 +101,8 @@ export function PreflightPanel(props: PreflightPanelProps) {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [readyExpanded, setReadyExpanded] = React.useState(false);
   const [overrideExpanded, setOverrideExpanded] = React.useState(false);
+  const [view, setView] = React.useState<"form" | "result">("form");
+  const [result, setResult] = React.useState<ResultState | null>(null);
 
   // Reset state when the panel opens.
   React.useEffect(() => {
@@ -89,6 +112,8 @@ export function PreflightPanel(props: PreflightPanelProps) {
       setErrorMsg(null);
       setReadyExpanded(false);
       setOverrideExpanded(false);
+      setView("form");
+      setResult(null);
     }
   }, [open]);
 
@@ -152,22 +177,54 @@ export function PreflightPanel(props: PreflightPanelProps) {
         }),
       });
       const body = (await res.json().catch(() => ({}))) as {
+        lineItems?: number;
         error?: string;
-        errors?: Array<{ householdName: string; error: string }>;
+        errors?: Array<{
+          householdId: string;
+          householdName: string;
+          error: string;
+          code?: string;
+        }>;
       };
       if (!res.ok) {
         setErrorMsg(body.error ?? "Failed to generate");
         setSubmitting(false);
         return;
       }
-      // Surface partial-failure inline (non-blocking — the panel closes).
+      // Always refresh so partial successes appear on the next render.
+      router.refresh();
+
+      const respErrors = body.errors ?? [];
+      if (respErrors.length > 0) {
+        // Partial OR full failure — switch to result view (panel stays open).
+        const successCount = body.lineItems ?? 0;
+        setResult({
+          errors: respErrors,
+          successCount,
+          attemptedCount: totalCount,
+        });
+        setView("result");
+        setSubmitting(false);
+        return;
+      }
+
+      // All-success path — close the panel (existing behavior preserved).
       setSubmitting(false);
       onClose();
-      router.refresh();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Network error");
       setSubmitting(false);
     }
+  }
+
+  // Result-view: replace the form section with the failure summary.
+  if (view === "result" && result) {
+    return (
+      <ResultSection
+        result={result}
+        onClose={onClose}
+      />
+    );
   }
 
   return (
@@ -341,6 +398,75 @@ export function PreflightPanel(props: PreflightPanelProps) {
             </svg>
           )}
           Generate ({totalCount} household{totalCount === 1 ? "" : "s"})
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * ResultSection — replaces the form section when view === 'result'.
+ * Per AC2 the panel is not a Radix dialog, so this is just an inline
+ * <section> swap. "Close" calls onClose() — does NOT need to re-fire
+ * any success callback (partial successes already persisted server-side).
+ */
+function ResultSection(props: {
+  result: ResultState;
+  onClose: () => void;
+}) {
+  const { result, onClose } = props;
+  const { errors, successCount, attemptedCount } = result;
+  const isFullFailure = successCount === 0;
+  const tone: "destructive" | "warn" = isFullFailure ? "destructive" : "warn";
+
+  // Preserve API response order (AC7) — do not re-sort.
+  const displayed = errors.slice(0, MAX_FAILURES_INLINE);
+  const overflow = Math.max(0, errors.length - MAX_FAILURES_INLINE);
+
+  const heading = isFullFailure
+    ? `Could not generate ${attemptedCount} household${attemptedCount === 1 ? "" : "s"}`
+    : `Generated ${successCount} of ${attemptedCount} household${attemptedCount === 1 ? "" : "s"}`;
+
+  const bannerTitle = isFullFailure
+    ? `${errors.length} failure${errors.length === 1 ? "" : "s"}`
+    : `${errors.length} household${errors.length === 1 ? "" : "s"} could not be generated`;
+
+  return (
+    <section
+      data-testid="preflight-panel-result"
+      className="rounded-lg border border-border bg-card p-4"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-foreground">{heading}</h3>
+      </div>
+
+      <Banner tone={tone} title={bannerTitle}>
+        <ul
+          data-testid="preflight-result-failure-list"
+          className="mt-1 list-disc space-y-1 pl-5"
+        >
+          {displayed.map((err) => (
+            <li key={err.householdId}>{errorCodeCopy(err)}</li>
+          ))}
+          {overflow > 0 && (
+            <li
+              data-testid="preflight-result-failure-overflow"
+              className="font-medium"
+            >
+              + {overflow} more
+            </li>
+          )}
+        </ul>
+      </Banner>
+
+      <div className="mt-4 flex items-center justify-end gap-2 border-t border-border pt-3">
+        <button
+          type="button"
+          data-testid="preflight-result-close"
+          onClick={onClose}
+          className="inline-flex h-8 items-center rounded-md border border-primary bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Close
         </button>
       </div>
     </section>
