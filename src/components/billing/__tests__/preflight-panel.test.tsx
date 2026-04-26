@@ -174,6 +174,361 @@ describe("PreflightPanel — submit body shape", () => {
   });
 });
 
+describe("PreflightPanel — partial-failure result view (BC3 polish #182)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    refreshMock.mockClear();
+  });
+
+  async function fillAndSubmit(onClose: () => void) {
+    const households = [
+      makeHousehold("h-1", "Alice"),
+      makeHousehold("h-2", "Bob"),
+      makeHousehold("h-3", "Carol"),
+    ];
+    const edgeMap = { "h-1": false, "h-2": false, "h-3": false };
+    render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={onClose}
+          billingPeriodId="p-1"
+          households={households}
+          edgeAvailableByHouseholdId={edgeMap}
+        />
+      </Wrap>,
+    );
+    fireEvent.change(screen.getByLabelText(/Start kWh for Alice/i), {
+      target: { value: "100" },
+    });
+    fireEvent.change(screen.getByLabelText(/End kWh for Alice/i), {
+      target: { value: "150" },
+    });
+    fireEvent.change(screen.getByLabelText(/Start kWh for Bob/i), {
+      target: { value: "200" },
+    });
+    fireEvent.change(screen.getByLabelText(/End kWh for Bob/i), {
+      target: { value: "250" },
+    });
+    fireEvent.change(screen.getByLabelText(/Start kWh for Carol/i), {
+      target: { value: "300" },
+    });
+    fireEvent.change(screen.getByLabelText(/End kWh for Carol/i), {
+      target: { value: "350" },
+    });
+    const submitBtn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+  }
+
+  it("all-success: panel calls onClose() (existing behavior preserved)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ lineItems: 3, errors: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    await fillAndSubmit(onClose);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(
+      document.querySelector('[data-testid="preflight-panel-result"]'),
+    ).toBeNull();
+    expect(refreshMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("partial failure: panel stays open, switches to result view with warn banner + per-code copy", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          lineItems: 2,
+          errors: [
+            {
+              householdId: "h-3",
+              householdName: "Carol",
+              error: "raw",
+              code: "invalid_manual_reading",
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    await fillAndSubmit(onClose);
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    // onClose was NOT called.
+    expect(onClose).not.toHaveBeenCalled();
+    // Heading shows partial-success summary.
+    expect(document.body.textContent).toContain("Generated 2 of 3 households");
+    // Per-code copy renders.
+    const list = document.querySelector(
+      '[data-testid="preflight-result-failure-list"]',
+    );
+    expect(list!.textContent).toContain(
+      "Carol has an invalid manual reading.",
+    );
+    // router.refresh fires regardless of partial.
+    expect(refreshMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("full failure: panel stays open with destructive banner; heading reads 'Could not generate'", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          lineItems: 0,
+          errors: [
+            {
+              householdId: "h-1",
+              householdName: "Alice",
+              error: "raw1",
+              code: "no_meter_reading",
+            },
+            {
+              householdId: "h-2",
+              householdName: "Bob",
+              error: "raw2",
+              code: "missing_openems_config",
+            },
+            {
+              householdId: "h-3",
+              householdName: "Carol",
+              error: "raw3",
+              code: "unmetered_no_manual",
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    await fillAndSubmit(onClose);
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(
+      "Could not generate 3 households",
+    );
+    const items = document.querySelectorAll(
+      '[data-testid="preflight-result-failure-list"] > li',
+    );
+    expect(items.length).toBe(3);
+    // Order preserved (AC7).
+    expect(items[0].textContent).toContain("Alice");
+    expect(items[1].textContent).toContain("Bob");
+    expect(items[2].textContent).toContain("Carol");
+    vi.unstubAllGlobals();
+  });
+
+  it("per-error-code copy smoke: maps unmetered_no_manual, invalid_manual_reading, currently_manual", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          lineItems: 0,
+          errors: [
+            {
+              householdId: "h-1",
+              householdName: "Alice",
+              error: "x",
+              code: "unmetered_no_manual",
+            },
+            {
+              householdId: "h-2",
+              householdName: "Bob",
+              error: "y",
+              code: "invalid_manual_reading",
+            },
+            {
+              householdId: "h-3",
+              householdName: "Carol",
+              error: "z",
+              code: "currently_manual",
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await fillAndSubmit(vi.fn());
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    const text = document.querySelector(
+      '[data-testid="preflight-result-failure-list"]',
+    )!.textContent ?? "";
+    expect(text).toContain(
+      "Alice has no meter and no manual reading provided.",
+    );
+    expect(text).toContain("Bob has an invalid manual reading.");
+    expect(text).toContain(
+      "Carol is set to manual entry — use per-row regenerate.",
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("default fallback: unknown code renders '${name}: ${error}'", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          lineItems: 0,
+          errors: [
+            {
+              householdId: "h-1",
+              householdName: "Alice",
+              error: "Quoted server message",
+              code: "future_code",
+            },
+            {
+              householdId: "h-2",
+              householdName: "Bob",
+              error: "another verbatim",
+              // no code at all
+            },
+            {
+              householdId: "h-3",
+              householdName: "Carol",
+              error: "third",
+              code: "no_meter_reading",
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await fillAndSubmit(vi.fn());
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    const text = document.querySelector(
+      '[data-testid="preflight-result-failure-list"]',
+    )!.textContent ?? "";
+    expect(text).toContain("Alice: Quoted server message");
+    expect(text).toContain("Bob: another verbatim");
+    // Mapped code wins for Carol.
+    expect(text).toContain("Carol has no current meter reading.");
+    vi.unstubAllGlobals();
+  });
+
+  it("truncation: 6 failures → 5 + '+ 1 more'", async () => {
+    const errs = Array.from({ length: 6 }, (_, i) => ({
+      householdId: `h-${i + 1}`,
+      householdName: `Person${i + 1}`,
+      error: "x",
+      code: "no_meter_reading",
+    }));
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ lineItems: 0, errors: errs }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const households = errs.map((e) =>
+      makeHousehold(e.householdId, e.householdName),
+    );
+    const edgeMap: Record<string, boolean> = {};
+    households.forEach((h) => {
+      edgeMap[h.id] = false;
+    });
+    render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={households}
+          edgeAvailableByHouseholdId={edgeMap}
+        />
+      </Wrap>,
+    );
+    households.forEach((h, i) => {
+      fireEvent.change(
+        screen.getByLabelText(new RegExp(`Start kWh for ${h.display_name}`, "i")),
+        { target: { value: String(i * 10) } },
+      );
+      fireEvent.change(
+        screen.getByLabelText(new RegExp(`End kWh for ${h.display_name}`, "i")),
+        { target: { value: String(i * 10 + 5) } },
+      );
+    });
+    const submitBtn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    const items = document.querySelectorAll(
+      '[data-testid="preflight-result-failure-list"] > li',
+    );
+    // 5 displayed + 1 overflow li.
+    expect(items.length).toBe(6);
+    const overflow = document.querySelector(
+      '[data-testid="preflight-result-failure-overflow"]',
+    );
+    expect(overflow!.textContent).toContain("+ 1 more");
+    vi.unstubAllGlobals();
+  });
+
+  it("Close button in result view calls onClose()", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          lineItems: 2,
+          errors: [
+            {
+              householdId: "h-3",
+              householdName: "Carol",
+              error: "x",
+              code: "no_meter_reading",
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    await fillAndSubmit(onClose);
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-panel-result"]'),
+      ).not.toBeNull(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    const closeBtn = document.querySelector(
+      '[data-testid="preflight-result-close"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(closeBtn);
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("PreflightPanel — Generate button label", () => {
   it("reads 'Generate (N households)' regardless of trigger source", () => {
     const households = [makeHousehold("h-1", "Alice"), makeHousehold("h-2", "Bob")];
