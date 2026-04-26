@@ -440,6 +440,9 @@ function EdgePaidConfirmDialog(props: RegenerateRowDialogProps) {
       confirmLabel="Regenerate"
       onConfirm={onConfirmFn}
       body={previewBody}
+      // Suppress the neutral-tone "Confirm" eyebrow — the diff body is the
+      // primary visual focus here; the eyebrow would compete with it. See #183.
+      eyebrow={null}
     />
   );
 }
