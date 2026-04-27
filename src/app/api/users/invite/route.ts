@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth/access";
 import { SUPER_ADMIN, ORG_MANAGER } from "@/lib/roles";
 import { buildInviteDataPayload } from "@/lib/auth/invite-data-payload";
+import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import type { UserRole } from "@/lib/types/domain";
 
 /**
@@ -168,8 +169,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const svc = createServiceClient();
 
+  // Per-call redirectTo: lands GoTrue's verify redirect on the MBE
+  // accept-invite landing page, which calls verifyOtp + renders the
+  // set-password form (UX5c / #189). Deliberately not hardcoded —
+  // resolveOrigin honours x-forwarded-* so previews + local dev work.
+  const origin = resolveOrigin(request);
+
   const inviteRes = await svc.auth.admin.inviteUserByEmail(email, {
     data: inviteData,
+    redirectTo: `${origin}/accept-invite`,
   });
   let targetUserId: string | null = null;
 

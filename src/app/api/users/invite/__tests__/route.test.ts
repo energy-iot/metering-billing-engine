@@ -166,6 +166,9 @@ describe("POST /api/users/invite", () => {
         role_label: "an organization manager",
         app_name: "Metering & Billing Engine",
       },
+      // UX5c / #189 — per-call redirectTo lands invitees on the
+      // /accept-invite page where verifyOtp + set-password runs.
+      redirectTo: "http://localhost/accept-invite",
     });
   });
 
