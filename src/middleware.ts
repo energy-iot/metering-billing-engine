@@ -4,7 +4,16 @@ import { NextResponse, type NextRequest } from "next/server";
 // Paths that don't require an authenticated session. `/accept-invite`
 // is reached unauthenticated by users clicking the invite-email link
 // — verifyOtp on the page installs the session cookie (UX5c / #189).
-const PUBLIC_PATHS = ["/login", "/accept-invite"];
+// `/forgot-password` is the request side of the password-recovery flow;
+// `/reset-password` is the consumption side reached by the recovery
+// email link — verifyOtp on that page installs the session cookie
+// (UX5d / #190).
+const PUBLIC_PATHS = [
+  "/login",
+  "/accept-invite",
+  "/forgot-password",
+  "/reset-password",
+];
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
