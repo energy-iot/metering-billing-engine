@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth/access";
 import { SUPER_ADMIN, ORG_MANAGER, SCOPE_ORG } from "@/lib/roles";
 import { buildInviteDataPayload } from "@/lib/auth/invite-data-payload";
+import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import type { UserRole, RoleScopeType } from "@/lib/types/domain";
 
 /**
@@ -74,7 +75,7 @@ interface CurrentRoleRow {
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   const { id: targetId } = await params;
@@ -214,8 +215,12 @@ export async function POST(
   });
 
   // ── Step G: re-issue the invite ────────────────────────────────────
+  // Per-call redirectTo so resends land on the MBE accept-invite page
+  // (UX5c / #189) — same target as the original invite.
+  const origin = resolveOrigin(request);
   const inviteRes = await svc.auth.admin.inviteUserByEmail(targetEmail, {
     data,
+    redirectTo: `${origin}/accept-invite`,
   });
 
   if (inviteRes.error) {

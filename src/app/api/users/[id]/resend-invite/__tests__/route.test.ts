@@ -438,6 +438,9 @@ describe("POST /api/users/[id]/resend-invite", () => {
         role_label: "an organization manager",
         app_name: "Metering & Billing Engine",
       },
+      // UX5c / #189 — per-call redirectTo so resends land on the same
+      // /accept-invite page as fresh invites.
+      redirectTo: "http://localhost/accept-invite",
     });
   });
 

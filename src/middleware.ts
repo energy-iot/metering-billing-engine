@@ -1,6 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// Paths that don't require an authenticated session. `/accept-invite`
+// is reached unauthenticated by users clicking the invite-email link
+// — verifyOtp on the page installs the session cookie (UX5c / #189).
+const PUBLIC_PATHS = ["/login", "/accept-invite"];
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -36,7 +41,11 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && !request.nextUrl.pathname.startsWith("/login")) {
+  const isPublicPath = PUBLIC_PATHS.some((p) =>
+    request.nextUrl.pathname.startsWith(p)
+  );
+
+  if (!user && !isPublicPath) {
     // API routes return 401 JSON instead of redirecting to login
     if (request.nextUrl.pathname.startsWith("/api/")) {
       return NextResponse.json(
