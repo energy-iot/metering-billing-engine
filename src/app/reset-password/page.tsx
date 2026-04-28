@@ -4,45 +4,46 @@
  * /reset-password — password-recovery landing page (UX5d / #190).
  *
  * Reached by users clicking the "Reset password" link in the branded
- * recovery email. Supabase expands `{{ .ConfirmationURL }}` to
- * `${redirectTo}?token_hash=<hash>&type=recovery&redirect_to=…` for
- * this project's auth flow.
+ * recovery email. Supabase email templates expand
+ * `{{ .ConfirmationURL }}` to one of two shapes depending on project
+ * auth-flow config:
  *
- * Mirrors UX5c's /accept-invite structurally (#189) — same `verifyOtp`
- * primitive, only the `type` literal differs.
+ *  1. **Implicit flow** (URL fragment): `…/reset-password#access_token=…
+ *     &refresh_token=…&type=recovery&…`. Full JWT pair in the fragment;
+ *     installed client-side via `auth.setSession()`. The fragment is
+ *     never sent to the server, so the JWT does not leave the browser
+ *     before the SDK persists it.
+ *  2. **OTP token-hash flow** (query string): `…/reset-password?
+ *     token_hash=…&type=recovery`. Opaque hash exchanged via
+ *     `auth.verifyOtp()`.
+ *
+ * Both flows are handled by `installSessionFromUrl` so this page is
+ * robust to future Supabase auth-flow config changes.
+ *
+ * Mirrors UX5c's /accept-invite structurally (#189) — same shared
+ * `installSessionFromUrl` helper, only the `expectedType` literal
+ * differs.
  *
  * Flow:
- *   1. Read `token_hash` + `type` from the URL query string.
- *      - Validate `type === "recovery"`. Surface error state on mismatch
- *        or `?error=…`/`?error_description=…` from GoTrue.
- *   2. Call `supabase.auth.verifyOtp({ token_hash, type: "recovery" })`.
- *      - Wrong primitive for server-issued recovery emails is
- *        `exchangeCodeForSession` (PKCE) — that requires a code-verifier
- *        cookie set by the ORIGINATING browser; recipient who clicked
- *        the email link has no such cookie, so PKCE throws
- *        AuthPKCECodeVerifierMissingError. UX5c R2 verified this.
- *      - `verifyOtp` is stateless on the client, which means a user
- *        can forward a reset link from one machine to another and the
- *        recipient still completes the flow (cross-browser positive
- *        behaviour).
- *   3. After verifyOtp succeeds, the SDK installs session cookies
- *      automatically. Strip token_hash + type from the URL via
- *      router.replace so a refresh doesn't try to re-verify a now-
- *      spent token.
- *   4. Defensively confirm getUser() returns a user before rendering
- *      the form.
- *   5. <SetPasswordForm onSubmit> calls supabase.auth.updateUser —
+ *   1. `installSessionFromUrl({ supabase, expectedType: "recovery" })`
+ *      detects fragment vs query, installs the session via the
+ *      appropriate primitive, and confirms `getUser()` returns a user.
+ *   2. On success, strip the fragment/query via router.replace so a
+ *      refresh doesn't try to re-verify a now-spent token. Then render
+ *      `<SetPasswordForm>`.
+ *   3. `<SetPasswordForm onSubmit>` calls `supabase.auth.updateUser` —
  *      this page owns the SDK call so the form stays reusable across
- *      both invite and recovery flows.
- *   6. On success, router.push("/") + router.refresh() so the
+ *      both UX5c invite and UX5d reset-password flows.
+ *   4. On submit success, router.push("/") + router.refresh() so the
  *      dashboard renders against the freshly-installed session.
  */
 import * as React from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { SetPasswordForm } from "@/components/auth/set-password-form";
 import { Banner } from "@/components/ui/banner";
+import { installSessionFromUrl } from "@/lib/auth/install-session-from-url";
 
 type Phase =
   | { kind: "verifying" }
@@ -56,57 +57,41 @@ const ERROR_EXPIRED_OR_USED =
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [phase, setPhase] = React.useState<Phase>({ kind: "verifying" });
   // Single-shot guard — React Strict Mode double-mounts effects in
-  // development and we MUST NOT call verifyOtp twice (the second call
-  // would race the now-spent token_hash and surface a false error).
+  // development and we MUST NOT call setSession/verifyOtp twice (the
+  // second call would race a now-spent token and surface a false
+  // error).
   const verifyStartedRef = React.useRef(false);
 
   React.useEffect(() => {
     if (verifyStartedRef.current) return;
     verifyStartedRef.current = true;
 
-    const tokenHash = searchParams.get("token_hash");
-    const type = searchParams.get("type");
-    const errorDescription =
-      searchParams.get("error_description") || searchParams.get("error");
-
-    if (errorDescription) {
-      setPhase({ kind: "error", message: ERROR_INVALID_LINK });
-      return;
-    }
-
-    if (!tokenHash || type !== "recovery") {
-      setPhase({ kind: "error", message: ERROR_INVALID_LINK });
-      return;
-    }
-
     const supabase = createClient();
 
     void (async () => {
-      const { error } = await supabase.auth.verifyOtp({
-        token_hash: tokenHash,
-        type: "recovery",
+      const result = await installSessionFromUrl({
+        supabase,
+        expectedType: "recovery",
       });
-      if (error) {
-        setPhase({ kind: "error", message: ERROR_EXPIRED_OR_USED });
-        return;
+      switch (result.kind) {
+        case "ok":
+          // Strip fragment + query from the URL so a refresh doesn't
+          // try to re-verify a now-spent token.
+          router.replace("/reset-password");
+          setPhase({ kind: "ready" });
+          return;
+        case "missing":
+        case "type_mismatch":
+          setPhase({ kind: "error", message: ERROR_INVALID_LINK });
+          return;
+        case "verify_error":
+          setPhase({ kind: "error", message: ERROR_EXPIRED_OR_USED });
+          return;
       }
-      // Defensive: confirm a session was installed. verifyOtp returns
-      // success but the session may be absent if cookies failed to
-      // persist — surface the standard error in that edge case.
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) {
-        setPhase({ kind: "error", message: ERROR_EXPIRED_OR_USED });
-        return;
-      }
-      // Strip the token_hash + type from the URL so a refresh doesn't
-      // try to re-verify a now-spent token.
-      router.replace("/reset-password");
-      setPhase({ kind: "ready" });
     })();
-  }, [router, searchParams]);
+  }, [router]);
 
   async function handleSetPassword(password: string): Promise<void> {
     const supabase = createClient();
