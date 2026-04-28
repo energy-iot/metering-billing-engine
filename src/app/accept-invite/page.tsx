@@ -33,26 +33,29 @@
  *   4. On submit success, router.push("/") + router.refresh() so the
  *      dashboard renders against the freshly-installed session.
  *
+ * Error states (#194): The helper differentiates "spent token" (link
+ * already used — most common case) from "malformed/never-valid link"
+ * and surfaces directed CTAs per kind.
+ *
  * Out of scope (per #189): personalization (no first_name interpolation
  * — recipient first_name lives in user_profiles, not auth.users.raw_user_meta_data).
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { SetPasswordForm } from "@/components/auth/set-password-form";
-import { Banner } from "@/components/ui/banner";
-import { installSessionFromUrl } from "@/lib/auth/install-session-from-url";
+import { AuthErrorState } from "@/components/auth/auth-error-state";
+import {
+  installSessionFromUrl,
+  type InstallSessionResult,
+} from "@/lib/auth/install-session-from-url";
+
+type ErrorKind = Exclude<InstallSessionResult["kind"], "ok">;
 
 type Phase =
   | { kind: "verifying" }
   | { kind: "ready" }
-  | { kind: "error"; message: string };
-
-const ERROR_INVALID_LINK =
-  "This invite link is invalid or expired. Ask your administrator to resend the invitation.";
-const ERROR_EXPIRED_OR_USED =
-  "This invite link has expired or has already been used. Ask your administrator to resend the invitation.";
+  | { kind: "error"; errorKind: ErrorKind };
 
 export default function AcceptInvitePage() {
   const router = useRouter();
@@ -74,21 +77,14 @@ export default function AcceptInvitePage() {
         supabase,
         expectedType: "invite",
       });
-      switch (result.kind) {
-        case "ok":
-          // Strip fragment + query from the URL so a refresh doesn't
-          // try to re-verify a now-spent token.
-          router.replace("/accept-invite");
-          setPhase({ kind: "ready" });
-          return;
-        case "missing":
-        case "type_mismatch":
-          setPhase({ kind: "error", message: ERROR_INVALID_LINK });
-          return;
-        case "verify_error":
-          setPhase({ kind: "error", message: ERROR_EXPIRED_OR_USED });
-          return;
+      if (result.kind === "ok") {
+        // Strip fragment + query from the URL so a refresh doesn't
+        // try to re-verify a now-spent token.
+        router.replace("/accept-invite");
+        setPhase({ kind: "ready" });
+        return;
       }
+      setPhase({ kind: "error", errorKind: result.kind });
     })();
   }, [router]);
 
@@ -118,21 +114,7 @@ export default function AcceptInvitePage() {
           </div>
         )}
 
-        {phase.kind === "error" && (
-          <div className="space-y-4">
-            <Banner tone="destructive" title="Invitation link problem">
-              {phase.message}
-            </Banner>
-            <p className="text-sm text-muted-foreground">
-              <Link
-                href="/login"
-                className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-              >
-                Back to sign in
-              </Link>
-            </p>
-          </div>
-        )}
+        {phase.kind === "error" && renderErrorState(phase.errorKind)}
 
         {phase.kind === "ready" && (
           <SetPasswordForm
@@ -144,4 +126,34 @@ export default function AcceptInvitePage() {
       </div>
     </div>
   );
+}
+
+function renderErrorState(kind: ErrorKind): React.ReactNode {
+  switch (kind) {
+    case "spent_token":
+      return (
+        <AuthErrorState
+          title="This invite link has already been used"
+          body="Your account is set up. Sign in to access your dashboard."
+          primaryCta={{ label: "Sign in →", href: "/login" }}
+        />
+      );
+    case "type_mismatch":
+      return (
+        <AuthErrorState
+          title="This link doesn't match the expected flow"
+          body="Use the most recent link your administrator sent you."
+          secondaryCta={{ label: "Back to sign in", href: "/login" }}
+        />
+      );
+    case "verify_error":
+    case "missing":
+      return (
+        <AuthErrorState
+          title="This invite link is invalid or expired"
+          body="Ask your administrator to resend the invitation."
+          secondaryCta={{ label: "Back to sign in", href: "/login" }}
+        />
+      );
+  }
 }

@@ -105,28 +105,34 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/invitation link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
     expect(setSessionSpy).not.toHaveBeenCalled();
   });
 
-  it("renders error state when type is missing in query", async () => {
+  it("renders type-mismatch error when type is missing in query", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}` });
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/invitation link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/doesn't match the expected flow/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
 
-  it("renders error state when type is not 'invite'", async () => {
+  it("renders type-mismatch error when type is not 'invite'", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=recovery` });
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/invitation link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/doesn't match the expected flow/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
@@ -138,7 +144,9 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/invitation link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
@@ -179,7 +187,9 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
     render(<AcceptInvitePage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/expired or has already been used/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
   });
 
@@ -192,7 +202,9 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
     render(<AcceptInvitePage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/expired or has already been used/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
   });
 
@@ -296,12 +308,14 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
     expect(replaceSpy).toHaveBeenCalledWith("/accept-invite");
   });
 
-  it("renders error state when fragment type is 'recovery' (mismatch)", async () => {
+  it("renders type-mismatch error when fragment type is 'recovery'", async () => {
     setUrl({ hash: fragmentFor("recovery") });
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/invitation link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/doesn't match the expected flow/i)
+      ).toBeDefined();
     });
     expect(setSessionSpy).not.toHaveBeenCalled();
   });
@@ -316,7 +330,9 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/expired or has already been used/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
   });
 
@@ -328,7 +344,9 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
     await waitFor(() => {
-      expect(screen.getByText(/expired or has already been used/i)).toBeDefined();
+      expect(
+        screen.getByText(/invite link is invalid or expired/i)
+      ).toBeDefined();
     });
   });
 
@@ -386,5 +404,32 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
       expect(updateUserSpy).toHaveBeenCalledWith({ password: "longenough1" });
     });
     expect(pushSpy).toHaveBeenCalledWith("/");
+  });
+});
+
+describe("AcceptInvitePage — spent-token error state (#194)", () => {
+  it("renders 'already been used' copy + Sign in CTA when fragment carries otp_expired", async () => {
+    setUrl({
+      hash:
+        "#" +
+        new URLSearchParams({
+          error: "access_denied",
+          error_code: "otp_expired",
+          error_description: "Email link is invalid or has expired",
+        }).toString(),
+    });
+
+    const { default: AcceptInvitePage } = await import("../page");
+    render(<AcceptInvitePage />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/invite link has already been used/i)
+      ).toBeDefined();
+    });
+    const cta = screen.getByRole("link", { name: /sign in/i });
+    expect(cta.getAttribute("href")).toBe("/login");
+    expect(setSessionSpy).not.toHaveBeenCalled();
+    expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
 });

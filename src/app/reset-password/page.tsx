@@ -36,24 +36,27 @@
  *      both UX5c invite and UX5d reset-password flows.
  *   4. On submit success, router.push("/") + router.refresh() so the
  *      dashboard renders against the freshly-installed session.
+ *
+ * Error states (#194): The helper differentiates "spent token" (link
+ * already used — most common case) from "malformed/never-valid link"
+ * and surfaces directed CTAs per kind.
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { SetPasswordForm } from "@/components/auth/set-password-form";
-import { Banner } from "@/components/ui/banner";
-import { installSessionFromUrl } from "@/lib/auth/install-session-from-url";
+import { AuthErrorState } from "@/components/auth/auth-error-state";
+import {
+  installSessionFromUrl,
+  type InstallSessionResult,
+} from "@/lib/auth/install-session-from-url";
+
+type ErrorKind = Exclude<InstallSessionResult["kind"], "ok">;
 
 type Phase =
   | { kind: "verifying" }
   | { kind: "ready" }
-  | { kind: "error"; message: string };
-
-const ERROR_INVALID_LINK =
-  "This password-reset link is invalid or expired. Request a new one.";
-const ERROR_EXPIRED_OR_USED =
-  "This password-reset link has expired or has already been used. Request a new one.";
+  | { kind: "error"; errorKind: ErrorKind };
 
 export default function ResetPasswordPage() {
   const router = useRouter();
@@ -75,21 +78,14 @@ export default function ResetPasswordPage() {
         supabase,
         expectedType: "recovery",
       });
-      switch (result.kind) {
-        case "ok":
-          // Strip fragment + query from the URL so a refresh doesn't
-          // try to re-verify a now-spent token.
-          router.replace("/reset-password");
-          setPhase({ kind: "ready" });
-          return;
-        case "missing":
-        case "type_mismatch":
-          setPhase({ kind: "error", message: ERROR_INVALID_LINK });
-          return;
-        case "verify_error":
-          setPhase({ kind: "error", message: ERROR_EXPIRED_OR_USED });
-          return;
+      if (result.kind === "ok") {
+        // Strip fragment + query from the URL so a refresh doesn't
+        // try to re-verify a now-spent token.
+        router.replace("/reset-password");
+        setPhase({ kind: "ready" });
+        return;
       }
+      setPhase({ kind: "error", errorKind: result.kind });
     })();
   }, [router]);
 
@@ -119,29 +115,7 @@ export default function ResetPasswordPage() {
           </div>
         )}
 
-        {phase.kind === "error" && (
-          <div className="space-y-4">
-            <Banner tone="destructive" title="Reset link problem">
-              {phase.message}
-            </Banner>
-            <p className="text-sm text-muted-foreground">
-              <Link
-                href="/forgot-password"
-                className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-              >
-                Back to forgot password
-              </Link>
-            </p>
-            <p className="text-sm text-muted-foreground">
-              <Link
-                href="/login"
-                className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-              >
-                Back to sign in
-              </Link>
-            </p>
-          </div>
-        )}
+        {phase.kind === "error" && renderErrorState(phase.errorKind)}
 
         {phase.kind === "ready" && (
           <SetPasswordForm
@@ -154,4 +128,35 @@ export default function ResetPasswordPage() {
       </div>
     </div>
   );
+}
+
+function renderErrorState(kind: ErrorKind): React.ReactNode {
+  switch (kind) {
+    case "spent_token":
+      return (
+        <AuthErrorState
+          title="This reset link has already been used"
+          body="If you didn't reset your password yet, request a new link."
+          primaryCta={{
+            label: "Request a new link →",
+            href: "/forgot-password",
+          }}
+          secondaryCta={{ label: "Back to sign in", href: "/login" }}
+        />
+      );
+    case "type_mismatch":
+    case "verify_error":
+    case "missing":
+      return (
+        <AuthErrorState
+          title="This password-reset link is invalid or expired"
+          body="Request a new one."
+          primaryCta={{
+            label: "Request a new link →",
+            href: "/forgot-password",
+          }}
+          secondaryCta={{ label: "Back to sign in", href: "/login" }}
+        />
+      );
+  }
 }
