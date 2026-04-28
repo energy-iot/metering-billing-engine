@@ -9,10 +9,10 @@
  *   lineItem → billing_period → microgrid → community (provider config)
  *
  * Permission:
- *   Both super_admin AND org_manager may trigger link generation. Only super_admin
- *   (or service_role) can decrypt the provider secret via
- *   fn_get_community_payment_secret; an org_manager of the owning community
- *   will receive a 403 from getCommunityPaymentConfig with PAYMENT_FORBIDDEN.
+ *   super_admin, service_role, OR org_manager-of-owning-community can decrypt
+ *   the provider secret via fn_get_community_payment_secret (#196). An
+ *   org_manager of a DIFFERENT org will receive a 403 from
+ *   getCommunityPaymentConfig with PAYMENT_FORBIDDEN.
  *
  * Response:
  *   200 → { redirectUrl, orderTrackingId, merchantReference }
@@ -144,9 +144,9 @@ export async function POST(
     actorUserId = null;
   }
 
-  // 2. Permission gate. org_manager + super_admin both allowed; secret access
-  //    is filtered by fn_get_community_payment_secret (org_manager → null →
-  //    PAYMENT_FORBIDDEN below).
+  // 2. Permission gate. super_admin + org_manager-of-owning-org both allowed;
+  //    cross-org callers are filtered by fn_get_community_payment_secret
+  //    (cross-org org_manager → null → PAYMENT_FORBIDDEN below) (#196).
   if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
     return NextResponse.json(
       { error: "Billing line item not found.", reason: "not_found" },

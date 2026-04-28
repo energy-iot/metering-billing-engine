@@ -25,13 +25,14 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   assertEnvironmentReady,
   shouldSkip,
   serviceClient,
   createTestUser,
   cleanupTestData,
+  LOCAL_SUPABASE_URL,
   type TestUser,
 } from "./rls.helpers";
 
@@ -1714,9 +1715,13 @@ describe("RLS: OpenEMS Backend (#101)", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
-// RLS: Community payment provider (#115)
+// RLS: Community payment provider (#115, #196)
 // Exercises the fn_get_community_payment_secret truth table + encryption
 // round-trip via fn_ems_encrypt_secret (shared DEK).
+//
+// Post-#196: org_managers scoped to the community's parent org now receive
+// the plaintext secret (previously redacted to NULL). Cross-org callers
+// continue to receive NULL via the user_can_access_org gate.
 // ══════════════════════════════════════════════════════════════════════════
 
 describe("RLS: Community payment provider (#115)", () => {
@@ -1801,7 +1806,7 @@ describe("RLS: Community payment provider (#115)", () => {
       expect(data).toBeNull();
     });
 
-    it("org_manager (owner org) gets NULL — redacted", async () => {
+    it("org_manager (owner org) gets plaintext (#196 — widened)", async () => {
       if (skipIfRequested()) return;
       await setupPaymentConfig();
       try {
@@ -1810,13 +1815,27 @@ describe("RLS: Community payment provider (#115)", () => {
           { _community_id: FIXTURE.communityA }
         );
         expect(error).toBeNull();
-        expect(data).toBeNull();
+        expect(data).toBe(PAYMENT_SECRET_PLAINTEXT);
       } finally {
         await clearPaymentConfig();
       }
     });
 
-    it("org_manager (different org) gets NULL — redacted by helper", async () => {
+    it("org_manager (owner org) gets NULL when secret is not set (#196)", async () => {
+      if (skipIfRequested()) return;
+      // Setup with provider null (no secret) — org_manager can read the
+      // community row via RLS but the function returns NULL because there
+      // is no ciphertext to decrypt. Distinct from "no permission".
+      await clearPaymentConfig();
+      const { data, error } = await userA.client.rpc(
+        "fn_get_community_payment_secret",
+        { _community_id: FIXTURE.communityA }
+      );
+      expect(error).toBeNull();
+      expect(data).toBeNull();
+    });
+
+    it("org_manager (different org) gets NULL — blocked by user_can_access_org gate", async () => {
       if (skipIfRequested()) return;
       await setupPaymentConfig();
       try {
@@ -1852,6 +1871,32 @@ describe("RLS: Community payment provider (#115)", () => {
       await setupPaymentConfig();
       try {
         const { data, error } = await userC.client.rpc(
+          "fn_get_community_payment_secret",
+          { _community_id: FIXTURE.communityA }
+        );
+        expect(error).toBeNull();
+        expect(data).toBeNull();
+      } finally {
+        await clearPaymentConfig();
+      }
+    });
+
+    it("anon (no Authorization header) gets NULL — DB-level defense-in-depth (#196)", async () => {
+      if (skipIfRequested()) return;
+      await setupPaymentConfig();
+      try {
+        // Anon client: anon key only, no user JWT. PostgREST evaluates
+        // auth.uid() = NULL and auth.role() = 'anon'; the function's
+        // permission gate (service_role OR user_can_access_org) returns
+        // false, so the function returns NULL. This guards the route as
+        // defense-in-depth even though src/middleware.ts:57-64 already
+        // 401s anon /api/* requests upstream.
+        const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+        const anonClient = createClient(LOCAL_SUPABASE_URL, anonKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const { data, error } = await anonClient.rpc(
           "fn_get_community_payment_secret",
           { _community_id: FIXTURE.communityA }
         );

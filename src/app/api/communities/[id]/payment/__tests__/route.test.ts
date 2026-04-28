@@ -1,10 +1,10 @@
 /**
- * PUT /api/communities/[id]/payment — unit tests (#119 AC-ROUTE-*).
+ * PUT /api/communities/[id]/payment — unit tests (#119 AC-ROUTE-*, #196).
  *
  * Supabase + auth helpers + PesapalClient are mocked. Covers:
  *   (1) Happy path (new config) → 200, encrypts secret, writes all 4 columns
  *   (2) Happy path (reconfigure w/ blank secret) → secret-preserve skips encrypt
- *   (3) Permission: non-super_admin (org_manager) → 403
+ *   (3) Permission: org_manager-of-parent-org → 200 (widened in #196)
  *   (4) Permission: cannot access org → 403
  *   (5) RLS-hidden / missing community → 404
  *   (6) Pesapal auth fail → 503 { reason: "auth_failed" }, no DB write
@@ -12,6 +12,11 @@
  *   (8) Malformed body → 400
  *   (9) First-configuration with blank secret → 400
  *  (10) base_url is server-derived from sandbox (NOT taken from body)
+ *
+ * Note: anon → 401 is enforced by `src/middleware.ts:57-64` for any /api/*
+ * path; this unit test mounts the route handler directly so middleware does
+ * not run. The DB-level NULL-for-anon defense-in-depth is covered by the
+ * fn_get_community_payment_secret RLS test in `rls.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
@@ -53,11 +58,9 @@ vi.mock("@/lib/payments/pesapal/client", async () => {
 });
 
 let canAccessOrgReturn = true;
-let isSuperAdminReturn = true;
 
 vi.mock("@/lib/auth/access", () => ({
   currentUserCanAccessOrg: async () => canAccessOrgReturn,
-  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
 }));
 
 // ─── Supabase mock — sequenced from() handlers, shared mockRpc ─────────────
@@ -109,7 +112,6 @@ describe("PUT /api/communities/[id]/payment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canAccessOrgReturn = true;
-    isSuperAdminReturn = true;
     communitySelectResp = {
       data: {
         id: COMMUNITY_ID,
@@ -242,10 +244,12 @@ describe("PUT /api/communities/[id]/payment", () => {
     ).toBe("ipn-fresh-guid");
   });
 
-  // ─── (3) org_manager → 403 ─────────────────────────────────────────────
-  it("(3) non-super_admin → 403 before any DB write", async () => {
-    isSuperAdminReturn = false;
-
+  // ─── (3) org_manager-of-parent-org → 200 (widened in #196) ─────────────
+  it("(3) org_manager-of-parent-org (canAccessOrg=true) → 200 happy path", async () => {
+    // Same setup as case (1) — canAccessOrgReturn defaults to true. This
+    // mirrors the post-#196 behavior where any caller satisfying
+    // currentUserCanAccessOrg can save the config (no separate super_admin
+    // gate). The route never calls currentUserIsSuperAdmin anymore.
     const { PUT } = await import("../route");
     const res = await PUT(
       makePutRequest({
@@ -255,9 +259,9 @@ describe("PUT /api/communities/[id]/payment", () => {
       }),
       { params: Promise.resolve({ id: COMMUNITY_ID }) },
     );
-    expect(res.status).toBe(403);
-    expect(getAccessTokenMock).not.toHaveBeenCalled();
-    expect(updatePayloadCapture).toBeNull();
+    expect(res.status).toBe(200);
+    expect(getAccessTokenMock).toHaveBeenCalledTimes(1);
+    expect(updatePayloadCapture).toBeTruthy();
   });
 
   // ─── (4) cross-org → 403 ───────────────────────────────────────────────

@@ -8,7 +8,9 @@
 //   - Save & test promise + result banner state
 //
 // Data flow:
-//   Server component passes (community, health, secretLast4, isSuperAdmin).
+//   Server component passes (community, health, secretLast4, canEdit).
+//   `canEdit` is true for super_admin OR org_manager scoped to this
+//   community's parent org (#196).
 //   On Save/Test success → router.refresh() so the layout + page re-fetch
 //   health + last-configured timestamp.
 //
@@ -57,7 +59,7 @@ export type PaymentShellProps = {
   community: CommunityProps;
   health: PaymentHealth;
   secretLast4: string | null;
-  isSuperAdmin: boolean;
+  canEdit: boolean;
 };
 
 type SaveOutcome =
@@ -71,7 +73,7 @@ type SaveOutcome =
   | { kind: "generic_error"; message: string };
 
 export function PaymentShell(props: PaymentShellProps) {
-  const { community, health, secretLast4, isSuperAdmin } = props;
+  const { community, health, secretLast4, canEdit } = props;
   const router = useRouter();
 
   const initialMode: "empty" | "configured" =
@@ -271,13 +273,13 @@ export function PaymentShell(props: PaymentShellProps) {
 
   // Empty state
   if (mode === "empty" && !isEditing) {
-    if (!isSuperAdmin) {
+    if (!canEdit) {
       return (
         <div className="space-y-4">
           {header}
           <Banner tone="info" title="Not configured yet">
             This community hasn&apos;t been connected to a payment provider yet.
-            Ask a super admin to configure it.
+            Ask a super admin or your org&apos;s manager to configure it.
           </Banner>
         </div>
       );
@@ -361,7 +363,7 @@ export function PaymentShell(props: PaymentShellProps) {
                 {community.config.base_url || "—"}
               </p>
             </div>
-            {isSuperAdmin && (
+            {canEdit && (
               <>
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -409,7 +411,7 @@ export function PaymentShell(props: PaymentShellProps) {
                 No Save & test has run yet.
               </p>
             )}
-            {isSuperAdmin && (
+            {canEdit && (
               <button
                 type="button"
                 onClick={handleTestAgain}
@@ -422,7 +424,7 @@ export function PaymentShell(props: PaymentShellProps) {
           </div>
         </div>
 
-        {isSuperAdmin && !isEditing && (
+        {canEdit && !isEditing && (
           <div className="mt-5 flex justify-end">
             <button
               type="button"
@@ -555,10 +557,11 @@ export function PaymentShell(props: PaymentShellProps) {
     <div className="space-y-4">
       {header}
 
-      {!isSuperAdmin && mode === "configured" && (
+      {!canEdit && mode === "configured" && (
         <Banner tone="info" title="Read-only view">
-          Only super admins can update Payment credentials. Contact your
-          administrator to request changes.
+          You don&apos;t have permission to update this community&apos;s payment
+          configuration. Contact a super admin or your org&apos;s manager to
+          request changes.
         </Banner>
       )}
 

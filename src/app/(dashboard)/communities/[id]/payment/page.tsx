@@ -2,21 +2,24 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
   currentUserCanAccessCommunity,
-  currentUserIsSuperAdmin,
+  currentUserCanAccessOrg,
 } from "@/lib/auth/access";
 import { derivePaymentHealth } from "./health";
 import { PaymentShell } from "./payment-shell";
 
 /**
- * /communities/[id]/payment — Payment configuration (#119).
+ * /communities/[id]/payment — Payment configuration (#119, #196).
  *
  * Server component fetches:
  *   1. Community row (name + payment_* columns).
- *   2. Permission flags (canAccessCommunity, isSuperAdmin).
- *   3. Decrypted secret last-4 — super_admin only. We call
- *      fn_get_community_payment_secret which returns NULL for org_manager
- *      (even on their own community), then compute `secret.slice(-4)`
- *      SERVER-SIDE. The plaintext secret NEVER crosses to the client.
+ *   2. Permission flags (canAccessCommunity for visibility, canEdit for the
+ *      Save / Reconfigure / Test-again surface). canEdit is true for
+ *      super_admin OR org_manager scoped to this community's parent org.
+ *   3. Decrypted secret last-4 — visible to anyone with edit permission. We
+ *      call fn_get_community_payment_secret (per migration 00030 widens the
+ *      decrypt gate to org_managers of the parent org), then compute
+ *      `secret.slice(-4)` SERVER-SIDE. The plaintext secret NEVER crosses
+ *      to the client.
  *
  * The server component passes everything as props to `<PaymentShell>` which
  * owns mode state (empty / configured / editing), form state, and the
@@ -34,16 +37,15 @@ export default async function PaymentPage({
   const canAccess = await currentUserCanAccessCommunity(supabase, id);
   if (!canAccess) notFound();
 
-  const isSuperAdmin = await currentUserIsSuperAdmin(supabase);
-
   const { data: community, error: commErr } = await supabase
     .from("communities")
     .select(
-      "id, name, payment_provider, payment_provider_config, payment_last_configured_at",
+      "id, org_id, name, payment_provider, payment_provider_config, payment_last_configured_at",
     )
     .eq("id", id)
     .maybeSingle<{
       id: string;
+      org_id: string;
       name: string;
       payment_provider: "pesapal" | null;
       payment_provider_config: unknown;
@@ -52,11 +54,17 @@ export default async function PaymentPage({
 
   if (commErr || !community) notFound();
 
-  // Mirrors openems-backend/page.tsx:81-89. `fn_get_community_payment_secret`
-  // returns NULL for non-super_admin per migration 00020 truth table, so the
-  // secretLast4 prop is NULL for org_manager (UI renders "—").
+  // canEdit needs community.org_id, so this derivation must follow the
+  // community fetch. True for super_admin OR org_manager scoped to this
+  // community's parent org (#196).
+  const canEdit = await currentUserCanAccessOrg(supabase, community.org_id);
+
+  // `fn_get_community_payment_secret` (migration 00030 truth table): returns
+  // plaintext for super_admin OR org_manager-of-parent-org OR service_role,
+  // NULL otherwise. We mirror the gate here so the secretLast4 prop is only
+  // computed when the caller can edit (UI renders "—" when canEdit=false).
   let secretLast4: string | null = null;
-  if (community.payment_provider === "pesapal" && isSuperAdmin) {
+  if (community.payment_provider === "pesapal" && canEdit) {
     const { data: secret } = await supabase.rpc(
       "fn_get_community_payment_secret",
       { _community_id: id },
@@ -113,8 +121,9 @@ export default async function PaymentPage({
   });
 
   // Server-derived public callback URL surfaced in the configured-mode panel
-  // (super_admin only) for operator visibility — matches the URL Save & test
-  // registers with Pesapal. Always recomputed; never persisted client-side.
+  // (visible to anyone with edit permission) for operator visibility — matches
+  // the URL Save & test registers with Pesapal. Always recomputed; never
+  // persisted client-side.
   const callbackBase = (
     process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL ?? ""
   )
@@ -135,7 +144,7 @@ export default async function PaymentPage({
         }}
         health={health}
         secretLast4={secretLast4}
-        isSuperAdmin={isSuperAdmin}
+        canEdit={canEdit}
       />
     </div>
   );
