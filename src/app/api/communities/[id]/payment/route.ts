@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import {
-  currentUserCanAccessOrg,
-  currentUserIsSuperAdmin,
-} from "@/lib/auth/access";
+import { currentUserCanAccessOrg } from "@/lib/auth/access";
 import { PesapalClient } from "@/lib/payments/pesapal/client";
 import { PesapalError } from "@/lib/payments/pesapal/errors";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 /**
- * PUT /api/communities/[id]/payment — Save & test payment-provider config (#119, #121).
+ * PUT /api/communities/[id]/payment — Save & test payment-provider config (#119, #121, #196).
  *
- * Body shape (super_admin only):
+ * Body shape:
  *   {
  *     provider: 'pesapal',
  *     config: { consumer_key: string, sandbox: boolean },
@@ -22,15 +19,15 @@ import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
  * from the `sandbox` boolean so the JSONB stays canonical and typo'd URLs
  * can never reach the DB.
  *
- * Execution order (post-#121):
+ * Execution order (post-#121, gate widened in #196):
  *
  *   1. UUID check on [id] → 400 on malformed.
  *   2. JSON parse + manual shape validation → 400 on malformed body.
  *   3. Resolve the community's org_id (and existing payment_*_encrypted column)
  *      with a single row read. RLS hidden or missing → 404 (don't leak).
- *   4. Permission gate: currentUserCanAccessOrg(org_id) AND
- *      currentUserIsSuperAdmin. Either missing → 403. super_admin gate is the
- *      primary rule; org access is defense-in-depth.
+ *   4. Permission gate: currentUserCanAccessOrg(org_id) — true for super_admin
+ *      OR for org_manager scoped to the community's parent org. Either
+ *      missing → 403. Mirrors the SQL helper `user_can_access_org`.
  *   5. Secret-preserve gate: if the body's secret_access_key is blank/absent
  *      AND an existing payment_provider_secret_encrypted row is non-NULL,
  *      preserve it. Otherwise require a non-empty secret → 400.
@@ -155,20 +152,12 @@ export async function PUT(
     return NextResponse.json({ error: "Community not found." }, { status: 404 });
   }
 
-  // Permission — super_admin gate is the primary rule; org access
-  // is defense-in-depth (super_admins always pass currentUserCanAccessOrg).
+  // Permission — currentUserCanAccessOrg returns true for super_admin OR for
+  // org_manager scoped to this community's parent org (#196). Cross-org
+  // org_managers and unscoped users are rejected here.
   if (!(await currentUserCanAccessOrg(supabase, community.org_id))) {
     return NextResponse.json(
       { error: "You do not have permission to configure this community." },
-      { status: 403 },
-    );
-  }
-  if (!(await currentUserIsSuperAdmin(supabase))) {
-    return NextResponse.json(
-      {
-        error:
-          "Only super admins can update Payment credentials.",
-      },
       { status: 403 },
     );
   }

@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 /**
- * PaymentShell tests (#119).
+ * PaymentShell tests (#119, #196).
  *
  * Covers:
- *  1. Empty state (super_admin): "Connect Pesapal" card + coming-soon footnote
- *  2. Empty state (org_manager): info banner, no form
- *  3. Configured state (super_admin): chip, masked secret, Test again,
+ *  1. Empty state (canEdit=true): "Connect Pesapal" card + coming-soon footnote
+ *  2. Empty state (canEdit=false): info banner, no form
+ *  3. Configured state (canEdit=true): chip, masked secret, Test again,
  *     Reconfigure buttons visible
- *  4. Configured state (org_manager): no Reconfigure/Test again, read-only
+ *  4. Configured state (canEdit=false): no Reconfigure/Test again, read-only
  *     banner, secret renders "—"
  *  5. Reconfigure form opens with existing consumer_key + blank secret +
  *     sandbox toggle initialized from stored value
@@ -79,13 +79,13 @@ afterEach(() => {
 // ─── Empty state ─────────────────────────────────────────────────────────
 
 describe("PaymentShell — empty state", () => {
-  it("(1) super_admin sees Connect Pesapal card + coming-soon footnote", () => {
+  it("(1) canEdit=true sees Connect Pesapal card + coming-soon footnote", () => {
     render(
       <PaymentShell
         community={BASE_COMMUNITY}
         health="not_configured"
         secretLast4={null}
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     expect(
@@ -94,13 +94,13 @@ describe("PaymentShell — empty state", () => {
     expect(screen.getByText(/more providers/i)).toBeDefined();
   });
 
-  it("(2) org_manager sees info banner, no Connect button", () => {
+  it("(2) canEdit=false sees info banner, no Connect button", () => {
     render(
       <PaymentShell
         community={BASE_COMMUNITY}
         health="not_configured"
         secretLast4={null}
-        isSuperAdmin={false}
+        canEdit={false}
       />,
     );
     expect(
@@ -113,13 +113,13 @@ describe("PaymentShell — empty state", () => {
 // ─── Configured state ────────────────────────────────────────────────────
 
 describe("PaymentShell — configured state", () => {
-  it("(3) super_admin: chip, masked secret, Test again + Reconfigure visible", () => {
+  it("(3) canEdit=true: chip, masked secret, Test again + Reconfigure visible", () => {
     const { container } = render(
       <PaymentShell
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     expect(container.textContent).toContain("Healthy");
@@ -128,30 +128,32 @@ describe("PaymentShell — configured state", () => {
     expect(screen.getByRole("button", { name: /reconfigure/i })).toBeDefined();
   });
 
-  it("(4) org_manager: read-only banner, no Reconfigure/Test, secret '—'", () => {
+  it("(4) canEdit=false: read-only banner, no Reconfigure/Test, secret '—'", () => {
     const { container } = render(
       <PaymentShell
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4={null}
-        isSuperAdmin={false}
+        canEdit={false}
       />,
     );
     expect(screen.queryByRole("button", { name: /reconfigure/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /test again/i })).toBeNull();
     expect(
-      screen.getByText(/only super admins can update payment credentials/i),
+      screen.getByText(
+        /you don.?t have permission to update this community.?s payment configuration/i,
+      ),
     ).toBeDefined();
     expect(container.textContent).toContain("—");
   });
 
-  it("(4b) super_admin: callback URL + truncated ipn_id rendered (#121)", () => {
+  it("(4b) canEdit=true: callback URL + truncated ipn_id rendered (#121)", () => {
     const { container } = render(
       <PaymentShell
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     expect(container.textContent).toContain("IPN callback URL");
@@ -166,20 +168,20 @@ describe("PaymentShell — configured state", () => {
     );
   });
 
-  it("(4c) org_manager does not see callback URL / ipn_id (super_admin gated)", () => {
+  it("(4c) canEdit=false does not see callback URL / ipn_id (gated)", () => {
     const { container } = render(
       <PaymentShell
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4={null}
-        isSuperAdmin={false}
+        canEdit={false}
       />,
     );
     expect(container.textContent).not.toContain("IPN callback URL");
     expect(container.textContent).not.toContain("Registered IPN id");
   });
 
-  it("(4d) super_admin sees 'Not registered yet' hint when ipn_id is missing", () => {
+  it("(4d) canEdit=true sees 'Not registered yet' hint when ipn_id is missing", () => {
     const { container } = render(
       <PaymentShell
         community={{
@@ -188,7 +190,7 @@ describe("PaymentShell — configured state", () => {
         }}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     expect(container.textContent).toContain("Not registered yet");
@@ -204,7 +206,7 @@ describe("PaymentShell — reconfigure flow", () => {
         community={{ ...CONFIGURED_COMMUNITY, config: { ...CONFIGURED_COMMUNITY.config, sandbox: true } }}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -261,7 +263,7 @@ describe("PaymentShell — Save & test outcomes", () => {
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -292,7 +294,7 @@ describe("PaymentShell — Save & test outcomes", () => {
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -318,7 +320,7 @@ describe("PaymentShell — Save & test outcomes", () => {
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -343,7 +345,7 @@ describe("PaymentShell — secret-preserve", () => {
         community={CONFIGURED_COMMUNITY}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -374,7 +376,7 @@ describe("PaymentShell — sandbox toggle", () => {
         }}
         health="healthy"
         secretLast4="9xYZ"
-        isSuperAdmin={true}
+        canEdit={true}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));

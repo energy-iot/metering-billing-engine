@@ -18,9 +18,10 @@ import type { PesapalConfig } from "./pesapal/types";
  * Throws:
  *   - `PaymentError('PAYMENT_INVALID_CONFIG', 500)` — stored config is
  *     malformed / partial (shape doesn't match provider contract).
- *   - `PaymentError('PAYMENT_FORBIDDEN', 403)` — caller is an org_manager
- *     (not super_admin, not service_role) trying to decrypt a payment secret;
- *     `fn_get_community_payment_secret` returned NULL.
+ *   - `PaymentError('PAYMENT_FORBIDDEN', 403)` — caller is an org_manager of
+ *     a DIFFERENT org than the community (not super_admin, not service_role,
+ *     not org_manager-of-parent-org) trying to decrypt a payment secret;
+ *     `fn_get_community_payment_secret` returned NULL (#196).
  *
  * Mirrors `src/lib/openems/config.ts`. Authorization semantics are identical:
  * RLS on `communities` filters cross-org rows; the SECURITY-DEFINER helper
@@ -71,7 +72,7 @@ export async function getCommunityPaymentConfig(
 
     if (!secret) {
       throw new PaymentError(
-        "Only super admins can generate payment links for this community, because they are the only role that can decrypt the provider secret. Ask a super admin.",
+        "You don't have permission to generate payment links for this community. Ask a super admin or your org's manager.",
         "PAYMENT_FORBIDDEN",
         403,
       );
