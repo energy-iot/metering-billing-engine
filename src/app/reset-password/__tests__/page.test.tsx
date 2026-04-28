@@ -104,7 +104,9 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
     await waitFor(() => {
-      expect(screen.getByText(/reset link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/password-reset link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
     expect(setSessionSpy).not.toHaveBeenCalled();
@@ -115,7 +117,9 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
     await waitFor(() => {
-      expect(screen.getByText(/reset link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/password-reset link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
@@ -125,7 +129,9 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
     await waitFor(() => {
-      expect(screen.getByText(/reset link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/password-reset link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
@@ -137,7 +143,9 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
     await waitFor(() => {
-      expect(screen.getByText(/reset link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/password-reset link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
@@ -177,7 +185,7 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/expired or has already been used/i)
+        screen.getByText(/password-reset link is invalid or expired/i)
       ).toBeDefined();
     });
   });
@@ -192,7 +200,7 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/expired or has already been used/i)
+        screen.getByText(/password-reset link is invalid or expired/i)
       ).toBeDefined();
     });
   });
@@ -296,7 +304,9 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
     await waitFor(() => {
-      expect(screen.getByText(/reset link problem/i)).toBeDefined();
+      expect(
+        screen.getByText(/password-reset link is invalid or expired/i)
+      ).toBeDefined();
     });
     expect(setSessionSpy).not.toHaveBeenCalled();
   });
@@ -312,7 +322,7 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
     render(<ResetPasswordPage />);
     await waitFor(() => {
       expect(
-        screen.getByText(/expired or has already been used/i)
+        screen.getByText(/password-reset link is invalid or expired/i)
       ).toBeDefined();
     });
   });
@@ -326,7 +336,7 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
     render(<ResetPasswordPage />);
     await waitFor(() => {
       expect(
-        screen.getByText(/expired or has already been used/i)
+        screen.getByText(/password-reset link is invalid or expired/i)
       ).toBeDefined();
     });
   });
@@ -383,5 +393,32 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
       expect(updateUserSpy).toHaveBeenCalledWith({ password: "longenough1" });
     });
     expect(pushSpy).toHaveBeenCalledWith("/");
+  });
+});
+
+describe("ResetPasswordPage — spent-token error state (#194)", () => {
+  it("renders 'already been used' copy + Request-a-new-link CTA when fragment carries otp_expired", async () => {
+    setUrl({
+      hash:
+        "#" +
+        new URLSearchParams({
+          error: "access_denied",
+          error_code: "otp_expired",
+          error_description: "Email link is invalid or has expired",
+        }).toString(),
+    });
+
+    const { default: ResetPasswordPage } = await import("../page");
+    render(<ResetPasswordPage />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/reset link has already been used/i)
+      ).toBeDefined();
+    });
+    const cta = screen.getByRole("link", { name: /request a new link/i });
+    expect(cta.getAttribute("href")).toBe("/forgot-password");
+    expect(setSessionSpy).not.toHaveBeenCalled();
+    expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
 });

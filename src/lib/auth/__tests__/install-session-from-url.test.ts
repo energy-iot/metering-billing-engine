@@ -257,10 +257,12 @@ describe("installSessionFromUrl — OTP flow (query string)", () => {
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
 
-  it("verifyOtp returns error → verify_error", async () => {
+  it("verifyOtp returns generic error → verify_error", async () => {
+    // Uses a non-spent-token code so we exercise the verify_error path.
+    // Spent-token mapping is covered separately (#194).
     verifyOtpSpy.mockResolvedValue({
       data: {},
-      error: { message: "expired", code: "otp_expired" },
+      error: { message: "rate limit hit", code: "rate_limited" },
     });
     const result = await installSessionFromUrl({
       supabase: makeSupabase(),
@@ -269,8 +271,8 @@ describe("installSessionFromUrl — OTP flow (query string)", () => {
     });
     expect(result).toEqual({
       kind: "verify_error",
-      code: "otp_expired",
-      message: "expired",
+      code: "rate_limited",
+      message: "rate limit hit",
     });
   });
 
@@ -367,5 +369,119 @@ describe("installSessionFromUrl — empty / edge cases", () => {
       expectedType: "invite",
     });
     expect(result.kind).toBe("missing");
+  });
+});
+
+describe("installSessionFromUrl — spent-token detection (#194)", () => {
+  it("fragment with error_code=otp_expired → spent_token", async () => {
+    const hash =
+      "#" +
+      new URLSearchParams({
+        error: "access_denied",
+        error_code: "otp_expired",
+        error_description: "Email link is invalid or has expired",
+      }).toString();
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash }),
+    });
+    expect(result).toEqual({ kind: "spent_token" });
+    expect(setSessionSpy).not.toHaveBeenCalled();
+    expect(verifyOtpSpy).not.toHaveBeenCalled();
+  });
+
+  it("fragment with error_code=email_link_invalid → spent_token", async () => {
+    const hash =
+      "#" +
+      new URLSearchParams({
+        error: "access_denied",
+        error_code: "email_link_invalid",
+        error_description: "Email link is invalid or has expired",
+      }).toString();
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash }),
+    });
+    expect(result).toEqual({ kind: "spent_token" });
+  });
+
+  it("fragment with error_code=OTP_EXPIRED (uppercase) → spent_token (case-insensitive)", async () => {
+    const hash =
+      "#" +
+      new URLSearchParams({
+        error: "access_denied",
+        error_code: "OTP_EXPIRED",
+      }).toString();
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash }),
+    });
+    expect(result).toEqual({ kind: "spent_token" });
+  });
+
+  it("fragment with unknown error_code=foo_bar → missing (not spent_token)", async () => {
+    // Fragment-only errors that DON'T match spent-token patterns fall
+    // through to the query path. With no query token, result is missing.
+    // (We do NOT surface a fragment-only generic error_code as
+    // verify_error — current behavior preserved.)
+    const hash =
+      "#" +
+      new URLSearchParams({
+        error: "access_denied",
+        error_code: "foo_bar",
+      }).toString();
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash }),
+    });
+    expect(result).toEqual({ kind: "missing" });
+  });
+
+  it("setSession returns error with code:'otp_expired' → spent_token (verify_error→spent_token mapping)", async () => {
+    setSessionSpy.mockResolvedValue({
+      data: {},
+      error: { message: "expired", code: "otp_expired" },
+    });
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash: FRAGMENT_INVITE() }),
+    });
+    expect(result).toEqual({ kind: "spent_token" });
+    expect(getUserSpy).not.toHaveBeenCalled();
+  });
+
+  it("fragment with BOTH access_token AND error → access_token path wins (NOT spent_token)", async () => {
+    // Defensive coverage for AC1 precedence: if a malformed URL has
+    // both auth tokens AND error params in the fragment, the implicit
+    // happy path takes precedence (matches SDK behavior).
+    setSessionSpy.mockResolvedValue({ data: {}, error: null });
+    getUserSpy.mockResolvedValue({
+      data: { user: { id: "u1", email: "u@example.com" } },
+      error: null,
+    });
+    const hash =
+      "#" +
+      new URLSearchParams({
+        access_token: "AT_VALID",
+        refresh_token: "RT_VALID",
+        type: "invite",
+        error: "access_denied",
+        error_code: "otp_expired",
+      }).toString();
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ hash }),
+    });
+    expect(result.kind).toBe("ok");
+    expect(setSessionSpy).toHaveBeenCalledWith({
+      access_token: "AT_VALID",
+      refresh_token: "RT_VALID",
+    });
   });
 });
