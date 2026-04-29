@@ -1,23 +1,17 @@
 /**
  * POST /api/communities/[id]/invoice-preview — unit tests (#204 / PDF2 AC-7).
  *
- * The renderer (PDF1b #203) is not yet on origin/main; this route ships with
- * a `renderInvoicePdfStub` that throws — the route catches and returns 503
- * `{ error: 'Preview unavailable until PDF1b...' }`. After PDF1b lands and
- * the stub is removed, swap the 503-stub assertions for PDF-stream
- * assertions per the AC.
- *
- * Coverage today (with the stub):
- *   (1) Happy path body validation → 503 (stubbed renderer)
+ * Coverage:
+ *   (1) Happy path → 200 PDF stream with `Content-Disposition: inline`
  *   (2) 403 for cross-org caller — no renderer call
  *   (3) 404 for RLS-hidden / missing community
  *   (4) 400 for malformed UUID / JSON / Zod validation
  *   (5) Permission gate runs BEFORE rendering (renderer NOT invoked on 403/404)
  *   (6) Preview does NOT call fn_next_invoice_number (RPC count = 0)
  *   (7) Empty invoice_prefix yields PREVIEW-{year}-PREVIEW invoice number
- *      (verified via the helper unit test below — renderer is stubbed here)
+ *      (verified via the helper unit test below)
  *   (8) No-microgrid path uses the synthetic 1-tier rate schedule
- *      (verified via the helper unit test below — renderer is stubbed here)
+ *      (verified via the helper unit test below)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -66,6 +60,16 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+}));
+
+// Mock the renderer to return a tiny fake PDF buffer. The renderer is exercised
+// end-to-end in PDF1b's own test suite (#203 / src/lib/invoices/__tests__/render.test.ts).
+const FAKE_PDF_BYTES = Buffer.from("%PDF-1.7\nfake-preview-bytes\n%%EOF\n");
+const renderMock = vi.fn<(input: unknown) => Promise<Buffer>>(
+  async () => FAKE_PDF_BYTES,
+);
+vi.mock("@/lib/invoices/render", () => ({
+  renderInvoicePdf: (input: unknown) => renderMock(input),
 }));
 
 const VALID_BODY = {
@@ -156,14 +160,25 @@ describe("POST /api/communities/[id]/invoice-preview", () => {
     mockRpc.mockResolvedValue({ data: null, error: null });
   });
 
-  it("(1) renderer-stub still gated → 503 { error } until PDF1b lands", async () => {
+  it("(1) happy path → 200 PDF stream with inline disposition", async () => {
     const { POST } = await import("../route");
     const res = await POST(makeRequest(VALID_BODY), {
       params: Promise.resolve({ id: COMMUNITY_ID }),
     });
-    expect(res.status).toBe(503);
-    const body = await res.json();
-    expect(body.error).toContain("PDF1b");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/pdf");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'inline; filename="preview.pdf"',
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(renderMock).toHaveBeenCalledOnce();
+    // Sanity-check that the renderer received the synthetic-input shape.
+    const firstCall = renderMock.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const passed = firstCall![0] as Record<string, unknown>;
+    expect(passed.paymentRedirectUrl).toBe(
+      "https://example.com/preview-payment",
+    );
   });
 
   it("(2) cross-org → 403 (renderer NOT invoked)", async () => {

@@ -11,6 +11,7 @@ import {
   assembleSyntheticPreviewInput,
   type PreviewRateSchedule,
 } from "@/lib/invoices/preview-input";
+import { renderInvoicePdf } from "@/lib/invoices/render";
 
 /**
  * POST /api/communities/[id]/invoice-preview — Render a synthetic preview PDF
@@ -43,20 +44,6 @@ import {
  *
  * Returns: PDF stream with `Content-Disposition: inline; filename="preview.pdf"`
  * — distinct from PDF1b's `attachment` (downloaded bills).
- *
- * ──────────────────────────────────────────────────────────────────────────
- *  PARALLEL DEPENDENCY: PDF1b (#203) ships `renderInvoicePdf` from
- *  `src/lib/invoices/render.tsx`. This route was implemented in parallel; the
- *  renderer import is gated behind a runtime stub returning 503 until #203
- *  merges. After #203 lands and this branch rebases on origin/main:
- *
- *    1. Replace the `renderInvoicePdfStub` import below with:
- *       `import { renderInvoicePdf } from '@/lib/invoices/render';`
- *    2. Delete the `renderInvoicePdfStub` declaration.
- *    3. Re-run `npm test` and `npm run build` to confirm the integration.
- *
- *  The reviewer MUST flag this comment if it survives merge.
- * ──────────────────────────────────────────────────────────────────────────
  */
 
 const UUID_RE =
@@ -65,14 +52,6 @@ const UUID_RE =
 const PREVIEW_PAYMENT_REDIRECT_URL = "https://example.com/preview-payment";
 
 const SIGNED_LOGO_TTL_SECONDS = 60;
-
-// TEMP STUB — remove once #203 (PDF1b) lands. The signature mirrors PDF1b's
-// renderer spec from mbe-docs/docs/tickets/pdf-invoices/PDF1b-renderer-and-pdf-endpoint.md.
-async function renderInvoicePdfStub(_input: unknown): Promise<Buffer> {
-  throw new Error(
-    "renderInvoicePdf is not yet available in this build (depends on PDF1b #203).",
-  );
-}
 
 export async function POST(
   request: NextRequest,
@@ -280,7 +259,7 @@ export async function POST(
   // (10) Render. Returns 503 until PDF1b lands and the stub is removed.
   let pdfBuffer: Buffer;
   try {
-    pdfBuffer = await renderInvoicePdfStub({
+    pdfBuffer = await renderInvoicePdf({
       ...baseInput,
       logoBytes,
       paymentRedirectUrl: PREVIEW_PAYMENT_REDIRECT_URL,
@@ -289,10 +268,10 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Preview unavailable until PDF1b (#203) lands. " +
-          (err instanceof Error ? err.message : ""),
+          "Failed to render preview: " +
+          (err instanceof Error ? err.message : "unknown error"),
       },
-      { status: 503 },
+      { status: 500 },
     );
   }
 

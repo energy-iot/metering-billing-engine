@@ -47,18 +47,17 @@ describe("preview-input", () => {
       ratesSchedule: null,
       now: FIXED_NOW,
     });
-    expect(out.ratesSchedule.tiers).toHaveLength(1);
-    expect(out.ratesSchedule.tiers[0]).toMatchObject({
+    const tiers = (out.ratesSchedule as { tiers: Array<Record<string, unknown>> }).tiers;
+    expect(tiers).toHaveLength(1);
+    expect(tiers[0]).toMatchObject({
       label: "Tier 1",
       min_kwh: 0,
       max_kwh: null,
       rate_per_kwh: 1,
     });
-    expect(out.ratesSchedule.service_charge).toBe(0);
-    expect(out.ratesSchedule.tax_rate).toBe(0);
   });
 
-  it("(4) real rate schedule is passed through unchanged", () => {
+  it("(4) real rate schedule's tiers + service_charge are passed through", () => {
     const real = {
       id: "real-id",
       microgrid_id: "real-mg-id",
@@ -76,89 +75,30 @@ describe("preview-input", () => {
       ratesSchedule: real,
       now: FIXED_NOW,
     });
-    expect(out.ratesSchedule).toEqual(real);
-    expect(out.lineItem.service_charge).toBe(5000);
+    const passed = out.ratesSchedule as unknown as typeof real;
+    expect(passed.tiers).toEqual(real.tiers);
+    expect(passed.service_charge).toBe(5000);
+    expect(passed.service_charge_description).toBe("Fixed monthly service fee");
   });
 
-  it("(5) shape is stable — snapshot", () => {
+  it("(5) top-level shape matches RenderInvoiceInput", () => {
     const out = assembleSyntheticPreviewInput({
       community: COMMUNITY,
       organization: ORGANIZATION,
       ratesSchedule: null,
       now: FIXED_NOW,
     });
-    expect(out).toMatchInlineSnapshot(`
-      {
-        "community": {
-          "id": "00000000-0000-0000-0000-000000000010",
-          "invoice_config": {},
-          "invoice_prefix": "NFE",
-          "name": "Sample Community",
-        },
-        "enteredByUserName": "Sample Operator",
-        "household": {
-          "account_number": "ACC-0001",
-          "contact_email": null,
-          "customer_type": "residential",
-          "display_name": "Sample Household",
-          "id": "00000000-0000-0000-0000-000000000001",
-          "meter_serial": "SM-PREVIEW-0001",
-          "meter_type": "Smart Submeter",
-        },
-        "lineItem": {
-          "created_at": "2026-04-27T12:00:00.000Z",
-          "due_date": "2026-05-05T12:00:00.000Z",
-          "end_kwh": 14624.75,
-          "id": "00000000-0000-0000-0000-000000000004",
-          "invoice_number": "NFE-2026-PREVIEW",
-          "issue_date": "2026-04-27T12:00:00.000Z",
-          "pre_tax_total": 124.5,
-          "service_charge": 0,
-          "start_kwh": 14500.25,
-          "subtotal": 124.5,
-          "tax_amount": 0,
-          "tier_breakdown": [
-            {
-              "label": "Tier 1",
-              "rate_per_kwh": 1,
-              "subtotal": 124.5,
-              "usage_kwh": 124.5,
-            },
-          ],
-          "total": 124.5,
-          "usage_kwh": 124.5,
-        },
-        "meterDevice": {
-          "device_type": "metering",
-          "display_name": "Smart Submeter (Preview)",
-          "id": "00000000-0000-0000-0000-000000000002",
-        },
-        "organization": {
-          "id": "00000000-0000-0000-0000-000000000020",
-          "name": "Sample Org",
-        },
-        "period": {
-          "end_at": "2026-04-27T12:00:00.000Z",
-          "id": "00000000-0000-0000-0000-000000000003",
-          "label": "Sample period",
-          "start_at": "2026-03-28T12:00:00.000Z",
-        },
-        "ratesSchedule": {
-          "id": "00000000-0000-0000-0000-000000000000",
-          "microgrid_id": "00000000-0000-0000-0000-000000000000",
-          "service_charge": 0,
-          "service_charge_description": null,
-          "tax_rate": 0,
-          "tiers": [
-            {
-              "label": "Tier 1",
-              "max_kwh": null,
-              "min_kwh": 0,
-              "rate_per_kwh": 1,
-            },
-          ],
-        },
-      }
-    `);
+    // Renderer-required fields are at the top level (not nested under lineItem).
+    expect(out.invoiceNumber).toBe("NFE-2026-PREVIEW");
+    expect(out.enteredByUserName).toBe("Sample Operator");
+    expect(out.billingPeriodStart).toBe("2026-03-28T12:00:00.000Z");
+    expect(out.billingPeriodEnd).toBe("2026-04-27T12:00:00.000Z");
+    // Each entity exists.
+    expect(out.lineItem).toBeDefined();
+    expect(out.household).toBeDefined();
+    expect(out.community).toBeDefined();
+    expect(out.organization).toBeDefined();
+    expect(out.ratesSchedule).toBeDefined();
+    expect(out.meterDevice).toBeDefined();
   });
 });

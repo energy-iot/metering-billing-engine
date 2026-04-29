@@ -24,6 +24,15 @@
  */
 
 import type { InvoiceConfig } from "./config-schema";
+import type {
+  BillingLineItem,
+  Community,
+  Device,
+  Household,
+  Organization,
+  RateSchedule,
+} from "@/lib/types/domain";
+import type { RenderInvoiceInput } from "./render";
 
 /**
  * Minimal community-like input needed by the preview helper. Mirrors the
@@ -148,54 +157,85 @@ export function assembleSyntheticPreviewInput({
 
   const invoiceNumber = makePreviewInvoiceNumber(community.invoice_prefix, now);
 
+  // Synthetic entities. The renderer (PDF1b #203) reads only a subset of
+  // each row's columns, so the casts below are typed via `as unknown as ...`
+  // — defensive: if the renderer ever reads an unexpected field at runtime,
+  // it'll get `undefined` and render empty/placeholder, which is acceptable
+  // for a preview (no real billing arithmetic correctness required).
+  const lineItem = {
+    id: "00000000-0000-0000-0000-000000000004",
+    created_at: now.toISOString(),
+    start_kwh: startKwh,
+    end_kwh: endKwh,
+    usage_kwh: usageKwh,
+    tier_breakdown: tierBreakdown,
+    total_amount: grandTotal,
+    reading_source: "manual",
+    manual_reason: null,
+    entered_at: now.toISOString(),
+  } as unknown as BillingLineItem;
+
+  const household = {
+    id: "00000000-0000-0000-0000-000000000001",
+    display_name: "Sample Household",
+    account_number: "ACC-0001",
+    contact_email: null,
+    customer_type: "residential",
+    meter_serial: "SM-PREVIEW-0001",
+    meter_type: "Smart Submeter",
+    unit_label: null,
+    address_line1: "Sample street",
+    address_line2: null,
+    address_city: "Kampala",
+    address_country: "Uganda",
+  } as unknown as Household;
+
+  const meterDevice = {
+    id: "00000000-0000-0000-0000-000000000002",
+    name: "Smart Submeter (Preview)",
+    openems_component_id: "meter0",
+    device_type: "consumption_meter",
+  } as unknown as Device;
+
+  const ratesScheduleEntity = {
+    id: effectiveRates.id,
+    microgrid_id: effectiveRates.microgrid_id,
+    tiers: effectiveRates.tiers,
+    service_charge: effectiveRates.service_charge,
+    service_charge_description: effectiveRates.service_charge_description,
+  } as unknown as RateSchedule;
+
   return {
-    organization: {
-      id: organization.id,
-      name: organization.name,
-    },
+    lineItem,
+    household,
     community: {
       id: community.id,
       name: community.name,
       invoice_config: community.invoice_config,
       invoice_prefix: community.invoice_prefix,
-    },
-    household: {
-      id: "00000000-0000-0000-0000-000000000001",
-      display_name: "Sample Household",
-      account_number: "ACC-0001",
-      contact_email: null,
-      customer_type: "residential",
-      meter_serial: "SM-PREVIEW-0001",
-      meter_type: "Smart Submeter",
-    },
-    meterDevice: {
-      id: "00000000-0000-0000-0000-000000000002",
-      display_name: "Smart Submeter (Preview)",
-      device_type: "metering",
-    },
-    period: {
-      id: "00000000-0000-0000-0000-000000000003",
-      start_at: periodStart.toISOString(),
-      end_at: periodEnd.toISOString(),
-      label: "Sample period",
-    },
-    lineItem: {
-      id: "00000000-0000-0000-0000-000000000004",
-      invoice_number: invoiceNumber,
-      created_at: now.toISOString(),
-      issue_date: issueDate.toISOString(),
-      due_date: dueDate.toISOString(),
-      start_kwh: startKwh,
-      end_kwh: endKwh,
-      usage_kwh: usageKwh,
-      tier_breakdown: tierBreakdown,
-      subtotal,
-      service_charge: serviceCharge,
-      pre_tax_total: preTaxTotal,
-      tax_amount: taxAmount,
-      total: grandTotal,
-    },
-    ratesSchedule: effectiveRates,
+    } as unknown as Community,
+    organization: {
+      id: organization.id,
+      name: organization.name,
+    } as unknown as Organization,
+    ratesSchedule: ratesScheduleEntity,
+    invoiceNumber,
+    meterDevice,
     enteredByUserName: "Sample Operator",
+    billingPeriodStart: periodStart.toISOString(),
+    billingPeriodEnd: periodEnd.toISOString(),
+    // Audit/decoration fields preserved for future extension; not consumed
+    // by the renderer today but documented in the helper contract.
+    _previewMeta: {
+      issueDate: issueDate.toISOString(),
+      dueDate: dueDate.toISOString(),
+      subtotal,
+      serviceCharge,
+      preTaxTotal,
+      taxAmount,
+      grandTotal,
+    },
+  } satisfies Omit<RenderInvoiceInput, "logoBytes" | "paymentRedirectUrl"> & {
+    _previewMeta: Record<string, unknown>;
   };
 }
