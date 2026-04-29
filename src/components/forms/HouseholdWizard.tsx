@@ -215,7 +215,13 @@ export function HouseholdWizard({
   const step3FirstFieldRef = React.useRef<HTMLButtonElement | HTMLInputElement | null>(null);
   const step4FirstElementRef = React.useRef<HTMLButtonElement>(null);
 
-  // Reset wizard state when opened.
+  // Reset wizard state when `open` flips false → true (entering a fresh
+  // wizard session). Split out from the prop-resync effect below: keeping
+  // `availableMetersProp` as a dep here would wipe the user's in-progress
+  // form state every time the parent server component re-renders with a
+  // new array reference (e.g. after `router.refresh()` from
+  // `handleDevicePersisted`). Two effects let prop refreshes update the
+  // local meter list without touching step/state/visited.
   React.useEffect(() => {
     if (open) {
       setStep(1);
@@ -226,11 +232,33 @@ export function HouseholdWizard({
       setConfirmCancelOpen(false);
       // #200: re-seed availableMeters from the prop so any in-flight
       // appended-via-discovery devices from a prior open are dropped on
-      // re-open. The prop itself is refreshed by router.refresh() after
-      // a successful save in the parent server component.
+      // re-open.
       setAvailableMeters(availableMetersProp);
     }
-  }, [open, availableMetersProp]);
+    // Intentionally only depend on `open` — we want this to run on the
+    // open transition, not on prop changes mid-flow. The prop is read at
+    // open time to seed `availableMeters`; subsequent prop refreshes are
+    // handled by the dedicated effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // #200: re-sync local availableMeters when the parent server component
+  // hands us a new prop reference (e.g. after `router.refresh()`).
+  // Dedupes against in-flight inline-discovery appends so we don't drop
+  // freshly persisted devices that haven't yet appeared in the prop.
+  React.useEffect(() => {
+    if (!open) return;
+    setAvailableMeters((prev) => {
+      const byId = new Map(availableMetersProp.map((m) => [m.id, m]));
+      // Append any locally-known meters that aren't in the new prop yet.
+      for (const m of prev) {
+        if (!byId.has(m.id)) {
+          byId.set(m.id, m);
+        }
+      }
+      return Array.from(byId.values());
+    });
+  }, [availableMetersProp, open]);
 
   // #200: handle a freshly persisted device from inline discovery.
   // Update ordering rationale (per ticket #200 AC #11):

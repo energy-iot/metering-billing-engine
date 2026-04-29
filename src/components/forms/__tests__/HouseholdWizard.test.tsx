@@ -24,9 +24,13 @@ import {
   type AvailableMeter,
 } from "../HouseholdWizard";
 
-// Mock next/navigation
+// Mock next/navigation. `refreshHandler` is module-scoped so individual
+// tests can swap in a side-effecting refresh (e.g. to simulate the parent
+// server component re-rendering with a new `availableMeters` prop) — this
+// is what the #200 regression test for the reset-effect bug needs.
+let refreshHandler: () => void = () => {};
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
+  useRouter: () => ({ refresh: () => refreshHandler() }),
 }));
 
 // Polyfill ResizeObserver — required by Radix RadioGroup
@@ -94,6 +98,8 @@ describe("HouseholdWizard", () => {
 
   beforeEach(() => {
     fetchMock = vi.spyOn(globalThis, "fetch");
+    // Reset router.refresh side-effect between tests.
+    refreshHandler = () => {};
   });
 
   afterEach(() => {
@@ -1060,6 +1066,133 @@ describe("HouseholdWizard", () => {
       expect(
         screen.getByRole("button", { name: /^Discover meters$/i })
       ).toBeDefined();
+    });
+
+    /**
+     * #200 regression: when `handleDevicePersisted` calls `router.refresh()`
+     * after a successful inline-discover save, the parent server component
+     * re-renders with a new `availableMeters` prop reference. The reset
+     * effect MUST NOT fire on that prop change — it would wipe step state
+     * and the user's typed values back to step 1. This test wraps the
+     * wizard in a controlled parent that mutates the prop reference inside
+     * `router.refresh()`, simulating the production re-render path that
+     * the prior `vi.fn()` no-op mock missed.
+     */
+    it("router.refresh after inline-persist preserves step + form state (regression for reset-on-prop-change)", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([consumptionMeter("meter9", "M9")])],
+        devices: [
+          {
+            ok: true,
+            status: 200,
+            jsonBody: {
+              saved: [
+                {
+                  id: "dev-new",
+                  name: "M9",
+                  device_type: "consumption_meter",
+                  openems_component_id: "meter9",
+                },
+              ],
+            },
+          },
+        ],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      // Controlled wrapper: lets the test mutate the `availableMeters`
+      // prop reference from inside `router.refresh()`, mimicking how a
+      // server-component parent re-renders after `router.refresh()`.
+      function Wrapper() {
+        const [meters, setMeters] = React.useState<AvailableMeter[]>([]);
+        // Hook the test-scoped refresh handler to push a new prop ref.
+        React.useEffect(() => {
+          refreshHandler = () => {
+            // New array reference (would be returned by the server
+            // component on its next render after the device was saved).
+            setMeters([
+              {
+                id: "dev-new",
+                name: "M9",
+                device_type: "consumption_meter",
+                edge_id: "edge-1",
+                edge_name: "Metering Pi",
+                linked_household_name: null,
+              },
+            ]);
+          };
+          return () => {
+            refreshHandler = () => {};
+          };
+        }, []);
+        return (
+          <HouseholdWizard
+            open
+            onOpenChange={() => {}}
+            microgridId={MICROGRID_ID}
+            availableMeters={meters}
+            edgesSetupHref={`/microgrids/${MICROGRID_ID}/setup/edges`}
+            edges={[EDGE_1]}
+            edgeIdsWithoutConsumptionMeter={[EDGE_1.id]}
+          />
+        );
+      }
+
+      render(<Wrapper />);
+
+      // Step 1 — fill display name + phone
+      fillDisplayName("My Household");
+      fillPhone("+256700000111");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 2 — wait for step 2 fields, then advance
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 — discover & save flow that triggers router.refresh()
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      await waitFor(() => expect(screen.getByText("M9")).toBeDefined());
+      const candidateRadios = screen.getAllByRole("radio");
+      fireEvent.click(candidateRadios[0]);
+      fireEvent.click(screen.getByRole("button", { name: /Save & select/i }));
+
+      // After persist, the wrapper's refreshHandler fires, replacing the
+      // `availableMeters` prop with a brand-new array. Pre-fix, this
+      // wiped state back to step 1.
+      await waitFor(() => {
+        const radios = screen.getAllByRole("radio");
+        const checked = radios.filter(
+          (r) => r.getAttribute("aria-checked") === "true"
+        );
+        expect(checked.length).toBeGreaterThanOrEqual(1);
+      });
+
+      // Still on step 3 — the Create button is the step-4 advance, so its
+      // absence is the proof we are NOT on step 4 either; combined with the
+      // step-3-only Discover panel still in the DOM, we are on step 3.
+      expect(
+        screen.queryByRole("button", { name: /Create household/i })
+      ).toBeNull();
+      // Step 1 and Step 2 fields must NOT be visible (we'd see them if
+      // the wizard had snapped back to step 1).
+      expect(screen.queryByLabelText(/^Display name/i)).toBeNull();
+      expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+
+      // Advance to step 4 — preserved values must show in the review.
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Create household/i })
+        ).toBeDefined()
+      );
+      // Display name and phone preserved on the review panel.
+      expect(screen.getByText("My Household")).toBeDefined();
+      expect(screen.getByText("+256700000111")).toBeDefined();
     });
 
     it("multi-edge: picker renders both edges; default-selects first edge in edgeIdsWithoutConsumptionMeter by (name, id)", async () => {
