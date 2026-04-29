@@ -61,7 +61,7 @@ export default async function SetupHouseholdsPage({
       .eq("role", "primary_consumption_meter"),
     supabase
       .from("edges")
-      .select("id, name")
+      .select("id, name, openems_edge_id")
       .eq("microgrid_id", id),
   ]);
 
@@ -93,6 +93,24 @@ export default async function SetupHouseholdsPage({
   const edgeNameById = new Map<string, string>(
     (edgesForMg ?? []).map((e) => [e.id, e.name ?? ""])
   );
+
+  // #200: edges that have NO consumption_meter device yet, used by the
+  // wizard's inline DiscoverMeterInline default-edge picker.
+  const edgesWithConsumptionMeter = new Set<string>(
+    (devices ?? [])
+      .filter((d) => d.device_type === "consumption_meter")
+      .map((d) => d.edge_id)
+  );
+  const edgeIdsWithoutConsumptionMeter: string[] = (edgesForMg ?? [])
+    .filter((e) => !edgesWithConsumptionMeter.has(e.id))
+    .map((e) => e.id);
+
+  // Edges shaped for `<DiscoverMeterInline>` (id + name + openems_edge_id).
+  const wizardEdges = (edgesForMg ?? []).map((e) => ({
+    id: e.id,
+    name: e.name ?? "",
+    openems_edge_id: e.openems_edge_id ?? "",
+  }));
 
   // The wizard call site still filters out devices that are already linked
   // (StepMeter expects only assignable meters). DeviceSelect (used by the
@@ -161,6 +179,8 @@ export default async function SetupHouseholdsPage({
         availableMeters={availableMeters}
         billingDevices={billingDevices}
         canManage={canManage}
+        edges={wizardEdges}
+        edgeIdsWithoutConsumptionMeter={edgeIdsWithoutConsumptionMeter}
       />
     </>
   );

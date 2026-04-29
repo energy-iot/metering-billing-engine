@@ -1762,7 +1762,7 @@ describe("RLS: OpenEMS Backend (#101)", () => {
       expect(data).toBeNull();
     });
 
-    it("org_manager (owner org) gets NULL — redacted", async () => {
+    it("org_manager (owner org) gets plaintext (post-#200 widening)", async () => {
       if (skipIfRequested()) return;
       await setupCloudAwsConfig();
       try {
@@ -1770,7 +1770,7 @@ describe("RLS: OpenEMS Backend (#101)", () => {
           _microgrid_id: FIXTURE.microgridA,
         });
         expect(error).toBeNull();
-        expect(data).toBeNull();
+        expect(data).toBe(SECRET_PLAINTEXT);
       } finally {
         await clearCloudAwsConfig();
       }

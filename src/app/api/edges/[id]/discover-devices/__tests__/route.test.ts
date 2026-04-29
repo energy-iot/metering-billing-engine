@@ -7,7 +7,7 @@
  *   (c) Bad UUID → 400
  *   (d) Edge not found → 404
  *   (e) Cross-microgrid edge (canAccessMicrogrid false) → 404
- *   (f) org_manager caller → 403
+ *   (f) org_manager who can access the microgrid → 200 (post-#200 widening)
  *   (g) Microgrid unconfigured → 409 reason: "not_configured"
  *   (h) OPENEMS_FORBIDDEN from config → 403 reason: "forbidden"
  *   (i) getEdgesStatus throws OPENEMS_AUTH_FAILED → 503 reason: "auth_failed"
@@ -196,18 +196,31 @@ describe("GET /api/edges/[id]/discover-devices", () => {
     expect(res.status).toBe(404);
   });
 
-  // (f) org_manager caller → 403
-  it("(f) returns 403 when caller is not super_admin", async () => {
+  // (f) org_manager who can access the microgrid → 200 (post-#200 widening).
+  // The super_admin gate was removed; permission is now decided by
+  // currentUserCanAccessMicrogrid + fn_get_ems_secret, both of which accept
+  // org_managers scoped to the microgrid's parent org. The 403 surface is
+  // now exclusive to OPENEMS_FORBIDDEN (case (h)).
+  it("(f) returns 200 for org_manager who can access the microgrid", async () => {
     isSuperAdminReturn = false;
+    canAccessMicrogridReturn = true;
+    getMicrogridEmsConfigMock.mockResolvedValue(defaultEmsConfig);
     registerEdgeLookup(true);
+    registerDedupQuery([]);
+
+    getEdgesStatusMock.mockResolvedValue([{ edgeId: OPENEMS_EDGE_ID, online: true }]);
+    getEdgeConfigMock.mockResolvedValue(singleComponentConfig);
 
     const { GET } = await import("../route");
     const res = await GET(makeReq(), {
       params: Promise.resolve({ id: EDGE_DB_ID }),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.error).toContain("super admin");
+    expect(json.edgeId).toBe(OPENEMS_EDGE_ID);
+    expect(json.online).toBe(true);
+    expect(json.devices).toHaveLength(1);
+    expect(json.devices[0].componentId).toBe("meter0");
   });
 
   // (g) Microgrid unconfigured → 409

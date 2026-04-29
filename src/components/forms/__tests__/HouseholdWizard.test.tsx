@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * HouseholdWizard component tests (UX2 / #74 + #146).
+ * HouseholdWizard component tests (UX2 / #74 + #146 + #200).
  *
  * Covers:
  *   (a) 4-step transitions (1 → 2 → 3 → 4) work with Next
@@ -13,6 +13,7 @@
  *   (h) #146 — Step 2 renders 5 new address fields
  *   (i) #146 — Step 4 review displays new address fields
  *   (j) #146 — submit payload includes new address fields
+ *   (k) #200 — inline DiscoverMeterInline integration in Step 3
  */
 
 import * as React from "react";
@@ -23,9 +24,13 @@ import {
   type AvailableMeter,
 } from "../HouseholdWizard";
 
-// Mock next/navigation
+// Mock next/navigation. `refreshHandler` is module-scoped so individual
+// tests can swap in a side-effecting refresh (e.g. to simulate the parent
+// server component re-rendering with a new `availableMeters` prop) — this
+// is what the #200 regression test for the reset-effect bug needs.
+let refreshHandler: () => void = () => {};
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
+  useRouter: () => ({ refresh: () => refreshHandler() }),
 }));
 
 // Polyfill ResizeObserver — required by Radix RadioGroup
@@ -93,6 +98,8 @@ describe("HouseholdWizard", () => {
 
   beforeEach(() => {
     fetchMock = vi.spyOn(globalThis, "fetch");
+    // Reset router.refresh side-effect between tests.
+    refreshHandler = () => {};
   });
 
   afterEach(() => {
@@ -658,6 +665,559 @@ describe("HouseholdWizard", () => {
 
       // And the confirm dialog should NOT be shown
       expect(screen.queryByText(/Discard unsaved household/i)).toBeNull();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // (k) #200 — inline DiscoverMeterInline integration
+  // URL-dispatching mock pattern: two endpoints
+  //   /api/edges/<id>/discover-devices  →  GET — discovery
+  //   /api/devices                       →  POST — persist single meter
+  //   /api/households/with-meter         →  POST — wizard submit
+  // ──────────────────────────────────────────────────────────────────────
+  describe("(k) #200 inline discovery", () => {
+    const EDGE_1 = {
+      id: "edge-1",
+      name: "Metering Pi",
+      openems_edge_id: "edge1",
+    };
+    const EDGE_2 = {
+      id: "edge-2",
+      name: "Aux Edge",
+      openems_edge_id: "edge2",
+    };
+
+    /**
+     * Build a fetch mock that dispatches by URL substring. Each endpoint
+     * has a queue of responses; the first call to the matching URL pops
+     * the head of the queue.
+     */
+    type Resp = { ok: boolean; status: number; jsonBody: unknown };
+    function makeUrlDispatcher(
+      handlers: Record<
+        "discover" | "devices" | "household",
+        Resp[] | ((url: string) => Resp)
+      >
+    ) {
+      const counts = { discover: 0, devices: 0, household: 0 };
+      const impl = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        const route = url.includes("/discover-devices")
+          ? "discover"
+          : url.includes("/api/devices")
+          ? "devices"
+          : url.includes("/api/households/with-meter")
+          ? "household"
+          : null;
+        if (!route) {
+          throw new Error(`Unhandled fetch URL: ${url}`);
+        }
+        counts[route]++;
+        const handler = handlers[route];
+        const r =
+          typeof handler === "function" ? handler(url) : handler.shift();
+        if (!r) {
+          throw new Error(`No mock response queued for ${route} at ${url}`);
+        }
+        return {
+          ok: r.ok,
+          status: r.status,
+          json: async () => r.jsonBody,
+        } as Response;
+      });
+      return { impl, counts };
+    }
+
+    function discoveryResponse(devices: object[], online = true) {
+      return {
+        ok: true,
+        status: 200,
+        jsonBody: {
+          edgeId: "edge1",
+          online,
+          devices,
+        },
+      };
+    }
+
+    function consumptionMeter(
+      componentId: string,
+      alias = "Discovered Meter"
+    ) {
+      return {
+        componentId,
+        factoryId: "io.openems.impl.meter.consumption.ConsumptionMeter",
+        alias,
+        nature: "io.openems.edge.meter.api.ElectricityMeter",
+        openemsChannelAddress: `${componentId}/ActiveConsumptionEnergy`,
+        suggestedDeviceType: "consumption_meter",
+        alreadyAdded: false,
+      };
+    }
+
+    it("renders the discovery section with edge1 pre-selected (single-edge collapses to label)", async () => {
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      // navigate to step 3
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Discovery section visible
+      await waitFor(() =>
+        expect(
+          screen.getByText(/Discover meters on an edge/i)
+        ).toBeDefined()
+      );
+      // Single-edge label shows the name (not a Select)
+      expect(screen.getByText(/Metering Pi/i)).toBeDefined();
+      // Discover button visible
+      expect(
+        screen.getByRole("button", { name: /Discover meters/i })
+      ).toBeDefined();
+    });
+
+    it("happy path: discover → pick → save → meter appears + auto-selected, step stays on 3", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([consumptionMeter("meter9", "M9")])],
+        devices: [
+          {
+            ok: true,
+            status: 200,
+            jsonBody: {
+              saved: [
+                {
+                  id: "dev-new",
+                  name: "M9",
+                  device_type: "consumption_meter",
+                  openems_component_id: "meter9",
+                },
+              ],
+            },
+          },
+        ],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Click Discover
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+
+      // Wait for the candidate radio to render
+      await waitFor(() =>
+        expect(screen.getByText("M9")).toBeDefined()
+      );
+      // Pick the candidate
+      const candidateRadios = screen.getAllByRole("radio");
+      // The first radio in the wizard's own RadioGroup may not exist (no
+      // available meters yet) — DiscoverMeterInline owns the only group.
+      fireEvent.click(candidateRadios[0]);
+
+      // Save & select
+      fireEvent.click(screen.getByRole("button", { name: /Save & select/i }));
+
+      // The new meter should now appear in the wizard's own RadioGroup —
+      // identified by the meter name "M9". It is also auto-selected.
+      await waitFor(() => {
+        const radios = screen.getAllByRole("radio");
+        // After append, the radio list should include the new meter card.
+        const checked = radios.filter(
+          (r) => r.getAttribute("aria-checked") === "true"
+        );
+        expect(checked.length).toBeGreaterThanOrEqual(1);
+      });
+
+      // Still on step 3 (Next button is the visible advance, not Create)
+      expect(
+        screen.queryByRole("button", { name: /Create household/i })
+      ).toBeNull();
+      // Next is enabled
+      const next = screen.getByRole("button", { name: /^Next$/ });
+      expect(next).toHaveProperty("disabled", false);
+    });
+
+    it("empty discovery (no consumption meters after filter) renders the no-meters message", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([])],
+        devices: [],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByText(/No new consumption meters on this edge/i)
+        ).toBeDefined()
+      );
+    });
+
+    it("offline edge response renders the offline notice", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([], false)],
+        devices: [],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByText(/Edge is offline — retry when it reconnects/i)
+        ).toBeDefined()
+      );
+    });
+
+    it("network error renders Retry; clicking it re-fires the GET", async () => {
+      let calls = 0;
+      const impl = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/discover-devices")) {
+          calls++;
+          if (calls === 1) {
+            throw new Error("network down");
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              edgeId: "edge1",
+              online: true,
+              devices: [],
+            }),
+          } as Response;
+        }
+        throw new Error(`Unhandled URL: ${url}`);
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      const retry = await screen.findByRole("button", { name: /^Retry$/i });
+      fireEvent.click(retry);
+
+      await waitFor(() => expect(calls).toBe(2));
+    });
+
+    it("POST /api/devices 500 → renders inline error, preserves the user's pick", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([consumptionMeter("meterX", "MX")])],
+        devices: [
+          {
+            ok: false,
+            status: 500,
+            jsonBody: { error: "Could not save device" },
+          },
+        ],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      await waitFor(() =>
+        expect(screen.getByText("MX")).toBeDefined()
+      );
+      const candidateRadio = screen.getAllByRole("radio")[0];
+      fireEvent.click(candidateRadio);
+      fireEvent.click(screen.getByRole("button", { name: /Save & select/i }));
+
+      // Inline error visible
+      await waitFor(() =>
+        expect(screen.getByText(/Could not save device/i)).toBeDefined()
+      );
+
+      // Pick is preserved — radio is still in the document AND the editable
+      // name input is still rendered (it lives inside the picked-section
+      // panel).
+      expect(screen.getByDisplayValue("MX")).toBeDefined();
+      // Wizard still on step 3 (no Create household button)
+      expect(
+        screen.queryByRole("button", { name: /Create household/i })
+      ).toBeNull();
+    });
+
+    it("toggling no_meter ON hides discovery section; OFF re-shows in idle phase", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([])],
+        devices: [],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Initially the discovery section is visible.
+      await waitFor(() =>
+        expect(
+          screen.getByText(/Discover meters on an edge/i)
+        ).toBeDefined()
+      );
+
+      // Toggle no_meter ON — section disappears.
+      const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+      fireEvent.click(checkbox);
+      expect(checkbox.checked).toBe(true);
+      await waitFor(() =>
+        expect(
+          screen.queryByText(/Discover meters on an edge/i)
+        ).toBeNull()
+      );
+
+      // Toggle OFF — section reappears in idle phase (no scan results).
+      fireEvent.click(checkbox);
+      await waitFor(() =>
+        expect(
+          screen.getByText(/Discover meters on an edge/i)
+        ).toBeDefined()
+      );
+      // The discover button is in idle ("Discover meters", not "Scanning…")
+      expect(
+        screen.getByRole("button", { name: /^Discover meters$/i })
+      ).toBeDefined();
+    });
+
+    /**
+     * #200 regression: when `handleDevicePersisted` calls `router.refresh()`
+     * after a successful inline-discover save, the parent server component
+     * re-renders with a new `availableMeters` prop reference. The reset
+     * effect MUST NOT fire on that prop change — it would wipe step state
+     * and the user's typed values back to step 1. This test wraps the
+     * wizard in a controlled parent that mutates the prop reference inside
+     * `router.refresh()`, simulating the production re-render path that
+     * the prior `vi.fn()` no-op mock missed.
+     */
+    it("router.refresh after inline-persist preserves step + form state (regression for reset-on-prop-change)", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([consumptionMeter("meter9", "M9")])],
+        devices: [
+          {
+            ok: true,
+            status: 200,
+            jsonBody: {
+              saved: [
+                {
+                  id: "dev-new",
+                  name: "M9",
+                  device_type: "consumption_meter",
+                  openems_component_id: "meter9",
+                },
+              ],
+            },
+          },
+        ],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      // Controlled wrapper: lets the test mutate the `availableMeters`
+      // prop reference from inside `router.refresh()`, mimicking how a
+      // server-component parent re-renders after `router.refresh()`.
+      function Wrapper() {
+        const [meters, setMeters] = React.useState<AvailableMeter[]>([]);
+        // Hook the test-scoped refresh handler to push a new prop ref.
+        React.useEffect(() => {
+          refreshHandler = () => {
+            // New array reference (would be returned by the server
+            // component on its next render after the device was saved).
+            setMeters([
+              {
+                id: "dev-new",
+                name: "M9",
+                device_type: "consumption_meter",
+                edge_id: "edge-1",
+                edge_name: "Metering Pi",
+                linked_household_name: null,
+              },
+            ]);
+          };
+          return () => {
+            refreshHandler = () => {};
+          };
+        }, []);
+        return (
+          <HouseholdWizard
+            open
+            onOpenChange={() => {}}
+            microgridId={MICROGRID_ID}
+            availableMeters={meters}
+            edgesSetupHref={`/microgrids/${MICROGRID_ID}/setup/edges`}
+            edges={[EDGE_1]}
+            edgeIdsWithoutConsumptionMeter={[EDGE_1.id]}
+          />
+        );
+      }
+
+      render(<Wrapper />);
+
+      // Step 1 — fill display name + phone
+      fillDisplayName("My Household");
+      fillPhone("+256700000111");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 2 — wait for step 2 fields, then advance
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // Step 3 — discover & save flow that triggers router.refresh()
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+      await waitFor(() => expect(screen.getByText("M9")).toBeDefined());
+      const candidateRadios = screen.getAllByRole("radio");
+      fireEvent.click(candidateRadios[0]);
+      fireEvent.click(screen.getByRole("button", { name: /Save & select/i }));
+
+      // After persist, the wrapper's refreshHandler fires, replacing the
+      // `availableMeters` prop with a brand-new array. Pre-fix, this
+      // wiped state back to step 1.
+      await waitFor(() => {
+        const radios = screen.getAllByRole("radio");
+        const checked = radios.filter(
+          (r) => r.getAttribute("aria-checked") === "true"
+        );
+        expect(checked.length).toBeGreaterThanOrEqual(1);
+      });
+
+      // Still on step 3 — the Create button is the step-4 advance, so its
+      // absence is the proof we are NOT on step 4 either; combined with the
+      // step-3-only Discover panel still in the DOM, we are on step 3.
+      expect(
+        screen.queryByRole("button", { name: /Create household/i })
+      ).toBeNull();
+      // Step 1 and Step 2 fields must NOT be visible (we'd see them if
+      // the wizard had snapped back to step 1).
+      expect(screen.queryByLabelText(/^Display name/i)).toBeNull();
+      expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+
+      // Advance to step 4 — preserved values must show in the review.
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Create household/i })
+        ).toBeDefined()
+      );
+      // Display name and phone preserved on the review panel.
+      expect(screen.getByText("My Household")).toBeDefined();
+      expect(screen.getByText("+256700000111")).toBeDefined();
+    });
+
+    it("multi-edge: picker renders both edges; default-selects first edge in edgeIdsWithoutConsumptionMeter by (name, id)", async () => {
+      // Edge naming: "Aux Edge" (a) < "Metering Pi" (m).
+      // Both are in edgeIdsWithoutConsumptionMeter — alphabetical first
+      // by name is Aux Edge.
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1, EDGE_2],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id, EDGE_2.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+      // The Select trigger displays the picked edge's name.
+      // Aux Edge sorts first alphabetically by name.
+      await waitFor(() => {
+        const trigger = screen.getByRole("combobox");
+        expect(trigger.textContent).toContain("Aux Edge");
+      });
     });
   });
 });
