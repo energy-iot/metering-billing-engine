@@ -7,6 +7,14 @@
 //   - Default opts = { year: numeric, month: short, day: numeric } —
 //     "Mar 15, 2026" in en. Override per-call when needed.
 //   - className composable via cn().
+//
+// String helper:
+//   - `formatLocalDate(value, locale, opts?)` — pure function, no React
+//     context. Reuses the same getDF() cache. Returns "—" for null /
+//     undefined. Mirrors the formatCurrency / formatKwh shipping pattern
+//     (#46 / PR #49) so non-DOM consumers (e.g. PDF1b's @react-pdf renderer
+//     at src/lib/invoices/render.tsx — react-pdf can't render <span>) get
+//     consistent locale formatting without inlining Intl.DateTimeFormat.
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
@@ -24,6 +32,26 @@ function getDF(locale: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeF
   return df;
 }
 
+const DEFAULT_OPTS: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+};
+
+/** Pure string formatter — no React context. Pass locale from useLocale(). */
+export function formatLocalDate(
+  value: Date | string | null | undefined,
+  locale: string,
+  opts?: Intl.DateTimeFormatOptions,
+): string {
+  if (value == null) return "—";
+  const d = value instanceof Date ? value : new Date(value);
+  // Defensive against bad inputs — Intl throws on Invalid Date, but the
+  // caller's UI shouldn't 500 over a corrupt timestamp.
+  if (Number.isNaN(d.getTime())) return "—";
+  return getDF(locale, opts ?? DEFAULT_OPTS).format(d);
+}
+
 export interface LocalDateProps extends React.HTMLAttributes<HTMLSpanElement> {
   value: Date | string;
   locale?: string;
@@ -37,19 +65,11 @@ export interface LocalDateProps extends React.HTMLAttributes<HTMLSpanElement> {
   relative?: boolean;
 }
 
-const DEFAULT_OPTS: Intl.DateTimeFormatOptions = {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-};
-
 export function LocalDate({ value, locale, opts, relative, className, ...props }: LocalDateProps) {
   const ctx = useLocale();
   const lc = locale ?? ctx.locale;
   const d = value instanceof Date ? value : new Date(value);
-  const text = relative
-    ? timeAgo(d, lc)
-    : getDF(lc, opts ?? DEFAULT_OPTS).format(d);
+  const text = relative ? timeAgo(d, lc) : formatLocalDate(d, lc, opts);
   return (
     <span className={cn("font-mono tabular-nums", className)} {...props}>
       {text}
