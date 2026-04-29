@@ -140,7 +140,6 @@ export async function GET(
             organizations!inner (
               id,
               name,
-              slug,
               created_at
             )
           )
