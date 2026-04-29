@@ -19,6 +19,12 @@ import {
 // primary_consumption_meter assignment (UX2 requirement) in a single
 // atomic RPC call.
 
+type WizardEdge = {
+  id: string;
+  name: string;
+  openems_edge_id: string;
+};
+
 type Props = {
   microgridId: string;
   households: Household[];
@@ -28,6 +34,10 @@ type Props = {
   /** Enriched device list for the per-row billing-device <select>. */
   billingDevices?: BillingDeviceOption[];
   canManage?: boolean;
+  /** #200: edges on this microgrid (used by the wizard's inline discovery). */
+  edges?: WizardEdge[];
+  /** #200: edges that have NO consumption_meter device yet. */
+  edgeIdsWithoutConsumptionMeter?: string[];
 };
 
 export function HouseholdsSection({
@@ -38,6 +48,8 @@ export function HouseholdsSection({
   availableMeters,
   billingDevices,
   canManage = false,
+  edges = [],
+  edgeIdsWithoutConsumptionMeter = [],
 }: Props) {
   const [wizardOpen, setWizardOpen] = React.useState(false);
 
@@ -67,6 +79,8 @@ export function HouseholdsSection({
         microgridId={microgridId}
         availableMeters={availableMeters}
         edgesSetupHref={`/microgrids/${microgridId}/setup/edges`}
+        edges={edges}
+        edgeIdsWithoutConsumptionMeter={edgeIdsWithoutConsumptionMeter}
       />
 
       <HouseholdTable

@@ -35,6 +35,10 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { humanReadable } from "@/lib/openems/device-descriptions";
 import type { DeviceType } from "@/lib/types/domain";
+import {
+  DiscoverMeterInline,
+  type DiscoverMeterInlineEdge,
+} from "@/components/forms/DiscoverMeterInline";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -65,6 +69,17 @@ export interface HouseholdWizardProps {
   availableMeters: AvailableMeter[];
   /** Route to the edges discovery page — surfaced in the empty-state banner. */
   edgesSetupHref: string;
+  /**
+   * Edges on this microgrid (#200). Used by `<DiscoverMeterInline>` for the
+   * inline edge picker + discovery scope.
+   */
+  edges?: DiscoverMeterInlineEdge[];
+  /**
+   * IDs of edges on this microgrid that have NO `consumption_meter` device
+   * yet (#200). Used to default-pre-select the most-likely edge in the
+   * inline discovery section.
+   */
+  edgeIdsWithoutConsumptionMeter?: string[];
 }
 
 type Step = 1 | 2 | 3 | 4;
@@ -172,8 +187,10 @@ export function HouseholdWizard({
   open,
   onOpenChange,
   microgridId,
-  availableMeters,
+  availableMeters: availableMetersProp,
   edgesSetupHref,
+  edges = [],
+  edgeIdsWithoutConsumptionMeter = [],
 }: HouseholdWizardProps) {
   const router = useRouter();
 
@@ -183,6 +200,12 @@ export function HouseholdWizard({
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [confirmCancelOpen, setConfirmCancelOpen] = React.useState(false);
+  // #200: `availableMeters` is a prop seeded from the server, but inline
+  // discovery (DiscoverMeterInline) appends new meters mid-flow. Promote
+  // to local state so all reads see the augmented list.
+  const [availableMeters, setAvailableMeters] = React.useState<AvailableMeter[]>(
+    availableMetersProp
+  );
 
   // Refs for focus management — each step's first required/focusable field.
   const step1FirstFieldRef = React.useRef<HTMLInputElement>(null);
@@ -201,8 +224,41 @@ export function HouseholdWizard({
       setSubmitting(false);
       setSubmitError(null);
       setConfirmCancelOpen(false);
+      // #200: re-seed availableMeters from the prop so any in-flight
+      // appended-via-discovery devices from a prior open are dropped on
+      // re-open. The prop itself is refreshed by router.refresh() after
+      // a successful save in the parent server component.
+      setAvailableMeters(availableMetersProp);
     }
-  }, [open]);
+  }, [open, availableMetersProp]);
+
+  // #200: handle a freshly persisted device from inline discovery.
+  // Update ordering rationale (per ticket #200 AC #11):
+  //   1. setAvailableMeters → dedup + append → immediate UI feedback.
+  //   2. setState → set device_id to the new meter's id → also auto-batched.
+  //   3. router.refresh() → fire-and-forget, syncs server-rendered ancestors
+  //      (HouseholdTable's billingDevices, primaryDeviceAssignments).
+  //
+  // React 18 auto-batches setState calls in event handlers AND across
+  // awaited boundaries when fired in the same post-await tick. No
+  // `flushSync` or `unstable_batchedUpdates` is needed — do NOT add one
+  // here.
+  const handleDevicePersisted = React.useCallback(
+    (newMeter: AvailableMeter) => {
+      setAvailableMeters((prev) => {
+        const existing = prev.find((m) => m.id === newMeter.id);
+        if (existing) {
+          // Already in the list — keep existing entry (preserve ordering),
+          // don't reorder on re-pick.
+          return prev;
+        }
+        return [...prev, newMeter];
+      });
+      setState((prev) => ({ ...prev, device_id: newMeter.id }));
+      router.refresh();
+    },
+    [router]
+  );
 
   // Focus management — on every step change, move focus to the first
   // focusable field of the new step. Run in a layout effect so the element
@@ -420,6 +476,10 @@ export function HouseholdWizard({
                   meters={availableMeters}
                   edgesSetupHref={edgesSetupHref}
                   disabled={submitting}
+                  edges={edges}
+                  edgeIdsWithoutConsumptionMeter={edgeIdsWithoutConsumptionMeter}
+                  microgridId={microgridId}
+                  onDevicePersisted={handleDevicePersisted}
                 />
               )}
               {step === 4 && (
@@ -828,6 +888,10 @@ function StepMeter({
   meters,
   edgesSetupHref,
   disabled,
+  edges,
+  edgeIdsWithoutConsumptionMeter,
+  microgridId,
+  onDevicePersisted,
 }: {
   state: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
@@ -836,6 +900,10 @@ function StepMeter({
   meters: AvailableMeter[];
   edgesSetupHref: string;
   disabled: boolean;
+  edges: DiscoverMeterInlineEdge[];
+  edgeIdsWithoutConsumptionMeter: string[];
+  microgridId: string;
+  onDevicePersisted: (device: AvailableMeter) => void;
 }) {
   // #158: top-of-step "no meter" checkbox. When checked we clear device_id
   // defensively so an accidental prior pick doesn't leak into the submit
@@ -874,7 +942,31 @@ function StepMeter({
           Without a meter, you&apos;ll enter usage manually each period. You
           can link a meter later from the household&apos;s edit dialog.
         </div>
-      ) : meters.length === 0 ? (
+      ) : (
+        <>
+          {/*
+            #200 inline discovery section. Always visible (empty + non-empty
+            cases both show it); suppressed only when state.no_meter is
+            true via the outer ternary above.
+
+            `key={state.no_meter}` re-mounts on toggle so any in-flight
+            internal state (current pick, scan results, fetch errors) is
+            reset. The component's internal AbortController also aborts
+            pending fetches on unmount.
+          */}
+          {edges.length > 0 && (
+            <DiscoverMeterInline
+              key={String(state.no_meter)}
+              edges={edges}
+              edgeIdsWithoutConsumptionMeter={edgeIdsWithoutConsumptionMeter}
+              microgridId={microgridId}
+              onDevicePersisted={onDevicePersisted}
+            />
+          )}
+        </>
+      )}
+
+      {state.no_meter ? null : meters.length === 0 ? (
         <div className="space-y-3">
           <Banner
             tone="warn"

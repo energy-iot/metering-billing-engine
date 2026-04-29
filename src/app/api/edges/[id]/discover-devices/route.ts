@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserIsSuperAdmin, currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import { classifyDeviceType } from "@/lib/openems/classify";
@@ -89,18 +89,13 @@ export async function GET(
     );
   }
 
-  // Super-admin gate: getMicrogridEmsConfig throws OPENEMS_FORBIDDEN for
-  // org_managers on cloud_aws (fn_get_ems_secret returns NULL). Gate here
-  // explicitly so the caller gets a clean 403 rather than an opaque backend
-  // config error.
-  if (!(await currentUserIsSuperAdmin(supabase))) {
-    return NextResponse.json(
-      { error: "Only super admins can discover devices for this edge." },
-      { status: 403 }
-    );
-  }
-
   // Resolve per-microgrid OpenEMS config.
+  // Post-#200: fn_get_ems_secret was widened to return plaintext to
+  // org_managers of the microgrid's parent org (00032), so the previous
+  // super_admin-only gate at this position has been removed. Cross-org
+  // callers are still rejected — currentUserCanAccessMicrogrid above filters
+  // them, and any residual OPENEMS_FORBIDDEN from getMicrogridEmsConfig is
+  // surfaced as 403 by the catch block below.
   let emsConfig;
   try {
     emsConfig = await getMicrogridEmsConfig(supabase, edge.microgrid_id);
