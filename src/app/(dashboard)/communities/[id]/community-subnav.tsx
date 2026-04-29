@@ -29,6 +29,11 @@ const TABS: SubTab[] = [
   { label: "Payment", segment: "payment" },
 ];
 
+// Invoice tab is appended to the visible-tabs array conditionally based on
+// the `showInvoiceTab` prop — see PDF2 (#204). Hidden, not just disabled, when
+// the caller is not org_manager-of-parent-org / super_admin.
+const INVOICE_TAB: SubTab = { label: "Invoice", segment: "invoice" };
+
 export type PaymentChipData = {
   status: PaymentHealth;
   lastConfiguredAt: string | null;
@@ -58,21 +63,34 @@ function tooltipFor(data: PaymentChipData): string | null {
 export function CommunitySubNav({
   communityId,
   paymentHealth,
+  showInvoiceTab = false,
 }: {
   communityId: string;
   paymentHealth?: PaymentChipData;
+  /**
+   * When true, append the Invoice tab to the sub-nav (#204 / PDF2). Defaults
+   * to false so existing callers (and tests that mount the component without
+   * the prop) keep their 2-tab shape unchanged.
+   */
+  showInvoiceTab?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const base = `/communities/${communityId}`;
   const tabRefs = useRef<Array<HTMLAnchorElement | null>>([]);
 
+  // Build the visible-tabs array from props rather than mutating the module
+  // constant. Keyboard cycling (ArrowLeft/Right + Home/End) derives `last`
+  // from `visibleTabs.length` so the cycle covers Invoice when present.
+  const visibleTabs: SubTab[] = showInvoiceTab ? [...TABS, INVOICE_TAB] : TABS;
+
   // Active-tab resolution:
+  //   - Invoice tab wins when pathname starts with `${base}/invoice`
   //   - Payment tab wins when pathname starts with `${base}/payment`
   //   - Otherwise Overview (default / exact-match).
   const activeIndex = (() => {
-    for (let i = 0; i < TABS.length; i++) {
-      const t = TABS[i];
+    for (let i = 0; i < visibleTabs.length; i++) {
+      const t = visibleTabs[i];
       if (t.segment === "") continue;
       if (pathname.startsWith(`${base}/${t.segment}`)) return i;
     }
@@ -84,7 +102,7 @@ export function CommunitySubNav({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLAnchorElement>, current: number) {
-    const last = TABS.length - 1;
+    const last = visibleTabs.length - 1;
     let next = current;
     switch (e.key) {
       case "ArrowRight":
@@ -105,7 +123,7 @@ export function CommunitySubNav({
     e.preventDefault();
     const el = tabRefs.current[next];
     el?.focus();
-    router.push(hrefFor(TABS[next]));
+    router.push(hrefFor(visibleTabs[next]));
   }
 
   return (
@@ -114,7 +132,7 @@ export function CommunitySubNav({
       aria-label="Community sections"
       className="inline-flex w-fit gap-1 rounded-lg bg-muted p-1"
     >
-      {TABS.map((tab, i) => {
+      {visibleTabs.map((tab, i) => {
         const isActive = i === activeIndex;
         const chipData = tab.segment === "payment" ? paymentHealth : undefined;
         return (

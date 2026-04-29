@@ -1,6 +1,9 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserCanAccessCommunity } from "@/lib/auth/access";
+import {
+  currentUserCanAccessCommunity,
+  currentUserCanAccessOrg,
+} from "@/lib/auth/access";
 import { CommunitySubNav, type PaymentChipData } from "./community-subnav";
 import { derivePaymentHealth } from "./payment/health";
 import { timeAgo } from "@/lib/time-ago";
@@ -33,17 +36,28 @@ export default async function CommunityLayout({
   const { data: community } = await supabase
     .from("communities")
     .select(
-      "id, name, payment_provider, payment_last_configured_at",
+      "id, org_id, name, payment_provider, payment_last_configured_at",
     )
     .eq("id", id)
     .maybeSingle<{
       id: string;
+      org_id: string;
       name: string;
       payment_provider: "pesapal" | null;
       payment_last_configured_at: string | null;
     }>();
 
   if (!community) notFound();
+
+  // Invoice-tab visibility is the *edit* gate (super_admin OR org_manager
+  // scoped to this community's parent org), independent of `canAccess` (the
+  // read gate). Hidden, not just disabled, when false. Mirrors the Payment
+  // route's permission gate (#196). Two round-trips here are acceptable for
+  // simplicity — the helper isn't cached today (see PDF2 R3 dev notes).
+  const canEditInvoice = await currentUserCanAccessOrg(
+    supabase,
+    community.org_id,
+  );
 
   // Phase B (#157): the `failing` health state is emitted when this
   // community has at least one payment_events row with `to_status='failed'`
@@ -95,7 +109,11 @@ export default async function CommunityLayout({
   return (
     <div>
       <div className="mb-4">
-        <CommunitySubNav communityId={community.id} paymentHealth={chipData} />
+        <CommunitySubNav
+          communityId={community.id}
+          paymentHealth={chipData}
+          showInvoiceTab={canEditInvoice}
+        />
       </div>
       {children}
     </div>
