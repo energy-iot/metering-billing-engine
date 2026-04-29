@@ -73,7 +73,6 @@ const ALLOWED_FIELDS = new Set([
   "meter_serial",
   "meter_type",
   "customer_type",
-  "contact_email",
 ]);
 
 // PDF3 (#205) — length caps and format mirror the PDF1a (#202) column
@@ -82,10 +81,6 @@ const ACCOUNT_NUMBER_MAX_LENGTH = 30;
 const METER_SERIAL_MAX_LENGTH = 50;
 const METER_TYPE_MAX_LENGTH = 50;
 const CUSTOMER_TYPES = new Set(["residential", "commercial"]);
-// Format-only check — mirrors households_contact_email_format CHECK in
-// 00033 (PDF1a). Deliverability is verified out-of-band, never at the
-// route boundary.
-const CONTACT_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 type HouseholdUpdate = {
   display_name?: string;
@@ -104,7 +99,6 @@ type HouseholdUpdate = {
   meter_serial?: string | null;
   meter_type?: string;        // NOT NULL on the column — never set to null
   customer_type?: string;     // NOT NULL on the column — never set to null
-  contact_email?: string | null;
 };
 
 function nullableString(v: unknown): string | null | undefined {
@@ -450,28 +444,6 @@ export async function PATCH(
       );
     }
     update.customer_type = raw;
-  }
-  if ("contact_email" in bodyRec) {
-    const v = nullableString(bodyRec.contact_email);
-    if (v === undefined) {
-      return NextResponse.json(
-        {
-          error: "contact_email must be a string or null",
-          reason: "invalid_contact_email",
-        },
-        { status: 400 }
-      );
-    }
-    if (v !== null && !CONTACT_EMAIL_RE.test(v)) {
-      return NextResponse.json(
-        {
-          error: "contact_email must be a valid email address",
-          reason: "invalid_contact_email",
-        },
-        { status: 400 }
-      );
-    }
-    update.contact_email = v;
   }
 
   const hasFieldUpdate = Object.keys(update).length > 0;

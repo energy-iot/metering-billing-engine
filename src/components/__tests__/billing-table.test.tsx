@@ -94,7 +94,6 @@ const households: Household[] = [
     created_at: "2026-01-01T00:00:00Z",
     // PDF1a (#202) household identity fields.
     account_number: null,
-    contact_email: null,
     customer_type: "residential",
     meter_serial: null,
     meter_type: "Smart Submeter",
@@ -115,7 +114,6 @@ const households: Household[] = [
     geography_notes: null,
     created_at: "2026-01-01T00:00:00Z",
     account_number: null,
-    contact_email: null,
     customer_type: "residential",
     meter_serial: null,
     meter_type: "Smart Submeter",
@@ -136,7 +134,6 @@ const households: Household[] = [
     geography_notes: null,
     created_at: "2026-01-01T00:00:00Z",
     account_number: null,
-    contact_email: null,
     customer_type: "residential",
     meter_serial: null,
     meter_type: "Smart Submeter",

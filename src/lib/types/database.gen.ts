@@ -483,7 +483,6 @@ export type Database = {
           address_line2: string | null
           address_postal_code: string | null
           address_region: string | null
-          contact_email: string | null
           created_at: string
           customer_type: string
           display_name: string
@@ -504,7 +503,6 @@ export type Database = {
           address_line2?: string | null
           address_postal_code?: string | null
           address_region?: string | null
-          contact_email?: string | null
           created_at?: string
           customer_type?: string
           display_name: string
@@ -525,7 +523,6 @@ export type Database = {
           address_line2?: string | null
           address_postal_code?: string | null
           address_region?: string | null
-          contact_email?: string | null
           created_at?: string
           customer_type?: string
           display_name?: string
@@ -1025,7 +1022,6 @@ export type Database = {
           p_address_line2?: string
           p_address_postal_code?: string
           p_address_region?: string
-          p_contact_email?: string
           p_customer_type?: string
           p_device_id?: string
           p_display_name: string
@@ -1048,7 +1044,6 @@ export type Database = {
           p_address_line2?: string
           p_address_postal_code?: string
           p_address_region?: string
-          p_contact_email?: string
           p_customer_type?: string
           p_device_id: string
           p_display_name: string

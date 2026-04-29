@@ -77,7 +77,6 @@ type FormState = {
   meter_serial: string;
   meter_type: string;
   customer_type: "residential" | "commercial";
-  contact_email: string;
 };
 
 function initialState(h: Household, deviceId: string | null): FormState {
@@ -103,7 +102,6 @@ function initialState(h: Household, deviceId: string | null): FormState {
     meter_type: h.meter_type ?? "Smart Submeter",
     customer_type:
       h.customer_type === "commercial" ? "commercial" : "residential",
-    contact_email: h.contact_email ?? "",
   };
 }
 
@@ -125,8 +123,7 @@ function isDirty(cur: FormState, init: FormState): boolean {
     cur.account_number !== init.account_number ||
     cur.meter_serial !== init.meter_serial ||
     cur.meter_type !== init.meter_type ||
-    cur.customer_type !== init.customer_type ||
-    cur.contact_email !== init.contact_email
+    cur.customer_type !== init.customer_type
   );
 }
 
@@ -200,10 +197,6 @@ function buildDiff(
   }
   if (cur.customer_type !== init.customer_type) {
     out.customer_type = cur.customer_type;
-  }
-  if (cur.contact_email !== init.contact_email) {
-    const v = cur.contact_email.trim();
-    out.contact_email = v.length > 0 ? v : null;
   }
   return out;
 }
@@ -423,7 +416,7 @@ export function HouseholdEditDialog({
                 <Pair>
                   <Field
                     id="hh-edit-email"
-                    label="Primary email"
+                    label="Email"
                     type="email"
                     value={state.primary_email}
                     onChange={(v) => update("primary_email", v)}
@@ -439,15 +432,6 @@ export function HouseholdEditDialog({
                     ariaInvalid={phoneInvalid}
                   />
                 </Pair>
-                {/* PDF3 (#205) — contact_email. */}
-                <Field
-                  id="hh-edit-contact-email"
-                  label="Contact email"
-                  type="email"
-                  value={state.contact_email}
-                  onChange={(v) => update("contact_email", v)}
-                  placeholder="For billing questions (optional)"
-                />
               </Section>
 
               {/* BILLING DEVICE */}

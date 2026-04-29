@@ -138,7 +138,6 @@ const HOUSEHOLD_AARON: Household = {
   meter_serial: "SM-882104",
   meter_type: "Smart Submeter",
   customer_type: "residential",
-  contact_email: "aaron@kisakye.ug",
   primary_email: "aaron@kisakye.ug",
   primary_phone: "+256 700 000 001",
   unit_label: "House 7",

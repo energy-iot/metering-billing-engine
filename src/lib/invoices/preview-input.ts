@@ -179,7 +179,6 @@ export function assembleSyntheticPreviewInput({
     id: "00000000-0000-0000-0000-000000000001",
     display_name: "Sample Household",
     account_number: "ACC-0001",
-    contact_email: null,
     customer_type: "residential",
     meter_serial: "SM-PREVIEW-0001",
     meter_type: "Smart Submeter",
