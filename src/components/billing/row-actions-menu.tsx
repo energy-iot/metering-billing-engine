@@ -119,8 +119,9 @@ export type MenuItem =
 
 /**
  * Compute the dropdown items for a row given the rendering inputs. Pure
- * function — no side effects. Snapshot-tested directly for the 6 named
- * states from the designer matrix.
+ * function — no side effects. Assertion-tested via inclusion checks (NOT
+ * snapshots) for the 6 named states from the designer matrix; see
+ * `__tests__/row-actions-menu.test.tsx`.
  */
 export function computeMenuItems(input: {
   microgridId: string;
@@ -141,6 +142,8 @@ export function computeMenuItems(input: {
     onMarkAsUnpaid: () => void;
     onCancelLink: () => void;
     onMarkAsFailed: () => void;
+    /** PDF3 (#205) — fires the bill-PDF download flow (probe-then-anchor). */
+    onDownloadPdf: () => void;
   };
 }): MenuItem[] {
   const {
@@ -324,6 +327,21 @@ export function computeMenuItems(input: {
     }
     items.push(...paymentGroup);
   }
+
+  // ── PDF3 (#205) — Download bill (PDF) ──────────────────────────────────────
+  // Always visible (including terminal/refunded rows — refunded bills still
+  // want a paper trail). MenuItem kind: "action" so the host can run the
+  // probe-then-anchor flow; "link" would render via Next.js <Link> and
+  // intercept the PDF response client-side.
+  if (items.length > 0) {
+    items.push({ kind: "separator", key: "sep-download" });
+  }
+  items.push({
+    kind: "action",
+    key: "download-pdf",
+    label: "Download bill (PDF)",
+    onSelect: handlers.onDownloadPdf,
+  });
 
   // ── View links ─────────────────────────────────────────────────────────────
   if (items.length > 0) {
@@ -550,6 +568,63 @@ export function RowActionsMenu(props: RowActionsMenuProps) {
     });
   }, [lineItem.id, onRequestSwitchToManual, onRowBanner]);
 
+  // ── PDF3 (#205) — Download bill (PDF) ─────────────────────────────────────
+  //
+  // Probe-then-anchor pattern. Why probe first:
+  //   - A 422 response body is `{ error, reason }` JSON. If we let an anchor
+  //     fire directly, the browser would surface its native error page
+  //     instead of letting us push a row banner with the upstream reason.
+  //   - The route's `Content-Disposition: attachment` header is the
+  //     cross-browser source of truth for the filename — so the second hit
+  //     uses a fresh GET via a hidden <a>, NOT a blob URL.
+  //   - The double-hit is fine: PDF1a's ensurePaymentLinkForLineItem() is
+  //     idempotent, and the invoice_number first-render persistence already
+  //     happened on the probe.
+  const handleDownloadPdf = React.useCallback(async () => {
+    const pdfUrl = `/api/billing-line-items/${lineItem.id}/pdf`;
+    try {
+      const res = await fetch(pdfUrl, { method: "GET" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          reason?: string;
+        };
+        const msg =
+          res.status === 403
+            ? "Not authorized to download this bill."
+            : res.status >= 500
+              ? "Server error. Please retry."
+              : `Cannot generate bill: ${body.reason ?? body.error ?? "unknown error"}`;
+        onRowBanner({
+          id: `${lineItem.id}-pdf-err-${Date.now()}`,
+          lineItemId: lineItem.id,
+          tone: "destructive",
+          message: msg,
+          durationMs: ERROR_BANNER_DURATION_MS,
+        });
+        return;
+      }
+      // Trigger a fresh GET via a hidden anchor — no `download` attribute,
+      // so the route's `Content-Disposition: attachment; filename="…"`
+      // drives the filename across all browsers.
+      const a = document.createElement("a");
+      a.href = pdfUrl;
+      a.target = "_self";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      onRowBanner({
+        id: `${lineItem.id}-pdf-net-${Date.now()}`,
+        lineItemId: lineItem.id,
+        tone: "destructive",
+        message: "Network error. Please retry.",
+        durationMs: ERROR_BANNER_DURATION_MS,
+      });
+    }
+  }, [lineItem.id, onRowBanner]);
+
   // ── Compute menu items (memoised) ─────────────────────────────────────────
   const items = React.useMemo(
     () =>
@@ -571,6 +646,8 @@ export function RowActionsMenu(props: RowActionsMenuProps) {
           onMarkAsUnpaid: () => void patchStatus("unpaid", null),
           onCancelLink: () => setCancelLinkOpen(true),
           onMarkAsFailed: () => setMarkFailedOpen(true),
+          // PDF3 (#205) — fire the probe-then-anchor download flow.
+          onDownloadPdf: () => void handleDownloadPdf(),
         },
       }),
     [
@@ -587,6 +664,7 @@ export function RowActionsMenu(props: RowActionsMenuProps) {
       generatePaymentLink,
       copyPaymentLink,
       patchStatus,
+      handleDownloadPdf,
     ],
   );
 

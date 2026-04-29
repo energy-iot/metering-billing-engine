@@ -1018,15 +1018,20 @@ export type Database = {
       }
       fn_create_household: {
         Args: {
+          p_account_number?: string
           p_address_city?: string
           p_address_country?: string
           p_address_line1?: string
           p_address_line2?: string
           p_address_postal_code?: string
           p_address_region?: string
+          p_contact_email?: string
+          p_customer_type?: string
           p_device_id?: string
           p_display_name: string
           p_geography_notes?: string
+          p_meter_serial?: string
+          p_meter_type?: string
           p_microgrid_id: string
           p_primary_email?: string
           p_primary_phone?: string
@@ -1036,15 +1041,20 @@ export type Database = {
       }
       fn_create_household_with_meter: {
         Args: {
+          p_account_number?: string
           p_address_city?: string
           p_address_country?: string
           p_address_line1?: string
           p_address_line2?: string
           p_address_postal_code?: string
           p_address_region?: string
+          p_contact_email?: string
+          p_customer_type?: string
           p_device_id: string
           p_display_name: string
           p_geography_notes?: string
+          p_meter_serial?: string
+          p_meter_type?: string
           p_microgrid_id: string
           p_primary_email?: string
           p_primary_phone?: string

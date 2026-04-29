@@ -67,7 +67,25 @@ const ALLOWED_FIELDS = new Set([
   "address_postal_code",
   "geography_notes",
   "device_id",
+  // PDF3 (#205) — household identity / billing-device descriptors used by
+  // the consumer-facing PDF invoice.
+  "account_number",
+  "meter_serial",
+  "meter_type",
+  "customer_type",
+  "contact_email",
 ]);
+
+// PDF3 (#205) — length caps and format mirror the PDF1a (#202) column
+// CHECK constraints in 00033_pdf_invoices_schema.sql.
+const ACCOUNT_NUMBER_MAX_LENGTH = 30;
+const METER_SERIAL_MAX_LENGTH = 50;
+const METER_TYPE_MAX_LENGTH = 50;
+const CUSTOMER_TYPES = new Set(["residential", "commercial"]);
+// Format-only check — mirrors households_contact_email_format CHECK in
+// 00033 (PDF1a). Deliverability is verified out-of-band, never at the
+// route boundary.
+const CONTACT_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 type HouseholdUpdate = {
   display_name?: string;
@@ -81,6 +99,12 @@ type HouseholdUpdate = {
   address_country?: string | null;
   address_postal_code?: string | null;
   geography_notes?: string | null;
+  // PDF3 (#205)
+  account_number?: string | null;
+  meter_serial?: string | null;
+  meter_type?: string;        // NOT NULL on the column — never set to null
+  customer_type?: string;     // NOT NULL on the column — never set to null
+  contact_email?: string | null;
 };
 
 function nullableString(v: unknown): string | null | undefined {
@@ -327,6 +351,127 @@ export async function PATCH(
       );
     }
     update.geography_notes = v;
+  }
+
+  // ── PDF3 (#205) — household PDF-invoice identity fields ────────────────
+  if ("account_number" in bodyRec) {
+    const v = nullableString(bodyRec.account_number);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "account_number must be a string or null",
+          reason: "invalid_account_number",
+        },
+        { status: 400 }
+      );
+    }
+    if (v !== null && v.length > ACCOUNT_NUMBER_MAX_LENGTH) {
+      return NextResponse.json(
+        {
+          error: `account_number must be ${ACCOUNT_NUMBER_MAX_LENGTH} characters or fewer`,
+          reason: "account_number_too_long",
+        },
+        { status: 400 }
+      );
+    }
+    update.account_number = v;
+  }
+  if ("meter_serial" in bodyRec) {
+    const v = nullableString(bodyRec.meter_serial);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "meter_serial must be a string or null",
+          reason: "invalid_meter_serial",
+        },
+        { status: 400 }
+      );
+    }
+    if (v !== null && v.length > METER_SERIAL_MAX_LENGTH) {
+      return NextResponse.json(
+        {
+          error: `meter_serial must be ${METER_SERIAL_MAX_LENGTH} characters or fewer`,
+          reason: "meter_serial_too_long",
+        },
+        { status: 400 }
+      );
+    }
+    update.meter_serial = v;
+  }
+  if ("meter_type" in bodyRec) {
+    // NOT NULL on the column — must be a non-empty string. Do NOT use
+    // nullableString here (it coerces empty-string → null which would
+    // violate the NOT NULL CHECK).
+    const raw = bodyRec.meter_type;
+    if (raw === null || typeof raw !== "string") {
+      return NextResponse.json(
+        {
+          error: "meter_type must be a non-empty string",
+          reason: "invalid_meter_type",
+        },
+        { status: 400 }
+      );
+    }
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return NextResponse.json(
+        {
+          error: "meter_type must be a non-empty string",
+          reason: "invalid_meter_type",
+        },
+        { status: 400 }
+      );
+    }
+    if (trimmed.length > METER_TYPE_MAX_LENGTH) {
+      return NextResponse.json(
+        {
+          error: `meter_type must be ${METER_TYPE_MAX_LENGTH} characters or fewer`,
+          reason: "meter_type_too_long",
+        },
+        { status: 400 }
+      );
+    }
+    update.meter_type = trimmed;
+  }
+  if ("customer_type" in bodyRec) {
+    // NOT NULL + enum on the column — must be 'residential' or 'commercial'.
+    const raw = bodyRec.customer_type;
+    if (
+      raw === null ||
+      typeof raw !== "string" ||
+      !CUSTOMER_TYPES.has(raw)
+    ) {
+      return NextResponse.json(
+        {
+          error: "customer_type must be 'residential' or 'commercial'",
+          reason: "invalid_customer_type",
+        },
+        { status: 400 }
+      );
+    }
+    update.customer_type = raw;
+  }
+  if ("contact_email" in bodyRec) {
+    const v = nullableString(bodyRec.contact_email);
+    if (v === undefined) {
+      return NextResponse.json(
+        {
+          error: "contact_email must be a string or null",
+          reason: "invalid_contact_email",
+        },
+        { status: 400 }
+      );
+    }
+    if (v !== null && !CONTACT_EMAIL_RE.test(v)) {
+      return NextResponse.json(
+        {
+          error: "contact_email must be a valid email address",
+          reason: "invalid_contact_email",
+        },
+        { status: 400 }
+      );
+    }
+    update.contact_email = v;
   }
 
   const hasFieldUpdate = Object.keys(update).length > 0;

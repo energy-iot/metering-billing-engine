@@ -36,6 +36,12 @@ import { createClient } from "@/lib/supabase/server";
  *   address_country?:     string | null;
  *   address_postal_code?: string | null;
  *   geography_notes?:     string | null;
+ *   // PDF3 (#205) — household PDF-invoice identity fields:
+ *   account_number?:      string | null;     // ≤ 30 chars
+ *   meter_serial?:        string | null;     // ≤ 50 chars
+ *   meter_type?:          string;            // NOT NULL; ≤ 50 chars
+ *   customer_type?:       string;            // 'residential' | 'commercial'
+ *   contact_email?:       string | null;     // format-validated
  * }
  *
  * Response:
@@ -108,6 +114,162 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return t ? t : null;
   };
 
+  // ── PDF3 (#205) — validation for the 5 new household identity fields ──
+  // Length caps + enum mirror the column CHECKs in PDF1a (#202) migration
+  // 00033 and the PATCH route's per-field validators in
+  // src/app/api/households/[id]/route.ts.
+  const ACCOUNT_NUMBER_MAX_LENGTH = 30;
+  const METER_SERIAL_MAX_LENGTH = 50;
+  const METER_TYPE_MAX_LENGTH = 50;
+  const CUSTOMER_TYPES = new Set(["residential", "commercial"]);
+  const CONTACT_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+  // account_number — string OR null. Length cap.
+  let account_number: string | null = null;
+  if (body.account_number !== undefined && body.account_number !== null) {
+    if (typeof body.account_number !== "string") {
+      return NextResponse.json(
+        {
+          error: "account_number must be a string or null",
+          reason: "invalid_account_number",
+          field: "account_number",
+        },
+        { status: 400 }
+      );
+    }
+    const trimmed = body.account_number.trim();
+    if (trimmed.length === 0) {
+      account_number = null;
+    } else {
+      if (trimmed.length > ACCOUNT_NUMBER_MAX_LENGTH) {
+        return NextResponse.json(
+          {
+            error: `account_number must be ${ACCOUNT_NUMBER_MAX_LENGTH} characters or fewer`,
+            reason: "account_number_too_long",
+            field: "account_number",
+          },
+          { status: 400 }
+        );
+      }
+      account_number = trimmed;
+    }
+  }
+
+  // meter_serial — string OR null. Length cap.
+  let meter_serial: string | null = null;
+  if (body.meter_serial !== undefined && body.meter_serial !== null) {
+    if (typeof body.meter_serial !== "string") {
+      return NextResponse.json(
+        {
+          error: "meter_serial must be a string or null",
+          reason: "invalid_meter_serial",
+          field: "meter_serial",
+        },
+        { status: 400 }
+      );
+    }
+    const trimmed = body.meter_serial.trim();
+    if (trimmed.length === 0) {
+      meter_serial = null;
+    } else {
+      if (trimmed.length > METER_SERIAL_MAX_LENGTH) {
+        return NextResponse.json(
+          {
+            error: `meter_serial must be ${METER_SERIAL_MAX_LENGTH} characters or fewer`,
+            reason: "meter_serial_too_long",
+            field: "meter_serial",
+          },
+          { status: 400 }
+        );
+      }
+      meter_serial = trimmed;
+    }
+  }
+
+  // meter_type — NOT NULL on the column. When omitted/null/empty, we send
+  // `undefined` to the RPC so its COALESCE applies the 'Smart Submeter'
+  // default. When the operator typed a value, validate length.
+  let meter_type: string | undefined;
+  if (body.meter_type !== undefined && body.meter_type !== null) {
+    if (typeof body.meter_type !== "string") {
+      return NextResponse.json(
+        {
+          error: "meter_type must be a non-empty string",
+          reason: "invalid_meter_type",
+          field: "meter_type",
+        },
+        { status: 400 }
+      );
+    }
+    const trimmed = body.meter_type.trim();
+    if (trimmed.length > 0) {
+      if (trimmed.length > METER_TYPE_MAX_LENGTH) {
+        return NextResponse.json(
+          {
+            error: `meter_type must be ${METER_TYPE_MAX_LENGTH} characters or fewer`,
+            reason: "meter_type_too_long",
+            field: "meter_type",
+          },
+          { status: 400 }
+        );
+      }
+      meter_type = trimmed;
+    }
+    // empty-string → leave meter_type undefined → RPC COALESCEs to default
+  }
+
+  // customer_type — NOT NULL on the column; enum 'residential'|'commercial'.
+  // When omitted/null, send undefined so the RPC's COALESCE applies the
+  // 'residential' default. When supplied, must match the enum strictly.
+  let customer_type: string | undefined;
+  if (body.customer_type !== undefined && body.customer_type !== null) {
+    if (
+      typeof body.customer_type !== "string" ||
+      !CUSTOMER_TYPES.has(body.customer_type)
+    ) {
+      return NextResponse.json(
+        {
+          error: "customer_type must be 'residential' or 'commercial'",
+          reason: "invalid_customer_type",
+          field: "customer_type",
+        },
+        { status: 400 }
+      );
+    }
+    customer_type = body.customer_type;
+  }
+
+  // contact_email — string OR null with format validation.
+  let contact_email: string | null = null;
+  if (body.contact_email !== undefined && body.contact_email !== null) {
+    if (typeof body.contact_email !== "string") {
+      return NextResponse.json(
+        {
+          error: "contact_email must be a string or null",
+          reason: "invalid_contact_email",
+          field: "contact_email",
+        },
+        { status: 400 }
+      );
+    }
+    const trimmed = body.contact_email.trim();
+    if (trimmed.length === 0) {
+      contact_email = null;
+    } else {
+      if (!CONTACT_EMAIL_RE.test(trimmed)) {
+        return NextResponse.json(
+          {
+            error: "contact_email must be a valid email address",
+            reason: "invalid_contact_email",
+            field: "contact_email",
+          },
+          { status: 400 }
+        );
+      }
+      contact_email = trimmed;
+    }
+  }
+
   const supabase = await createClient();
 
   // #158: dispatch to the meter-required wrapper (back-compat) or the
@@ -127,6 +289,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     p_address_country: optional(body.address_country) ?? undefined,
     p_address_postal_code: optional(body.address_postal_code) ?? undefined,
     p_geography_notes: optional(body.geography_notes) ?? undefined,
+    // PDF3 (#205) — household PDF-invoice identity fields. NULL → omit so
+    // the RPC's COALESCE applies the column DEFAULT (for meter_type /
+    // customer_type) or persists NULL (for the 3 nullable columns).
+    p_account_number: account_number ?? undefined,
+    p_meter_serial: meter_serial ?? undefined,
+    p_meter_type: meter_type ?? undefined,
+    p_customer_type: customer_type ?? undefined,
+    p_contact_email: contact_email ?? undefined,
   };
 
   const { data, error } = device_id

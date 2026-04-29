@@ -70,6 +70,14 @@ type FormState = {
   address_postal_code: string;
   geography_notes: string;
   device_id: string | null;
+  // PDF3 (#205) — household PDF-invoice identity fields. customer_type +
+  // meter_type are NOT NULL on the column; the form always carries a
+  // value (??-fallback in initialState() for any partial-shape payload).
+  account_number: string;
+  meter_serial: string;
+  meter_type: string;
+  customer_type: "residential" | "commercial";
+  contact_email: string;
 };
 
 function initialState(h: Household, deviceId: string | null): FormState {
@@ -86,6 +94,16 @@ function initialState(h: Household, deviceId: string | null): FormState {
     address_postal_code: h.address_postal_code ?? "",
     geography_notes: h.geography_notes ?? "",
     device_id: deviceId,
+    // PDF3 (#205) — fall back to canonical defaults when a partial-shape
+    // Household payload arrives without the columns. Existing rows
+    // backfilled by 00033's column DEFAULTs already carry the canonical
+    // values; the ?? is defense-in-depth.
+    account_number: h.account_number ?? "",
+    meter_serial: h.meter_serial ?? "",
+    meter_type: h.meter_type ?? "Smart Submeter",
+    customer_type:
+      h.customer_type === "commercial" ? "commercial" : "residential",
+    contact_email: h.contact_email ?? "",
   };
 }
 
@@ -102,7 +120,13 @@ function isDirty(cur: FormState, init: FormState): boolean {
     cur.address_country !== init.address_country ||
     cur.address_postal_code !== init.address_postal_code ||
     cur.geography_notes !== init.geography_notes ||
-    cur.device_id !== init.device_id
+    cur.device_id !== init.device_id ||
+    // PDF3 (#205)
+    cur.account_number !== init.account_number ||
+    cur.meter_serial !== init.meter_serial ||
+    cur.meter_type !== init.meter_type ||
+    cur.customer_type !== init.customer_type ||
+    cur.contact_email !== init.contact_email
   );
 }
 
@@ -159,6 +183,27 @@ function buildDiff(
   }
   if (cur.device_id !== init.device_id) {
     out.device_id = cur.device_id;
+  }
+  // ── PDF3 (#205) ────────────────────────────────────────────────────────
+  if (cur.account_number !== init.account_number) {
+    const v = cur.account_number.trim();
+    out.account_number = v.length > 0 ? v : null;
+  }
+  if (cur.meter_serial !== init.meter_serial) {
+    const v = cur.meter_serial.trim();
+    out.meter_serial = v.length > 0 ? v : null;
+  }
+  if (cur.meter_type !== init.meter_type) {
+    // NOT NULL on the column — send the trimmed string. canSave guards
+    // against empty (route also rejects empty as 400 invalid_meter_type).
+    out.meter_type = cur.meter_type.trim();
+  }
+  if (cur.customer_type !== init.customer_type) {
+    out.customer_type = cur.customer_type;
+  }
+  if (cur.contact_email !== init.contact_email) {
+    const v = cur.contact_email.trim();
+    out.contact_email = v.length > 0 ? v : null;
   }
   return out;
 }
@@ -316,6 +361,56 @@ export function HouseholdEditDialog({
                   inputRef={firstFieldRef}
                   ariaInvalid={!displayNameValid}
                 />
+                {/* PDF3 (#205) — account_number + customer_type. */}
+                <Field
+                  id="hh-edit-account-number"
+                  label="Account number"
+                  value={state.account_number}
+                  onChange={(v) => update("account_number", v)}
+                  placeholder="Optional — appears on the PDF invoice"
+                />
+                <div>
+                  <span
+                    id="hh-edit-customer-type-label"
+                    className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
+                    Customer type
+                  </span>
+                  <div
+                    role="radiogroup"
+                    aria-labelledby="hh-edit-customer-type-label"
+                    className="flex flex-row gap-4"
+                  >
+                    <label
+                      htmlFor="hh-edit-customer-type-residential"
+                      className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
+                    >
+                      <input
+                        id="hh-edit-customer-type-residential"
+                        type="radio"
+                        name="hh-edit-customer-type"
+                        value="residential"
+                        checked={state.customer_type === "residential"}
+                        onChange={() => update("customer_type", "residential")}
+                      />
+                      <span>Residential</span>
+                    </label>
+                    <label
+                      htmlFor="hh-edit-customer-type-commercial"
+                      className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
+                    >
+                      <input
+                        id="hh-edit-customer-type-commercial"
+                        type="radio"
+                        name="hh-edit-customer-type"
+                        value="commercial"
+                        checked={state.customer_type === "commercial"}
+                        onChange={() => update("customer_type", "commercial")}
+                      />
+                      <span>Commercial</span>
+                    </label>
+                  </div>
+                </div>
               </Section>
 
               {/* CONTACT */}
@@ -344,6 +439,15 @@ export function HouseholdEditDialog({
                     ariaInvalid={phoneInvalid}
                   />
                 </Pair>
+                {/* PDF3 (#205) — contact_email. */}
+                <Field
+                  id="hh-edit-contact-email"
+                  label="Contact email"
+                  type="email"
+                  value={state.contact_email}
+                  onChange={(v) => update("contact_email", v)}
+                  placeholder="For billing questions (optional)"
+                />
               </Section>
 
               {/* BILLING DEVICE */}
@@ -352,6 +456,25 @@ export function HouseholdEditDialog({
                 helper="The consumption meter that produces this household's bill each period. Unassigned households are skipped at billing time."
                 helperId={DEVICE_HELPER_ID}
               >
+                {/* PDF3 (#205) — meter_serial + meter_type pair, ABOVE the
+                    DeviceSelect (these are physical-device descriptors that
+                    pair logically with the meter assignment). */}
+                <Pair>
+                  <Field
+                    id="hh-edit-meter-serial"
+                    label="Meter serial"
+                    value={state.meter_serial}
+                    onChange={(v) => update("meter_serial", v)}
+                    placeholder="Optional — physical serial"
+                  />
+                  <Field
+                    id="hh-edit-meter-type"
+                    label="Meter type"
+                    value={state.meter_type}
+                    onChange={(v) => update("meter_type", v)}
+                    placeholder="Smart Submeter"
+                  />
+                </Pair>
                 <DeviceSelect
                   devices={devicesForPicker}
                   value={state.device_id}
