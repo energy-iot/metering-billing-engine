@@ -96,6 +96,7 @@ export type Database = {
           entered_by_user_id: string | null
           household_id: string
           id: string
+          invoice_number: string | null
           manual_reason: string | null
           paid_at: string | null
           paid_by_user_id: string | null
@@ -104,6 +105,7 @@ export type Database = {
           payment_refunded_at: string | null
           payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id: string | null
+          pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh: number | null
           tier_breakdown: Json
@@ -119,6 +121,7 @@ export type Database = {
           entered_by_user_id?: string | null
           household_id: string
           id?: string
+          invoice_number?: string | null
           manual_reason?: string | null
           paid_at?: string | null
           paid_by_user_id?: string | null
@@ -127,6 +130,7 @@ export type Database = {
           payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id?: string | null
+          pesapal_redirect_url?: string | null
           reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh?: number | null
           tier_breakdown?: Json
@@ -142,6 +146,7 @@ export type Database = {
           entered_by_user_id?: string | null
           household_id?: string
           id?: string
+          invoice_number?: string | null
           manual_reason?: string | null
           paid_at?: string | null
           paid_by_user_id?: string | null
@@ -150,6 +155,7 @@ export type Database = {
           payment_refunded_at?: string | null
           payment_status?: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id?: string | null
+          pesapal_redirect_url?: string | null
           reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh?: number | null
           tier_breakdown?: Json
@@ -250,6 +256,8 @@ export type Database = {
           created_at: string
           geography_notes: string | null
           id: string
+          invoice_config: Json
+          invoice_prefix: string | null
           name: string
           org_id: string
           payment_last_configured_at: string | null
@@ -269,6 +277,8 @@ export type Database = {
           created_at?: string
           geography_notes?: string | null
           id?: string
+          invoice_config?: Json
+          invoice_prefix?: string | null
           name: string
           org_id: string
           payment_last_configured_at?: string | null
@@ -288,6 +298,8 @@ export type Database = {
           created_at?: string
           geography_notes?: string | null
           id?: string
+          invoice_config?: Json
+          invoice_prefix?: string | null
           name?: string
           org_id?: string
           payment_last_configured_at?: string | null
@@ -464,48 +476,63 @@ export type Database = {
       }
       households: {
         Row: {
+          account_number: string | null
           address_city: string | null
           address_country: string | null
           address_line1: string | null
           address_line2: string | null
           address_postal_code: string | null
           address_region: string | null
+          contact_email: string | null
           created_at: string
+          customer_type: string
           display_name: string
           geography_notes: string | null
           id: string
+          meter_serial: string | null
+          meter_type: string
           microgrid_id: string
           primary_email: string | null
           primary_phone: string
           unit_label: string | null
         }
         Insert: {
+          account_number?: string | null
           address_city?: string | null
           address_country?: string | null
           address_line1?: string | null
           address_line2?: string | null
           address_postal_code?: string | null
           address_region?: string | null
+          contact_email?: string | null
           created_at?: string
+          customer_type?: string
           display_name: string
           geography_notes?: string | null
           id?: string
+          meter_serial?: string | null
+          meter_type?: string
           microgrid_id: string
           primary_email?: string | null
           primary_phone: string
           unit_label?: string | null
         }
         Update: {
+          account_number?: string | null
           address_city?: string | null
           address_country?: string | null
           address_line1?: string | null
           address_line2?: string | null
           address_postal_code?: string | null
           address_region?: string | null
+          contact_email?: string | null
           created_at?: string
+          customer_type?: string
           display_name?: string
           geography_notes?: string | null
           id?: string
+          meter_serial?: string | null
+          meter_type?: string
           microgrid_id?: string
           primary_email?: string | null
           primary_phone?: string
@@ -517,6 +544,32 @@ export type Database = {
             columns: ["microgrid_id"]
             isOneToOne: false
             referencedRelation: "microgrids"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invoice_counters: {
+        Row: {
+          community_id: string
+          counter: number
+          year: number
+        }
+        Insert: {
+          community_id: string
+          counter?: number
+          year: number
+        }
+        Update: {
+          community_id?: string
+          counter?: number
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_counters_community_id_fkey"
+            columns: ["community_id"]
+            isOneToOne: false
+            referencedRelation: "communities"
             referencedColumns: ["id"]
           },
         ]
@@ -742,6 +795,7 @@ export type Database = {
           id: string
           microgrid_id: string
           service_charge: number
+          service_charge_description: string | null
           tax_rate: number
           tiers: Json
         }
@@ -750,6 +804,7 @@ export type Database = {
           id?: string
           microgrid_id: string
           service_charge?: number
+          service_charge_description?: string | null
           tax_rate?: number
           tiers?: Json
         }
@@ -758,6 +813,7 @@ export type Database = {
           id?: string
           microgrid_id?: string
           service_charge?: number
+          service_charge_description?: string | null
           tax_rate?: number
           tiers?: Json
         }
@@ -929,6 +985,7 @@ export type Database = {
           entered_by_user_id: string | null
           household_id: string
           id: string
+          invoice_number: string | null
           manual_reason: string | null
           paid_at: string | null
           paid_by_user_id: string | null
@@ -937,6 +994,7 @@ export type Database = {
           payment_refunded_at: string | null
           payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id: string | null
+          pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh: number | null
           tier_breakdown: Json
@@ -1017,6 +1075,10 @@ export type Database = {
         Returns: string
       }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
+      fn_next_invoice_number: {
+        Args: { p_community_id: string; p_year: number }
+        Returns: number
+      }
       fn_record_line_item_with_audit: {
         Args: {
           _actor_user_id: string
@@ -1042,6 +1104,7 @@ export type Database = {
           entered_by_user_id: string | null
           household_id: string
           id: string
+          invoice_number: string | null
           manual_reason: string | null
           paid_at: string | null
           paid_by_user_id: string | null
@@ -1050,6 +1113,7 @@ export type Database = {
           payment_refunded_at: string | null
           payment_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
           pesapal_order_id: string | null
+          pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
           start_kwh: number | null
           tier_breakdown: Json

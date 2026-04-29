@@ -92,6 +92,12 @@ const households: Household[] = [
     address_postal_code: null,
     geography_notes: null,
     created_at: "2026-01-01T00:00:00Z",
+    // PDF1a (#202) household identity fields.
+    account_number: null,
+    contact_email: null,
+    customer_type: "residential",
+    meter_serial: null,
+    meter_type: "Smart Submeter",
   },
   {
     id: "h-2",
@@ -108,6 +114,11 @@ const households: Household[] = [
     address_postal_code: null,
     geography_notes: null,
     created_at: "2026-01-01T00:00:00Z",
+    account_number: null,
+    contact_email: null,
+    customer_type: "residential",
+    meter_serial: null,
+    meter_type: "Smart Submeter",
   },
   {
     id: "h-3",
@@ -124,6 +135,11 @@ const households: Household[] = [
     address_postal_code: null,
     geography_notes: null,
     created_at: "2026-01-01T00:00:00Z",
+    account_number: null,
+    contact_email: null,
+    customer_type: "residential",
+    meter_serial: null,
+    meter_type: "Smart Submeter",
   },
 ];
 
@@ -155,6 +171,9 @@ const lineItems: BillingLineItem[] = [
     entered_by_user_id: null,
     entered_at: null,
     manual_reason: null,
+    // PDF1a (#202) invoice + redirect-url cache.
+    invoice_number: null,
+    pesapal_redirect_url: null,
   },
   {
     id: "li-2",
@@ -182,6 +201,9 @@ const lineItems: BillingLineItem[] = [
     entered_by_user_id: null,
     entered_at: null,
     manual_reason: null,
+    // PDF1a (#202) invoice + redirect-url cache.
+    invoice_number: null,
+    pesapal_redirect_url: null,
   },
   {
     id: "li-3",
@@ -209,6 +231,9 @@ const lineItems: BillingLineItem[] = [
     entered_by_user_id: null,
     entered_at: null,
     manual_reason: null,
+    // PDF1a (#202) invoice + redirect-url cache.
+    invoice_number: null,
+    pesapal_redirect_url: null,
   },
 ];
 

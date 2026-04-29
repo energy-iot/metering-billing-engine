@@ -1,15 +1,27 @@
 /**
- * POST /api/billing-line-items/[lineItemId]/url — unit tests (#115).
+ * POST /api/billing-line-items/[lineItemId]/url — unit tests (#115 / refactored
+ * for #202).
  *
- * Covers the 8-case matrix from the ticket:
- *   (1) Happy path → 200 + { redirectUrl, orderTrackingId, merchantReference }
+ * Post-#202 the route is a thin wrapper around `ensurePaymentLinkForLineItem()`.
+ * The route still owns: pre-flight scope query, permission gate, and
+ * `mapPaymentError` → response envelope. The test suite mocks the helper to
+ * exercise every branch of the mapping plus the new cache-hit shape (where
+ * the helper returns `wasMinted: false` and `orderTrackingId/merchantReference`
+ * as `null`).
+ *
+ * Covers the 8-case matrix from the original ticket plus the new R5 cache-hit
+ * shape:
+ *   (1) Mint path → 200 + { redirectUrl, orderTrackingId, merchantReference }
+ *   (1b) Cache-hit path → 200 + { redirectUrl, orderTrackingId: null,
+ *        merchantReference: null }
  *   (2) Not configured → 409 reason: "not_configured"
  *   (3) auth_failed → 503 reason: "auth_failed"
  *   (4) unreachable → 503 reason: "unreachable"
  *   (5) missing_contact → 400 reason: "missing_contact"
  *   (6) Unauthorized (cross-community) → 404 reason: "not_found" (avoids leak)
  *   (7) Line item not found → 404 reason: "not_found"
- *   (8) Log scrubber strips secret/token/URL
+ *   (8) Log scrubber strips redirect URL
+ *   (9) IPN not registered → 409 ipn_not_registered (post-#121)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -21,29 +33,11 @@ const COMMUNITY_ID = "550e8400-e29b-41d4-a716-446655440003";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-const generatePaymentLinkMock = vi.fn();
-const getCommunityPaymentConfigMock = vi.fn();
-const buildOrderParamsFromLineItemMock = vi.fn();
+const ensurePaymentLinkMock = vi.fn();
 let canAccessMicrogridReturn = true;
 
-vi.mock("@/lib/payments", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/payments")>(
-    "@/lib/payments",
-  );
-  return {
-    ...actual,
-    getPaymentProviderClient: () => ({
-      generatePaymentLink: generatePaymentLinkMock,
-    }),
-  };
-});
-
-vi.mock("@/lib/payments/config", () => ({
-  getCommunityPaymentConfig: getCommunityPaymentConfigMock,
-}));
-
-vi.mock("@/lib/payments/pesapal/build-params", () => ({
-  buildOrderParamsFromLineItem: buildOrderParamsFromLineItemMock,
+vi.mock("@/lib/payments/ensure-payment-link", () => ({
+  ensurePaymentLinkForLineItem: ensurePaymentLinkMock,
 }));
 
 vi.mock("@/lib/auth/access", () => ({
@@ -59,15 +53,10 @@ const mockFrom = vi.fn();
 const mockGetUser = vi
   .fn()
   .mockResolvedValue({ data: { user: { id: "actor-user-1" } } });
-// Phase B: link route also calls supabase.rpc("fn_apply_payment_event") to
-// record the unpaid → link_generated transition. Default to a no-error
-// resolution; specific tests can override via mockRpc.mockResolvedValueOnce.
-const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     from: mockFrom,
-    rpc: mockRpc,
     auth: { getUser: mockGetUser },
   }),
 }));
@@ -95,49 +84,19 @@ function scopedRow() {
   };
 }
 
-const GOOD_CONFIG = {
-  provider: "pesapal" as const,
-  config: {
-    consumer_key: "ck_live_xyz",
-    base_url: "https://pay.pesapal.com/v3",
-    ipn_id: "ipn-abc",
-  },
-  // MIN_SECRET_LENGTH = 6; keep this long enough to be scrubbed.
-  secret: "cs_live_verylongsecretkey_dontlogme",
-};
-
-const GOOD_BUILT = {
-  amount: 12500,
-  description: "Utility bill for Mar 1, 2026 – Mar 31, 2026",
-  billingAddress: {
-    email_address: "alice@example.com",
-    phone_number: "+256700000001",
-    first_name: "Alice",
-    last_name: "Mukasa",
-  },
-  debug: {
-    lineItem: { id: LINE_ITEM_ID, total_amount: 12500 },
-    period: {
-      id: "bp-1",
-      microgrid_id: MICROGRID_ID,
-      start_date: "2026-03-01",
-      end_date: "2026-03-31",
-    },
-    household: {
-      id: "household-A",
-      display_name: "Alice Mukasa",
-      primary_email: "alice@example.com",
-      primary_phone: "+256700000001",
-    },
-    dateRange: "Mar 1, 2026 – Mar 31, 2026",
-  },
-};
-
-const GOOD_RESULT = {
+const MINT_RESULT = {
   redirectUrl:
     "https://pay.pesapal.com/checkout?token=SECRETSESSIONTOKEN_DO_NOT_LEAK",
-  providerOrderId: "OT-12345",
-  providerReference: `INV-${LINE_ITEM_ID}-123`,
+  orderTrackingId: "OT-12345",
+  merchantReference: `INV-${LINE_ITEM_ID}-123`,
+  wasMinted: true,
+};
+
+const CACHE_HIT_RESULT = {
+  redirectUrl: "https://pay.pesapal.com/checkout?token=cached_value",
+  orderTrackingId: null,
+  merchantReference: null,
+  wasMinted: false,
 };
 
 describe("POST /api/billing-line-items/[lineItemId]/url", () => {
@@ -150,18 +109,15 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
       select: () => ({
         eq: () => ({
           maybeSingle: () => Promise.resolve(scopeResponse),
-          single: () => Promise.resolve(scopeResponse),
         }),
       }),
     }));
 
-    getCommunityPaymentConfigMock.mockResolvedValue(GOOD_CONFIG);
-    buildOrderParamsFromLineItemMock.mockResolvedValue(GOOD_BUILT);
-    generatePaymentLinkMock.mockResolvedValue(GOOD_RESULT);
+    ensurePaymentLinkMock.mockResolvedValue(MINT_RESULT);
   });
 
-  // ─── (1) Happy path ───────────────────────────────────────────────────────
-  it("(1) returns 200 with redirectUrl/orderTrackingId/merchantReference on success", async () => {
+  // ─── (1) Mint path — original happy path ─────────────────────────────────
+  it("(1) returns 200 with mint shape on success", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     const { POST } = await import("../route");
@@ -169,31 +125,53 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
       params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
     });
     expect(res.status).toBe(200);
-
-    // Log emits synchronously before the response is consumed.
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"payment.generate_link"'));
-    // Eager resolution: auth.getUser() called exactly once per request.
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"payment.generate_link"'),
+    );
     expect(mockGetUser).toHaveBeenCalledTimes(1);
 
     const body = await res.json();
     expect(body).toEqual({
-      redirectUrl: GOOD_RESULT.redirectUrl,
-      orderTrackingId: GOOD_RESULT.providerOrderId,
-      merchantReference: GOOD_RESULT.providerReference,
+      redirectUrl: MINT_RESULT.redirectUrl,
+      orderTrackingId: MINT_RESULT.orderTrackingId,
+      merchantReference: MINT_RESULT.merchantReference,
     });
 
-    // Pesapal rejects reused ids — every call must generate a fresh orderId.
-    const call = generatePaymentLinkMock.mock.calls[0][0];
-    expect(call.orderId).toMatch(/^INV-[0-9A-HJKMNPQ-TV-Z]{26}-\d+$/);
-    expect(call.orderId.length).toBeLessThanOrEqual(50);
-    expect(call.currency).toBe("UGX");
+    // The helper was called with the resolved actor user id.
+    expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
+    const [_client, lineId, opts] = ensurePaymentLinkMock.mock.calls[0];
+    expect(lineId).toBe(LINE_ITEM_ID);
+    expect(opts.actorUserId).toBe("actor-user-1");
 
     infoSpy.mockRestore();
   });
 
-  // ─── (2) Not configured ────────────────────────────────────────────────────
-  it("(2) returns 409 not_configured when getCommunityPaymentConfig returns null", async () => {
-    getCommunityPaymentConfigMock.mockResolvedValueOnce(null);
+  // ─── (1b) Cache-hit path — new R5 shape ──────────────────────────────────
+  it("(1b) returns 200 with cache-hit shape (orderTrackingId: null, merchantReference: null)", async () => {
+    ensurePaymentLinkMock.mockResolvedValueOnce(CACHE_HIT_RESULT);
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({
+      redirectUrl: CACHE_HIT_RESULT.redirectUrl,
+      orderTrackingId: null,
+      merchantReference: null,
+    });
+  });
+
+  // ─── (2) Not configured ───────────────────────────────────────────────────
+  it("(2) returns 409 not_configured when helper throws PAYMENT_NOT_CONFIGURED", async () => {
+    const { PaymentError } = await import("@/lib/payments/errors");
+    ensurePaymentLinkMock.mockRejectedValueOnce(
+      new PaymentError(
+        "No payment provider configured for this community.",
+        "PAYMENT_NOT_CONFIGURED",
+        409,
+      ),
+    );
 
     const { POST } = await import("../route");
     const res = await POST(makeReq(), {
@@ -204,10 +182,10 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("not_configured");
   });
 
-  // ─── (3) auth_failed ──────────────────────────────────────────────────────
-  it("(3) returns 503 auth_failed when provider throws PESAPAL_AUTH_FAILED", async () => {
+  // ─── (3) auth_failed ─────────────────────────────────────────────────────
+  it("(3) returns 503 auth_failed when helper throws PESAPAL_AUTH_FAILED", async () => {
     const { PesapalError } = await import("@/lib/payments/pesapal/errors");
-    generatePaymentLinkMock.mockRejectedValueOnce(
+    ensurePaymentLinkMock.mockRejectedValueOnce(
       new PesapalError("auth nope", "PESAPAL_AUTH_FAILED", 401),
     );
 
@@ -220,10 +198,10 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("auth_failed");
   });
 
-  // ─── (4) unreachable ──────────────────────────────────────────────────────
-  it("(4) returns 503 unreachable when provider throws PESAPAL_UNREACHABLE", async () => {
+  // ─── (4) unreachable ─────────────────────────────────────────────────────
+  it("(4) returns 503 unreachable when helper throws PESAPAL_UNREACHABLE", async () => {
     const { PesapalError } = await import("@/lib/payments/pesapal/errors");
-    generatePaymentLinkMock.mockRejectedValueOnce(
+    ensurePaymentLinkMock.mockRejectedValueOnce(
       new PesapalError("net down", "PESAPAL_UNREACHABLE", 503),
     );
 
@@ -236,10 +214,10 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("unreachable");
   });
 
-  // ─── (5) missing_contact ──────────────────────────────────────────────────
-  it("(5) returns 400 missing_contact when build-params throws PESAPAL_MISSING_CONTACT", async () => {
+  // ─── (5) missing_contact ─────────────────────────────────────────────────
+  it("(5) returns 400 missing_contact when helper throws PESAPAL_MISSING_CONTACT", async () => {
     const { PesapalError } = await import("@/lib/payments/pesapal/errors");
-    buildOrderParamsFromLineItemMock.mockRejectedValueOnce(
+    ensurePaymentLinkMock.mockRejectedValueOnce(
       new PesapalError(
         'Household "X" has neither primary_email nor primary_phone',
         "PESAPAL_MISSING_CONTACT",
@@ -256,7 +234,7 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("missing_contact");
   });
 
-  // ─── (6) Unauthorized (cross-community) — avoids existence leak → 404 ─────
+  // ─── (6) Unauthorized (cross-community) — avoids existence leak → 404 ────
   it("(6) returns 404 not_found when currentUserCanAccessMicrogrid is false", async () => {
     canAccessMicrogridReturn = false;
 
@@ -267,9 +245,10 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.reason).toBe("not_found");
+    expect(ensurePaymentLinkMock).not.toHaveBeenCalled();
   });
 
-  // ─── (7) Line item not found ──────────────────────────────────────────────
+  // ─── (7) Line item not found ─────────────────────────────────────────────
   it("(7) returns 404 not_found when the line-item scope row is RLS-hidden", async () => {
     scopeResponse = { data: null, error: null };
 
@@ -280,24 +259,36 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.reason).toBe("not_found");
+    expect(ensurePaymentLinkMock).not.toHaveBeenCalled();
   });
 
-  // ─── (9) IPN not registered → 409 ipn_not_registered (post-#121) ─────────
-  //
-  // Post-#121, parsePesapalConfig REQUIRES `ipn_id`. A community whose
-  // payment_provider_config is missing `ipn_id` causes parsePesapalConfig to
-  // throw `PAYMENT_IPN_NOT_REGISTERED` (a distinct PaymentError code
-  // surfaced by the config loader). The route maps it to 409 with reason
-  // `ipn_not_registered` and an actionable hint pointing the user to
-  // Save & test connection.
-  //
-  // We simulate the parse-time rejection by having the (mocked)
-  // `getCommunityPaymentConfig` reject with that error — which is what the
-  // real loader does when parsePesapalConfig throws. End-to-end coverage of
-  // parsePesapalConfig itself lives in a dedicated unit test.
-  it("(9) returns 409 ipn_not_registered when config has no ipn_id (post-#121)", async () => {
+  // ─── (8) Log scrubber strips redirect URL ────────────────────────────────
+  it("(8) log payload never contains the redirect URL", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+
+    const logCalls = infoSpy.mock.calls.map((args) => String(args[0]));
+    const matching = logCalls.filter((s) =>
+      s.includes('"payment.generate_link"'),
+    );
+    expect(matching.length).toBeGreaterThanOrEqual(1);
+
+    const joined = matching.join("\n");
+    expect(joined).not.toContain(MINT_RESULT.redirectUrl);
+    expect(joined).not.toContain("SECRETSESSIONTOKEN_DO_NOT_LEAK");
+
+    infoSpy.mockRestore();
+  });
+
+  // ─── (9) IPN not registered → 409 ipn_not_registered ─────────────────────
+  it("(9) returns 409 ipn_not_registered when helper throws PAYMENT_IPN_NOT_REGISTERED", async () => {
     const { PaymentError } = await import("@/lib/payments/errors");
-    getCommunityPaymentConfigMock.mockRejectedValueOnce(
+    ensurePaymentLinkMock.mockRejectedValueOnce(
       new PaymentError(
         "Pesapal config is missing ipn_id — open Community Payment settings and run Save & test connection to register the IPN URL with Pesapal.",
         "PAYMENT_IPN_NOT_REGISTERED",
@@ -314,81 +305,5 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("ipn_not_registered");
     expect(String(body.error)).toMatch(/IPN/i);
     expect(String(body.error)).toMatch(/Save & test/i);
-    // generatePaymentLink must NOT be reached — config-parse rejected first.
-    expect(generatePaymentLinkMock).not.toHaveBeenCalled();
-  });
-
-  // ─── (10) Phase B: writes audit row + persists pesapal_order_id ──────────
-  it("(10) calls fn_apply_payment_event with source='generate_link' and pesapal_order_id payload", async () => {
-    mockRpc.mockClear();
-    mockRpc.mockResolvedValue({ data: null, error: null });
-
-    const { POST } = await import("../route");
-    const res = await POST(makeReq(), {
-      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
-    });
-    expect(res.status).toBe(200);
-
-    expect(mockRpc).toHaveBeenCalledTimes(1);
-    const [fn, args] = mockRpc.mock.calls[0];
-    expect(fn).toBe("fn_apply_payment_event");
-    expect(args._line_item_id).toBe(LINE_ITEM_ID);
-    expect(args._to_status).toBe("link_generated");
-    expect(args._source).toBe("generate_link");
-    expect(args._actor_user_id).toBe("actor-user-1");
-    expect(args._raw_payload.pesapal_order_id).toBe(GOOD_RESULT.providerReference);
-    // redirect_url MUST NOT be persisted (contains session token).
-    expect(JSON.stringify(args._raw_payload)).not.toContain(
-      GOOD_RESULT.redirectUrl,
-    );
-  });
-
-  it("(10) ack 200 with redirect URL even if the audit RPC fails", async () => {
-    mockRpc.mockResolvedValueOnce({
-      data: null,
-      error: { code: "P0001", message: "invalid_transition: ..." },
-    });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { POST } = await import("../route");
-    const res = await POST(makeReq(), {
-      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.redirectUrl).toBe(GOOD_RESULT.redirectUrl);
-
-    // Warning emitted for audit failure.
-    const matched = warnSpy.mock.calls
-      .map((c) => String(c[0]))
-      .find((s) => s.includes("audit_write_failed"));
-    expect(matched).toBeTruthy();
-
-    warnSpy.mockRestore();
-  });
-
-  // ─── (8) Log scrubber strips secret + token + URL ─────────────────────────
-  it("(8) log payload never contains secret, session token, or redirect URL", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-
-    const { POST } = await import("../route");
-    const res = await POST(makeReq(), {
-      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
-    });
-    expect(res.status).toBe(200);
-
-    // The success path logs exactly one payment.generate_link event.
-    const logCalls = infoSpy.mock.calls.map((args) => String(args[0]));
-    const matching = logCalls.filter((s) =>
-      s.includes('"payment.generate_link"'),
-    );
-    expect(matching.length).toBeGreaterThanOrEqual(1);
-
-    const joined = matching.join("\n");
-    expect(joined).not.toContain(GOOD_CONFIG.secret);
-    expect(joined).not.toContain("SECRETSESSIONTOKEN_DO_NOT_LEAK");
-    expect(joined).not.toContain(GOOD_RESULT.redirectUrl);
-
-    infoSpy.mockRestore();
   });
 });

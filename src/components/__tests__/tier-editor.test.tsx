@@ -36,6 +36,8 @@ const INITIAL_SCHEDULE: RateSchedule = {
     { label: "Tier 2", min_kwh: 51, max_kwh: null, rate_per_kwh: 800 },
   ],
   service_charge: 2000,
+  // PDF1a (#202) optional service-charge label.
+  service_charge_description: null,
   tax_rate: 0.18,
   created_at: "2026-03-01T00:00:00Z",
 };
