@@ -174,11 +174,13 @@ beforeAll(async () => {
       id: FIXTURE.householdA,
       microgrid_id: FIXTURE.microgridA,
       display_name: "Household A",
+      primary_phone: "+256700000001",
     },
     {
       id: FIXTURE.householdB,
       microgrid_id: FIXTURE.microgridB,
       display_name: "Household B",
+      primary_phone: "+256700000002",
     },
   ]);
   if (hhError) throw new Error(`[fixture] households: ${hhError.message}`);
@@ -499,6 +501,36 @@ describe("RLS: microgrids", () => {
       name: "Unauthorized Microgrid",
       currency: "UGX",
     });
+  });
+
+  it("User A (org_manager of Org A) CAN INSERT a microgrid under Community A", async () => {
+    if (skipIfRequested()) return;
+
+    // Regression guard for #198: WITH CHECK on the microgrids policy used
+    // to dereference the new row's own id (which doesn't exist at INSERT
+    // time inside a STABLE helper's snapshot), making this insert fail
+    // with 42501 for org_managers. Migration 00031 repoints the policy at
+    // community_id (a parent-pointing column) so this now succeeds.
+    const { data, error } = await userA.client
+      .from("microgrids")
+      .insert({
+        community_id: FIXTURE.communityA,
+        name: "rls-test-own-microgrid",
+        currency: "UGX",
+      })
+      .select("id");
+
+    // RLS should permit this; clean up via service client (NOT userA.client)
+    // — matches the edges positive-INSERT pattern at :1104-1106.
+    if (data && data.length > 0) {
+      const svc = await serviceClient();
+      await svc.from("microgrids").delete().eq("id", data[0].id);
+    }
+
+    const isRlsError =
+      error?.code === "42501" ||
+      (error?.message ?? "").includes("row-level security");
+    expect(isRlsError, `unexpected RLS error: ${error?.message}`).toBe(false);
   });
 });
 
@@ -1063,6 +1095,81 @@ describe("RLS helper functions", () => {
         _microgrid_id: FIXTURE.microgridA,
       });
       expect(result).toBe(false);
+    });
+  });
+
+  describe("user_can_access_community(_community_id)", () => {
+    it("returns true for User A on Community A (own org)", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userA.client, "user_can_access_community", {
+        _community_id: FIXTURE.communityA,
+      });
+      expect(result).toBe(true);
+    });
+
+    it("returns false for User A on Community B (cross-org)", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userA.client, "user_can_access_community", {
+        _community_id: FIXTURE.communityB,
+      });
+      expect(result).toBe(false);
+    });
+
+    it("returns false for User C (no role) on Community A", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userC.client, "user_can_access_community", {
+        _community_id: FIXTURE.communityA,
+      });
+      expect(result).toBe(false);
+    });
+
+    it("returns false for User C (no role) on Community B", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userC.client, "user_can_access_community", {
+        _community_id: FIXTURE.communityB,
+      });
+      expect(result).toBe(false);
+    });
+
+    it("returns true for User D (super_admin) on any community", async () => {
+      if (skipIfRequested()) return;
+      const [resultA, resultB] = await Promise.all([
+        callRpc(userD.client, "user_can_access_community", {
+          _community_id: FIXTURE.communityA,
+        }),
+        callRpc(userD.client, "user_can_access_community", {
+          _community_id: FIXTURE.communityB,
+        }),
+      ]);
+      expect(resultA).toBe(true);
+      expect(resultB).toBe(true);
+    });
+
+    // NULL contract — locks the super_admin short-circuit so a future
+    // "optimize away the subselect" refactor cannot regress.
+    // PostgREST coerces JSON null to SQL NULL.
+    it("NULL contract: returns false for User A on null _community_id", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userA.client, "user_can_access_community", {
+        _community_id: null,
+      });
+      expect(result).toBe(false);
+    });
+
+    it("NULL contract: returns false for User C (no role) on null _community_id", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userC.client, "user_can_access_community", {
+        _community_id: null,
+      });
+      expect(result).toBe(false);
+    });
+
+    it("NULL contract: returns true for User D (super_admin) on null _community_id", async () => {
+      if (skipIfRequested()) return;
+      const result = await callRpc(userD.client, "user_can_access_community", {
+        _community_id: null,
+      });
+      expect(result).toBe(true);
     });
   });
 });
