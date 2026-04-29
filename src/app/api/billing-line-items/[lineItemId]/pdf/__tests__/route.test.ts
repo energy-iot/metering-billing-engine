@@ -226,7 +226,6 @@ function lineItemRow(overrides: Record<string, unknown> = {}) {
           organizations: {
             id: ORG_ID,
             name: "Org",
-            slug: "org",
             created_at: "2026-01-01",
           },
         },
