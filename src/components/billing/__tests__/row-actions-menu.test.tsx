@@ -107,6 +107,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
       onMarkAsUnpaid: vi.fn(),
       onCancelLink: vi.fn(),
       onMarkAsFailed: vi.fn(),
+      // PDF3 (#205) — bill-PDF download handler.
+      onDownloadPdf: vi.fn(),
     },
   };
 
@@ -130,6 +132,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     expect(labels).toContain("Generate payment link");
     expect(labels).toContain("Mark as paid…");
     expect(labels).toContain("View household");
+    // PDF3 (#205) — Download bill (PDF) is always present.
+    expect(labels).toContain("Download bill (PDF)");
   });
 
   it("State 2: Manual · Link sent · draft · edgeAvailable — 3 link_generated transitions", () => {
@@ -154,6 +158,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     // Manual + edgeAvailable → both source toggles
     expect(labels).toContain("Switch back to edge data");
     expect(labels).toContain("Re-enter manual readings…");
+    // PDF3 (#205) — Download bill (PDF) is always present.
+    expect(labels).toContain("Download bill (PDF)");
   });
 
   it("State 3: Manual · Unpaid · draft · NO edge — Switch back hidden, not disabled", () => {
@@ -175,6 +181,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     expect(labels).not.toContain("Switch back to edge data");
     expect(labels).toContain("Re-enter manual readings…");
     expect(labels).toContain("Generate payment link");
+    // PDF3 (#205) — Download bill (PDF) is always present.
+    expect(labels).toContain("Download bill (PDF)");
   });
 
   it("State 4: Edge · Paid · draft — paid->{unpaid,refunded} only; regen has warning", () => {
@@ -199,6 +207,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     );
     expect(regenEdge).toBeTruthy();
     expect(regenEdge?.kind === "action" && regenEdge.warning).toBe(true);
+    // PDF3 (#205) — Download bill (PDF) is always present.
+    expect(labels).toContain("Download bill (PDF)");
   });
 
   it("State 5: Edge · Refunded · draft (terminal) — single disabled item", () => {
@@ -225,6 +235,9 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     );
     expect(noActions).toBeTruthy();
     expect(noActions?.kind === "action" && noActions.disabled).toBe(true);
+    // PDF3 (#205) — Download bill (PDF) is visible even on terminal rows
+    // (refunded bills still want a paper trail).
+    expect(labels).toContain("Download bill (PDF)");
   });
 
   it("State 6: Edge · Paid · CLOSED period (Q4=B) — regen has warning + audit subtext", () => {
@@ -248,6 +261,11 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     expect(regen?.kind === "action" && regen.subtext).toBe(
       "Logged as audit revision.",
     );
+    // PDF3 (#205) — Download bill (PDF) is always present.
+    const labels = items
+      .filter((i) => i.kind === "action" || i.kind === "link")
+      .map((i) => (i.kind === "action" ? i.label : i.label));
+    expect(labels).toContain("Download bill (PDF)");
   });
 });
 
@@ -539,5 +557,67 @@ describe("RowActionsMenu — payment-link generation error", () => {
     expect(last.message).toMatch(/failed to generate payment link/i);
     expect(last.action?.label).toBe("Retry");
     expect(typeof last.action?.onClick).toBe("function");
+  });
+});
+
+// ── PDF3 (#205) — bill-download error path ──────────────────────────────────
+
+describe("RowActionsMenu — bill download error", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("422 response pushes destructive banner with the upstream reason", async () => {
+    const onRowBanner = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        json: () =>
+          Promise.resolve({
+            error:
+              "Cannot generate bill — payment link could not be created.",
+            reason: "pesapal_unreachable",
+          }),
+      }),
+    );
+
+    renderMenu(
+      makeProps({
+        onRowBanner,
+        lineItem: {
+          id: "li-1",
+          payment_status: "unpaid",
+          reading_source: "edge",
+          total_amount: 100,
+        },
+      }),
+    );
+
+    await act(async () => {
+      openMenu(screen.getByRole("button", { name: /row actions for/i }));
+    });
+    await waitFor(() => screen.getByText(/download bill \(pdf\)/i));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/download bill \(pdf\)/i));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const errCalls = onRowBanner.mock.calls.filter(
+      (c) => (c[0] as RowBannerEntry).tone === "destructive",
+    );
+    expect(errCalls.length).toBeGreaterThanOrEqual(1);
+    const last = errCalls[errCalls.length - 1][0] as RowBannerEntry;
+    expect(last.message).toMatch(/cannot generate bill/i);
+    expect(last.message).toMatch(/pesapal_unreachable/);
+    // Download retry surface IS the menu item itself; no inline action btn.
+    expect(last.action).toBeUndefined();
   });
 });

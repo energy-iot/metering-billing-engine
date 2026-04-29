@@ -21,6 +21,7 @@ type Kind =
   | "edgeSource"
   | "deviceType"
   | "household"
+  | "householdCustomerType"
   | "householdDeviceRole"
   | "meter"
   | "meterType"
@@ -83,6 +84,15 @@ const MAPS: Record<Kind, StatusMap> = {
     active:   { label: "Active",   tone: "success", dot: true },
     inactive: { label: "Inactive", tone: "neutral", dot: true },
     disputed: { label: "Disputed", tone: "alert",   dot: true },
+  },
+  // PDF3 (#205) — household customer-type chip surfaced inside the
+  // HouseholdTable's Household cell. Mirrors the `customer_type` column
+  // (residential | commercial; PDF1a / 00033). No `info` tone in the
+  // existing tone set — `neutral` (resting; the majority class) and
+  // `brand` (visually distinct; commercial) carry the contrast.
+  householdCustomerType: {
+    residential: { label: "Residential", tone: "neutral" },
+    commercial:  { label: "Commercial",  tone: "brand"   },
   },
   // Canonical device-type chip — mirrors `device_type` enum in AB #50.
   // Tone rationale (per mock mgm-ia-v1.html § IA note line 1794):

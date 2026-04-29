@@ -29,7 +29,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Banner } from "@/components/ui/banner";
-import { RadioGroup } from "@/components/ui/radio-group";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { RadioCard } from "@/components/ui/radio-card";
 import { StatusChip } from "@/components/ui/status-chip";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -104,6 +104,16 @@ type FormState = {
    * valid regardless of meter count when this is set.
    */
   no_meter: boolean;
+  // PDF3 (#205) — household PDF-invoice identity fields. account_number,
+  // meter_serial, contact_email are optional (empty-string → null on
+  // submit). meter_type / customer_type are NOT NULL on the column;
+  // EMPTY_STATE seeds them with the DB defaults so a save without edits
+  // produces canonical values.
+  account_number: string;
+  meter_serial: string;
+  meter_type: string;
+  customer_type: "residential" | "commercial";
+  contact_email: string;
 };
 
 const EMPTY_STATE: FormState = {
@@ -120,6 +130,14 @@ const EMPTY_STATE: FormState = {
   geography_notes: "",
   device_id: "",
   no_meter: false,
+  // PDF3 (#205) defaults — mirror the PDF1a column DEFAULTs so a "Save with
+  // no edits" produces the canonical values without relying on the
+  // RPC-side COALESCE alone.
+  account_number: "",
+  meter_serial: "",
+  meter_type: "Smart Submeter",
+  customer_type: "residential",
+  contact_email: "",
 };
 
 const STEP_LABELS: Record<Step, string> = {
@@ -164,6 +182,10 @@ function isStepValid(step: Step, state: FormState, meterCount: number): boolean 
 }
 
 function hasAnyData(state: FormState): boolean {
+  // PDF3 (#205): meter_type / customer_type are seeded to canonical defaults
+  // in EMPTY_STATE, so we compare against those literals to detect "user
+  // changed something". account_number / meter_serial / contact_email all
+  // start as "" so a non-empty trim signals user edits.
   return (
     state.display_name.trim().length > 0 ||
     state.primary_phone.trim().length > 0 ||
@@ -177,7 +199,12 @@ function hasAnyData(state: FormState): boolean {
     state.address_postal_code.trim().length > 0 ||
     state.geography_notes.trim().length > 0 ||
     state.device_id.length > 0 ||
-    state.no_meter
+    state.no_meter ||
+    state.account_number.trim().length > 0 ||
+    state.meter_serial.trim().length > 0 ||
+    state.meter_type.trim() !== "Smart Submeter" ||
+    state.customer_type !== "residential" ||
+    state.contact_email.trim().length > 0
   );
 }
 
@@ -374,6 +401,15 @@ export function HouseholdWizard({
           // The route distinguishes the two paths and dispatches to
           // fn_create_household vs fn_create_household_with_meter.
           device_id: state.no_meter ? null : state.device_id,
+          // PDF3 (#205) — household PDF-invoice identity fields.
+          // Optional ones: empty-string → null. Required-on-column ones
+          // (meter_type / customer_type) always send the form's value
+          // (EMPTY_STATE seeds canonical defaults).
+          account_number: state.account_number.trim() || null,
+          meter_serial: state.meter_serial.trim() || null,
+          meter_type: state.meter_type.trim() || "Smart Submeter",
+          customer_type: state.customer_type,
+          contact_email: state.contact_email.trim() || null,
         }),
       });
       if (!res.ok) {
@@ -702,6 +738,23 @@ function StepBasics({
           aria-required="true"
         />
       </div>
+      {/* PDF3 (#205) — Account Number (optional, ≤ 30 chars). */}
+      <div>
+        <label
+          htmlFor="hh-account-number"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Account number
+        </label>
+        <Input
+          id="hh-account-number"
+          type="text"
+          maxLength={30}
+          value={state.account_number}
+          onChange={(e) => update("account_number", e.target.value)}
+          placeholder="Optional — appears on the PDF invoice"
+        />
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label
@@ -750,6 +803,60 @@ function StepBasics({
             placeholder="optional"
           />
         </div>
+      </div>
+      {/* PDF3 (#205) — Customer type (radio group; default residential). */}
+      <div>
+        <span
+          id="hh-customer-type-label"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Customer type
+        </span>
+        <RadioGroup
+          value={state.customer_type}
+          onValueChange={(v) =>
+            update("customer_type", v as "residential" | "commercial")
+          }
+          aria-labelledby="hh-customer-type-label"
+          className="flex flex-row gap-4"
+        >
+          <label
+            htmlFor="hh-customer-type-residential"
+            className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
+          >
+            <RadioGroupItem
+              id="hh-customer-type-residential"
+              value="residential"
+            />
+            <span>Residential</span>
+          </label>
+          <label
+            htmlFor="hh-customer-type-commercial"
+            className="flex cursor-pointer items-center gap-2 text-sm text-foreground"
+          >
+            <RadioGroupItem
+              id="hh-customer-type-commercial"
+              value="commercial"
+            />
+            <span>Commercial</span>
+          </label>
+        </RadioGroup>
+      </div>
+      {/* PDF3 (#205) — Contact email (optional; format-validated server-side). */}
+      <div>
+        <label
+          htmlFor="hh-contact-email"
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Contact email
+        </label>
+        <Input
+          id="hh-contact-email"
+          type="email"
+          value={state.contact_email}
+          onChange={(e) => update("contact_email", e.target.value)}
+          placeholder="For billing questions (optional)"
+        />
       </div>
     </fieldset>
   );
@@ -947,6 +1054,45 @@ function StepMeter({
     <fieldset className="space-y-4" disabled={disabled}>
       <legend className="sr-only">Step 3 of 4: Meter assignment</legend>
 
+      {/* PDF3 (#205) — physical-device descriptors that pair with the
+          meter assignment. Editable in both branches (no_meter included)
+          so the operator can record the physical serial even when the
+          OpenEMS link isn't established. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label
+            htmlFor="hh-meter-serial"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Meter serial
+          </label>
+          <Input
+            id="hh-meter-serial"
+            type="text"
+            maxLength={50}
+            value={state.meter_serial}
+            onChange={(e) => update("meter_serial", e.target.value)}
+            placeholder="Optional — physical serial"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="hh-meter-type"
+            className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Meter type
+          </label>
+          <Input
+            id="hh-meter-type"
+            type="text"
+            maxLength={50}
+            value={state.meter_type}
+            onChange={(e) => update("meter_type", e.target.value)}
+            placeholder="Smart Submeter"
+          />
+        </div>
+      </div>
+
       {/* #158: no-meter (manual billing) checkbox. */}
       <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 hover:bg-muted">
         <input
@@ -1112,12 +1258,26 @@ function StepReview({
       >
         <ReviewRow label="Display name" value={state.display_name} />
         <ReviewRow
+          label="Account number"
+          value={state.account_number || "—"}
+        />
+        <ReviewRow
           label="Primary phone"
           value={state.primary_phone || "—"}
         />
         <ReviewRow
           label="Primary email"
           value={state.primary_email || "—"}
+        />
+        <ReviewRow
+          label="Customer type"
+          value={
+            state.customer_type === "commercial" ? "Commercial" : "Residential"
+          }
+        />
+        <ReviewRow
+          label="Contact email"
+          value={state.contact_email || "—"}
         />
       </ReviewSection>
 
@@ -1142,6 +1302,14 @@ function StepReview({
       </ReviewSection>
 
       <ReviewSection title="Primary meter" onEdit={() => onJumpTo(3)}>
+        {/* PDF3 (#205) — physical-device descriptors render regardless of
+            no_meter. They describe the physical device, not the
+            OpenEMS link. */}
+        <ReviewRow label="Meter serial" value={state.meter_serial || "—"} />
+        <ReviewRow
+          label="Meter type"
+          value={state.meter_type || "Smart Submeter"}
+        />
         {state.no_meter ? (
           // #158: explicit no-meter review row (manual billing path).
           <ReviewRow

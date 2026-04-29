@@ -279,6 +279,9 @@ export function HouseholdTable({
             <thead>
               <tr className="border-b border-border text-muted-foreground">
                 <th className="pb-2 pr-4 font-medium">Household</th>
+                {/* PDF3 (#205) — Account Number column between Household
+                    and Address. Empty rows show "—" muted. */}
+                <th className="pb-2 pr-4 font-medium">Account number</th>
                 <th className="pb-2 pr-4 font-medium">Address</th>
                 <th className="pb-2 pr-4 font-medium">Billing device</th>
                 <th className="pb-2 text-right font-medium">Actions</th>
@@ -293,14 +296,32 @@ export function HouseholdTable({
                     className="border-b border-border align-top"
                   >
                     <td className="py-3 pr-4">
-                      <div className="font-medium text-foreground">
-                        {household.display_name}
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground">
+                          {household.display_name}
+                        </span>
+                        {/* PDF3 (#205) — Customer Type chip next to display
+                            name. Visually compact (no extra column). */}
+                        <StatusChip
+                          kind="householdCustomerType"
+                          status={household.customer_type}
+                        />
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {[household.primary_email, household.primary_phone]
                           .filter(Boolean)
                           .join(" · ") || "—"}
                       </div>
+                    </td>
+                    {/* PDF3 (#205) — Account Number column. */}
+                    <td className="py-3 pr-4 text-muted-foreground">
+                      {household.account_number ? (
+                        <span className="text-foreground">
+                          {household.account_number}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="py-3 pr-4 text-muted-foreground">
                       <span className="block max-w-[260px] truncate">
