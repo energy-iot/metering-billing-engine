@@ -105,15 +105,13 @@ type FormState = {
    */
   no_meter: boolean;
   // PDF3 (#205) — household PDF-invoice identity fields. account_number,
-  // meter_serial, contact_email are optional (empty-string → null on
-  // submit). meter_type / customer_type are NOT NULL on the column;
-  // EMPTY_STATE seeds them with the DB defaults so a save without edits
-  // produces canonical values.
+  // meter_serial are optional (empty-string → null on submit). meter_type /
+  // customer_type are NOT NULL on the column; EMPTY_STATE seeds them with
+  // the DB defaults so a save without edits produces canonical values.
   account_number: string;
   meter_serial: string;
   meter_type: string;
   customer_type: "residential" | "commercial";
-  contact_email: string;
 };
 
 const EMPTY_STATE: FormState = {
@@ -137,7 +135,6 @@ const EMPTY_STATE: FormState = {
   meter_serial: "",
   meter_type: "Smart Submeter",
   customer_type: "residential",
-  contact_email: "",
 };
 
 const STEP_LABELS: Record<Step, string> = {
@@ -184,8 +181,8 @@ function isStepValid(step: Step, state: FormState, meterCount: number): boolean 
 function hasAnyData(state: FormState): boolean {
   // PDF3 (#205): meter_type / customer_type are seeded to canonical defaults
   // in EMPTY_STATE, so we compare against those literals to detect "user
-  // changed something". account_number / meter_serial / contact_email all
-  // start as "" so a non-empty trim signals user edits.
+  // changed something". account_number / meter_serial both start as "" so a
+  // non-empty trim signals user edits.
   return (
     state.display_name.trim().length > 0 ||
     state.primary_phone.trim().length > 0 ||
@@ -203,8 +200,7 @@ function hasAnyData(state: FormState): boolean {
     state.account_number.trim().length > 0 ||
     state.meter_serial.trim().length > 0 ||
     state.meter_type.trim() !== "Smart Submeter" ||
-    state.customer_type !== "residential" ||
-    state.contact_email.trim().length > 0
+    state.customer_type !== "residential"
   );
 }
 
@@ -409,7 +405,6 @@ export function HouseholdWizard({
           meter_serial: state.meter_serial.trim() || null,
           meter_type: state.meter_type.trim() || "Smart Submeter",
           customer_type: state.customer_type,
-          contact_email: state.contact_email.trim() || null,
         }),
       });
       if (!res.ok) {
@@ -793,7 +788,7 @@ function StepBasics({
             htmlFor="hh-primary-email"
             className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            Primary email
+            Email
           </label>
           <Input
             id="hh-primary-email"
@@ -841,22 +836,6 @@ function StepBasics({
             <span>Commercial</span>
           </label>
         </RadioGroup>
-      </div>
-      {/* PDF3 (#205) — Contact email (optional; format-validated server-side). */}
-      <div>
-        <label
-          htmlFor="hh-contact-email"
-          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-        >
-          Contact email
-        </label>
-        <Input
-          id="hh-contact-email"
-          type="email"
-          value={state.contact_email}
-          onChange={(e) => update("contact_email", e.target.value)}
-          placeholder="For billing questions (optional)"
-        />
       </div>
     </fieldset>
   );
@@ -1266,7 +1245,7 @@ function StepReview({
           value={state.primary_phone || "—"}
         />
         <ReviewRow
-          label="Primary email"
+          label="Email"
           value={state.primary_email || "—"}
         />
         <ReviewRow
@@ -1274,10 +1253,6 @@ function StepReview({
           value={
             state.customer_type === "commercial" ? "Commercial" : "Residential"
           }
-        />
-        <ReviewRow
-          label="Contact email"
-          value={state.contact_email || "—"}
         />
       </ReviewSection>
 

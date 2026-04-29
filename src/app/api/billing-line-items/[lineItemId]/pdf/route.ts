@@ -154,7 +154,6 @@ export async function GET(
         address_line2,
         address_postal_code,
         address_region,
-        contact_email,
         created_at,
         customer_type,
         display_name,

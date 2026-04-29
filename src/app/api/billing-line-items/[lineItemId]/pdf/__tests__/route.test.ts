@@ -240,7 +240,6 @@ function lineItemRow(overrides: Record<string, unknown> = {}) {
       address_line2: null,
       address_postal_code: null,
       address_region: null,
-      contact_email: null,
       created_at: "2026-01-01",
       customer_type: "residential",
       display_name: "Aaron",

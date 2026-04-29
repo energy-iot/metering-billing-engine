@@ -39,10 +39,10 @@ const HexColor = z.string().regex(HEX_COLOR_RE, {
 });
 
 /**
- * Format-only email validator. Matches the `households.contact_email` column
- * CHECK regex. Deliverability is verified out-of-band by tenant outreach,
- * never at the column boundary. Do NOT tighten to RFC 5322 — the format-only
- * intent is deliberate.
+ * Format-only email validator; rejects whitespace, requires `@` and `.`. Used
+ * by `seller.contact_email` (community invoice config). Deliverability is
+ * verified out-of-band, never at this boundary. Do NOT tighten to RFC 5322 —
+ * the format-only intent is deliberate.
  */
 const EmailFormat = z.string().regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/, {
   message: "must look like an email address (no whitespace, contains @ and .)",

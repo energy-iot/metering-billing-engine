@@ -310,7 +310,7 @@ describe("HouseholdWizard", () => {
       fillDisplayName("Block A, Unit 7");
       const phone = screen.getByLabelText(/Primary phone/i) as HTMLInputElement;
       fireEvent.change(phone, { target: { value: "+256 700 000 000" } });
-      const email = screen.getByLabelText(/Primary email/i) as HTMLInputElement;
+      const email = screen.getByLabelText(/^Email$/i) as HTMLInputElement;
       fireEvent.change(email, { target: { value: "ops@example.com" } });
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
 
