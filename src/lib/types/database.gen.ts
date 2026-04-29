@@ -1064,6 +1064,10 @@ export type Database = {
         }
       }
       is_super_admin: { Args: never; Returns: boolean }
+      user_can_access_community: {
+        Args: { _community_id: string }
+        Returns: boolean
+      }
       user_can_access_microgrid: {
         Args: { _microgrid_id: string }
         Returns: boolean
