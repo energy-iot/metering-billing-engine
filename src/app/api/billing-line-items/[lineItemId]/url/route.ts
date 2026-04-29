@@ -18,6 +18,14 @@
  *   200 → { redirectUrl, orderTrackingId, merchantReference }
  *   4xx/5xx → { error, reason }
  *
+ * Response shape change (#202 / R5): `orderTrackingId` and `merchantReference`
+ * are `string | null`. They are populated on the mint path (where we have the
+ * values fresh from `submitOrder`'s response) and NULL on the cache-hit path
+ * (the values are not persisted as columns on `billing_line_items`; they live
+ * inside `payment_events.raw_payload`). The only UI consumer
+ * (`src/components/billing/row-actions-menu.tsx`) reads only `redirectUrl`,
+ * so this is non-breaking.
+ *
  * Log scrubbing: the generated redirectUrl, the consumer_secret, and the
  * Pesapal session token are NEVER logged. `scrubSecretValues(..., { extra })`
  * is applied to the final log payload belt-and-suspenders — even the event
@@ -27,22 +35,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
-import {
-  PaymentError,
-  getPaymentProviderClient,
-  type GeneratePaymentLinkResult,
-} from "@/lib/payments";
-import { getCommunityPaymentConfig } from "@/lib/payments/config";
-import { buildOrderParamsFromLineItem } from "@/lib/payments/pesapal/build-params";
-import { buildOrderId } from "@/lib/payments/pesapal/order-id";
+import { PaymentError } from "@/lib/payments";
+import { ensurePaymentLinkForLineItem } from "@/lib/payments/ensure-payment-link";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const DEFAULT_CALLBACK_URL =
-  process.env.NEXT_PUBLIC_PAYMENT_CALLBACK_URL ??
-  "http://localhost:3000/payment/callback";
 
 type LineItemScopeRow = {
   id: string;
@@ -80,6 +78,9 @@ export async function POST(
 
   // 1. Resolve lineItem → period → microgrid → community in one query.
   //    RLS applies: a line-item the user can't see surfaces as null → 404.
+  //    This pre-flight runs ahead of the helper so we can still surface a
+  //    "not_found" before the permission gate, AND so we can scope the log
+  //    event with the resolved community/microgrid IDs.
   const { data: scoped, error: scopedErr } = await supabase
     .from("billing_line_items")
     .select(
@@ -146,7 +147,7 @@ export async function POST(
 
   // 2. Permission gate. super_admin + org_manager-of-owning-org both allowed;
   //    cross-org callers are filtered by fn_get_community_payment_secret
-  //    (cross-org org_manager → null → PAYMENT_FORBIDDEN below) (#196).
+  //    (cross-org org_manager → null → PAYMENT_FORBIDDEN inside the helper) (#196).
   if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
     return NextResponse.json(
       { error: "Billing line item not found.", reason: "not_found" },
@@ -154,10 +155,14 @@ export async function POST(
     );
   }
 
-  // 3. Load payment config for the community.
-  let paymentConfig;
+  // 3. Delegate to the shared ensure helper. It performs the
+  //    config-resolve → params-build → submitOrder → persist → audit-write
+  //    flow with optimistic-concurrency on the persist.
+  let result;
   try {
-    paymentConfig = await getCommunityPaymentConfig(supabase, communityId);
+    result = await ensurePaymentLinkForLineItem(supabase, lineItemId, {
+      actorUserId,
+    });
   } catch (err) {
     const mapped = mapPaymentError(err);
     logPaymentEvent({
@@ -173,148 +178,6 @@ export async function POST(
     return NextResponse.json(
       { error: mapped.message, reason: mapped.reason },
       { status: mapped.httpStatus },
-    );
-  }
-
-  if (!paymentConfig) {
-    logPaymentEvent({
-      communityId,
-      microgridId,
-      lineItemId,
-      actorUserId,
-      provider: null,
-      status: "not_configured",
-      durationMs: Date.now() - startedAt,
-      sensitive: [],
-    });
-    return NextResponse.json(
-      {
-        error: "No payment provider configured for this community.",
-        reason: "not_configured",
-      },
-      { status: 409 },
-    );
-  }
-
-  // 4. Build the per-line-item order params.
-  let built;
-  try {
-    built = await buildOrderParamsFromLineItem(supabase, lineItemId);
-  } catch (err) {
-    const mapped = mapPaymentError(err);
-    logPaymentEvent({
-      communityId,
-      microgridId,
-      lineItemId,
-      actorUserId,
-      provider: paymentConfig.provider,
-      status: mapped.reason,
-      durationMs: Date.now() - startedAt,
-      sensitive: [paymentConfig.secret],
-    });
-    return NextResponse.json(
-      { error: mapped.message, reason: mapped.reason },
-      { status: mapped.httpStatus },
-    );
-  }
-
-  // 5. Currency: prefer microgrid.currency; fall back to UGX with a warning.
-  let currency = microgrid.currency ?? "";
-  if (!currency) {
-    console.warn(
-      JSON.stringify({
-        event: "payment.generate_link.currency_fallback",
-        microgrid_id: microgridId,
-        fallback: "UGX",
-        at: new Date().toISOString(),
-      }),
-    );
-    currency = "UGX";
-  }
-
-  // 6. Pesapal rejects reused `id` — fresh per click. Pesapal caps `id` at
-  //    50 chars; `buildOrderId` encodes the UUID as crockford-base32 so the
-  //    composed id stays at 44 chars. See src/lib/payments/pesapal/order-id.ts.
-  const orderId = buildOrderId(lineItemId);
-
-  // 7. Dispatch through the factory. Post-#121, parsePesapalConfig rejects
-  //    upstream when the persisted config is missing `ipn_id` (throws
-  //    PAYMENT_IPN_NOT_REGISTERED — 409), so the legacy
-  //    PesapalProvider-constructor PESAPAL_NO_IPN branch is unreachable here.
-  //    Wrap both the constructor and the generatePaymentLink call under a
-  //    single try so every Pesapal-layer error lands in mapPaymentError.
-  let result: GeneratePaymentLinkResult;
-  try {
-    const client = getPaymentProviderClient(paymentConfig);
-    result = await client.generatePaymentLink({
-      lineItemId,
-      orderId,
-      amount: built.amount,
-      description: built.description,
-      billingAddress: built.billingAddress,
-      callbackUrl: DEFAULT_CALLBACK_URL,
-      currency,
-    });
-  } catch (err) {
-    const mapped = mapPaymentError(err);
-    logPaymentEvent({
-      communityId,
-      microgridId,
-      lineItemId,
-      actorUserId,
-      provider: paymentConfig.provider,
-      status: mapped.reason,
-      durationMs: Date.now() - startedAt,
-      sensitive: [paymentConfig.secret],
-    });
-    return NextResponse.json(
-      { error: mapped.message, reason: mapped.reason },
-      { status: mapped.httpStatus },
-    );
-  }
-
-  // 8. Phase B (#157): record the unpaid → link_generated transition AND
-  //    persist `pesapal_order_id` (the merchant_reference Pesapal will echo
-  //    back in IPN webhooks). This is the canonical join key for the IPN
-  //    webhook receiver.
-  //
-  //    The redirect URL is already valid at this point — if the audit write
-  //    fails, log loudly but STILL return 200 with the URL. Better UX (the
-  //    user can pay) than blocking on a non-critical audit row.
-  try {
-    const { error: rpcErr } = await supabase.rpc("fn_apply_payment_event", {
-      _line_item_id: lineItemId,
-      _to_status: "link_generated",
-      _source: "generate_link",
-      _actor_user_id: actorUserId,
-      _raw_payload: {
-        pesapal_order_id: result.providerReference,
-        provider_order_tracking_id: result.providerOrderId,
-        // redirect_url is intentionally NOT logged in raw_payload — it
-        // contains a session token. Only the opaque ids are persisted.
-      },
-    });
-    if (rpcErr) {
-      console.warn(
-        JSON.stringify({
-          event: "payment.generate_link.audit_write_failed",
-          line_item_id: lineItemId,
-          microgrid_id: microgridId,
-          pg_code: rpcErr.code,
-          pg_message: rpcErr.message,
-          at: new Date().toISOString(),
-        }),
-      );
-    }
-  } catch (err) {
-    console.warn(
-      JSON.stringify({
-        event: "payment.generate_link.audit_write_threw",
-        line_item_id: lineItemId,
-        microgrid_id: microgridId,
-        message: err instanceof Error ? err.message : String(err),
-        at: new Date().toISOString(),
-      }),
     );
   }
 
@@ -323,16 +186,21 @@ export async function POST(
     microgridId,
     lineItemId,
     actorUserId,
-    provider: paymentConfig.provider,
+    provider: "pesapal",
     status: "success",
     durationMs: Date.now() - startedAt,
-    sensitive: [paymentConfig.secret, result.redirectUrl, result.providerOrderId],
+    // The redirect URL is sensitive; orderTrackingId is opaque but harmless
+    // to scrub for consistency with the prior shape.
+    sensitive: [
+      result.redirectUrl,
+      result.orderTrackingId ?? "",
+    ].filter((s): s is string => Boolean(s)),
   });
 
   return NextResponse.json({
     redirectUrl: result.redirectUrl,
-    orderTrackingId: result.providerOrderId,
-    merchantReference: result.providerReference,
+    orderTrackingId: result.orderTrackingId,
+    merchantReference: result.merchantReference,
   });
 }
 
