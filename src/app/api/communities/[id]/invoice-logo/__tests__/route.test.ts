@@ -3,7 +3,7 @@
  *
  * Mocks Supabase + service-role storage + auth. Covers:
  *   (1) Happy path → 200, returns logo_storage_path + signed_thumbnail_url
- *   (2) Oversized file (>1 MB server cap) → 400
+ *   (2) Oversized file (>2 MB server cap) → 400
  *   (3) Wrong MIME → 400
  *   (4) Missing `file` field → 400
  *   (5) Cross-org → 403, NO upload attempted
@@ -121,9 +121,9 @@ describe("POST /api/communities/[id]/invoice-logo", () => {
     expect(uploadMock).toHaveBeenCalledTimes(1);
   });
 
-  it("(2) oversized file (>1 MB) → 400", async () => {
+  it("(2) oversized file (>2 MB) → 400", async () => {
     const fd = new FormData();
-    const oversized = new Blob([new Uint8Array(2 * 1024 * 1024)], {
+    const oversized = new Blob([new Uint8Array(2 * 1024 * 1024 + 1)], {
       type: "image/png",
     });
     fd.append("file", new File([oversized], "big.png", { type: "image/png" }));

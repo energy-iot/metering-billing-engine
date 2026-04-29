@@ -20,8 +20,9 @@ import { currentUserCanAccessOrg } from "@/lib/auth/access";
  * never wire a public, unauthenticated endpoint that returns the raw bytes
  * from `invoice-logos`** — that's the only place XSS would reactivate.
  *
- * Server-side defense-in-depth on size: 1 MB cap (UI enforces 500 KB tighter
- * client-side). The bucket also caps at 1 MiB in 00033.
+ * Server-side defense-in-depth on size: 2 MB cap (UI also enforces 2 MB;
+ * bucket caps at 2 MiB via the 00035 migration). Client + server + bucket
+ * are equal — defense-in-depth.
  *
  * Path schema: `{community.id}/{Date.now()}-{crypto.randomUUID()}.{ext}`.
  * `crypto.randomUUID()` is cryptographically random; collision is effectively
@@ -32,7 +33,7 @@ import { currentUserCanAccessOrg } from "@/lib/auth/access";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB server-side cap.
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB server-side cap.
 
 const ALLOWED_MIME = new Set<string>([
   "image/png",
@@ -128,7 +129,7 @@ export async function POST(
 
   if (file.size > MAX_FILE_SIZE_BYTES) {
     return NextResponse.json(
-      { error: "File too large. Maximum size is 1 MB." },
+      { error: "File too large. Maximum size is 2 MB." },
       { status: 400 },
     );
   }

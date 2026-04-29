@@ -9,8 +9,8 @@
  *
  * Client-side validation (defense-in-depth — the server also re-validates):
  *   - MIME: image/png, image/jpeg, image/svg+xml.
- *   - Size: ≤ 500 KB (the bucket caps at 1 MiB; 500 KB keeps deploy/preview
- *     bundles small).
+ *   - Size: ≤ 2 MB (the bucket caps at 2 MiB; client + server + bucket
+ *     limits are equal — defense-in-depth).
  *
  * Preview: `URL.createObjectURL()` blob URI rendered inline before the
  * upload click. We revoke the blob URL on unmount and on successful upload.
@@ -33,7 +33,7 @@ const ALLOWED_MIME_SET = new Set<string>([
   "image/svg+xml",
 ]);
 
-const CLIENT_MAX_BYTES = 500 * 1024; // 500 KB.
+const CLIENT_MAX_BYTES = 2 * 1024 * 1024; // 2 MB.
 
 export type LogoUploadResult = {
   logo_storage_path: string;
@@ -89,7 +89,7 @@ export function LogoUploadControl({
     }
     if (file.size > CLIENT_MAX_BYTES) {
       setError(
-        `File is too large (${Math.round(file.size / 1024)} KB). Maximum 500 KB.`,
+        `File is too large (${Math.round(file.size / 1024)} KB). Maximum 2 MB.`,
       );
       return;
     }
@@ -209,7 +209,7 @@ export function LogoUploadControl({
           />
         ) : (
           <p className="text-xs text-muted-foreground">
-            Drag a logo here or click to browse (PNG, JPG, SVG, up to 500 KB)
+            Drag a logo here or click to browse (PNG, JPG, SVG, up to 2 MB)
           </p>
         )}
         {(draftPreviewUrl || persistedThumbnailSrc) && (
