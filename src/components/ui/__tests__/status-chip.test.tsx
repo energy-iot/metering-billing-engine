@@ -90,16 +90,6 @@ describe("StatusChip — openemsBackendHealth kind", () => {
     expect(container.textContent).toContain("Healthy");
   });
 
-  it("renders 'stale' with warn background + dot", () => {
-    const { container } = render(
-      <StatusChip kind="openemsBackendHealth" status="stale" />,
-    );
-    const chip = container.querySelector("span");
-    expect(chip?.className).toContain("bg-warning-muted");
-    expect(chip?.querySelector("span")?.className).toContain("bg-warning");
-    expect(container.textContent).toContain("Stale");
-  });
-
   it("renders 'failing' with alert background + dot", () => {
     const { container } = render(
       <StatusChip kind="openemsBackendHealth" status="failing" />,
@@ -241,16 +231,6 @@ describe("StatusChip — paymentHealth kind", () => {
     expect(chip?.className).toContain("bg-success-muted");
     expect(chip?.querySelector("span")?.className).toContain("bg-success");
     expect(container.textContent).toContain("Healthy");
-  });
-
-  it("renders 'stale' with warn background + dot", () => {
-    const { container } = render(
-      <StatusChip kind="paymentHealth" status="stale" />,
-    );
-    const chip = container.querySelector("span");
-    expect(chip?.className).toContain("bg-warning-muted");
-    expect(chip?.querySelector("span")?.className).toContain("bg-warning");
-    expect(container.textContent).toContain("Stale");
   });
 
   it("renders 'failing' with alert background + dot (Phase B — emitted on recent IPN failure)", () => {

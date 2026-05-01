@@ -48,7 +48,7 @@ describe("derivePaymentHealth()", () => {
     ).toBe("healthy");
   });
 
-  it("returns stale for save >= 24h ago", () => {
+  it("returns healthy for save >= 24h ago (24h cliff removed)", () => {
     expect(
       derivePaymentHealth(
         {
@@ -59,10 +59,10 @@ describe("derivePaymentHealth()", () => {
         },
         NOW,
       ),
-    ).toBe("stale");
+    ).toBe("healthy");
   });
 
-  it("returns stale when payment_provider set but payment_last_configured_at is null (defensive)", () => {
+  it("returns healthy when payment_provider set but payment_last_configured_at is null (fail-open defensive case)", () => {
     expect(
       derivePaymentHealth(
         {
@@ -71,7 +71,7 @@ describe("derivePaymentHealth()", () => {
         },
         NOW,
       ),
-    ).toBe("stale");
+    ).toBe("healthy");
   });
 
   it("returns failing when a recent IPN failure happened in the last 24h (Phase B / #157)", () => {
@@ -123,7 +123,7 @@ describe("derivePaymentHealth()", () => {
     ).toBe("healthy");
   });
 
-  it("falls back to existing healthy/stale logic when most_recent_failed_ipn_at is null", () => {
+  it("falls back to existing healthy logic when most_recent_failed_ipn_at is null", () => {
     expect(
       derivePaymentHealth(
         {

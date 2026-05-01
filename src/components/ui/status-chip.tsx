@@ -152,31 +152,28 @@ const MAPS: Record<Kind, StatusMap> = {
     PRODUCTION:  { label: "Production",  tone: "success" },
     UNKNOWN:     { label: "Unknown",     tone: "neutral" },
   },
-  // OpenEMS Backend per-microgrid health (#102).
-  //   healthy       — recent (< 24h) successful Discover.
-  //   stale         — last Discover ≥ 24h ago; user should run "Test again".
+  // OpenEMS Backend per-microgrid health (#102, #215).
+  //   healthy       — fail-open: ems_type set with no negative discover signal
+  //                   (covers `success` at any age and any unrecognized/null status).
   //   failing       — last Discover ended in auth_failed / unreachable /
   //                   zero_edges / unknown_error.
   //   not_configured — ems_type IS NULL; no Discover has run. NO dot (chip
   //                   shouldn't imply any state, just absence).
   openemsBackendHealth: {
     healthy:        { label: "Healthy",       tone: "success", dot: true  },
-    stale:          { label: "Stale",         tone: "warn",    dot: true  },
     failing:        { label: "Failing",       tone: "alert",   dot: true  },
     not_configured: { label: "Not connected", tone: "neutral" /* no dot */ },
   },
-  // Community Payment-provider health (#119).
-  //   healthy        — payment_last_configured_at is recent (< 24h).
-  //   stale          — configured but last Save & test was ≥ 24h ago; user
-  //                    should "Test again".
-  //   failing        — RESERVED for #121 (IPN webhook failure tracking).
-  //                    `derivePaymentHealth` never emits this today, but the
-  //                    MAPS entry stays pinned so Designer §3's tone table
-  //                    remains stable across the deferred-IPN rollout.
+  // Community Payment-provider health (#119, #157, #215).
+  //   healthy        — fail-open: payment_provider set with no recent IPN
+  //                    failure (covers null timestamp, recent saves, and old
+  //                    saves alike).
+  //   failing        — Phase B (#157): a payment_events row with
+  //                    `to_status='failed'` AND `source='ipn'` was recorded
+  //                    within the last 24h.
   //   not_configured — payment_provider IS NULL (no dot — just absence).
   paymentHealth: {
     healthy:        { label: "Healthy",       tone: "success", dot: true  },
-    stale:          { label: "Stale",         tone: "warn",    dot: true  },
     failing:        { label: "Failing",       tone: "alert",   dot: true  },
     not_configured: { label: "Not connected", tone: "neutral" /* no dot */ },
   },
