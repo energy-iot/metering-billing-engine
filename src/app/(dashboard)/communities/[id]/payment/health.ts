@@ -1,24 +1,25 @@
-// Health-derivation helper for the community Payment tab (#119, #157).
+// Health-derivation helper for the community Payment tab (#119, #157, #215).
 //
 // Derives a PaymentHealth state from the community's payment_* fields PLUS
 // the most-recent payment_events failure timestamp (Phase B / #157). This
 // helper is PURE — no DB access. The layout + page each fetch the row(s)
 // and hand the result to this function.
 //
-// State table:
+// State table (post-#215 — 24h "stale" cliff dropped):
 //
 //   payment_provider IS NULL                                 → not_configured
 //   recent failed IPN event within 24h                       → failing  (Phase B)
-//   payment_last_configured_at < 24h ago                     → healthy
-//   payment_last_configured_at >= 24h ago (or null)          → stale
+//   else                                                     → healthy  (fail-open;
+//                                                              covers null timestamp,
+//                                                              recent saves, and
+//                                                              old saves alike)
 //
-// `failing` takes precedence over `healthy` / `stale` once a recent IPN
-// failure is observed — the operator should investigate before treating the
+// `failing` takes precedence over `healthy` once a recent IPN failure is
+// observed — the operator should investigate before treating the
 // integration as healthy. Phase A's MAPS entry for `failing` is wired here.
 
 export type PaymentHealth =
   | "healthy"
-  | "stale"
   | "failing"
   | "not_configured";
 
@@ -56,10 +57,8 @@ export function derivePaymentHealth(
     }
   }
 
-  if (!row.payment_last_configured_at) return "stale";
-
-  const at = new Date(row.payment_last_configured_at).getTime();
-  if (Number.isNaN(at)) return "stale";
-  const diff = now.getTime() - at;
-  return diff < TWENTY_FOUR_HOURS_MS ? "healthy" : "stale";
+  // Fail-open (#215): a configured provider with no negative signal reads
+  // healthy — including the null-timestamp defensive case and the formerly
+  // ≥24h "stale" case. "Not connected" copy is reserved for `payment_provider IS NULL`.
+  return "healthy";
 }

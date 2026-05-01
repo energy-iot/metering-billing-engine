@@ -44,10 +44,6 @@ function tooltipFor(data: OpenemsBackendChipData): string | null {
       return data.relativeTime
         ? `Last successful discovery: ${data.relativeTime}`
         : "Connection healthy";
-    case "stale":
-      return data.relativeTime
-        ? `Last successful discovery: ${data.relativeTime}. Run 'Test again' to verify.`
-        : "Run 'Test again' to verify the connection.";
     case "failing":
       return data.lastDiscoverError
         ? `Discovery failed: ${data.lastDiscoverError}. Reconfigure or test again.`

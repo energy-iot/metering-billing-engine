@@ -36,7 +36,7 @@ describe("deriveOpenemsBackendHealth()", () => {
     ).toBe("healthy");
   });
 
-  it("returns stale for success >= 24h ago", () => {
+  it("returns healthy for success >= 24h ago (24h cliff removed)", () => {
     expect(
       deriveOpenemsBackendHealth(
         {
@@ -48,7 +48,7 @@ describe("deriveOpenemsBackendHealth()", () => {
         },
         NOW
       )
-    ).toBe("stale");
+    ).toBe("healthy");
   });
 
   it("returns failing for auth_failed/unreachable/zero_edges/unknown_error", () => {
@@ -71,7 +71,7 @@ describe("deriveOpenemsBackendHealth()", () => {
     }
   });
 
-  it("returns stale as a catch-all for configured-but-unknown status", () => {
+  it("returns healthy as a fail-open catch-all for configured-but-unknown status", () => {
     expect(
       deriveOpenemsBackendHealth(
         {
@@ -81,6 +81,6 @@ describe("deriveOpenemsBackendHealth()", () => {
         },
         NOW
       )
-    ).toBe("stale");
+    ).toBe("healthy");
   });
 });

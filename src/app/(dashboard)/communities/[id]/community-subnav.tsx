@@ -46,10 +46,6 @@ function tooltipFor(data: PaymentChipData): string | null {
       return data.relativeTime
         ? `Last successful save: ${data.relativeTime}`
         : "Connection healthy";
-    case "stale":
-      return data.relativeTime
-        ? `Last save: ${data.relativeTime}. Run Save & test again to verify.`
-        : "Run Save & test again to verify.";
     case "failing":
       // Phase B (#157): emitted when the most recent IPN webhook for any
       // microgrid in this community reported `to_status='failed'` within
