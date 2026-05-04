@@ -174,6 +174,21 @@ type PriorItem = {
   reading_source: ReadingSource;
   end_kwh: number | null;
   device_id: string | null;
+  // ── New for #218 (previous-snapshot capture) ─────────────────────────────
+  // Required to build `auditDetails.previous_snapshot` for the
+  // `line_item_regenerated` event. The SELECT at :362 must read these too —
+  // the explicit `as unknown as PriorItem[]` cast at :366 suppresses
+  // PostgREST's inferred shape, so widening this type without widening the
+  // SELECT would compile but resolve `undefined` at runtime.
+  start_kwh: number | null;
+  usage_kwh: number | null;
+  /** JSONB — shape is `TierBreakdown[]` in the live row but we keep it
+   *  `unknown` here to match the audit-snapshot contract (round-trip,
+   *  no validation). */
+  tier_breakdown: unknown;
+  entered_by_user_id: string | null;
+  entered_at: string | null;
+  manual_reason: string | null;
 };
 
 // ── Implementation ──────────────────────────────────────────────────────────
@@ -359,7 +374,11 @@ export async function runGenerationFor(
   const { data: existingItemsRaw } = await supabase
     .from("billing_line_items")
     .select(
-      "household_id, total_amount, payment_status, reading_source, end_kwh, device_id"
+      // The trailing fields (start_kwh, usage_kwh, tier_breakdown,
+      // entered_by_user_id, entered_at, manual_reason) are read for #218's
+      // `previous_snapshot` audit-details capture — the RPC overwrites them
+      // on UPSERT-UPDATE, so we must read them BEFORE calling the RPC.
+      "household_id, total_amount, payment_status, reading_source, end_kwh, device_id, start_kwh, usage_kwh, tier_breakdown, entered_by_user_id, entered_at, manual_reason"
     )
     .eq("billing_period_id", periodId);
   const existingByHousehold = new Map<string, PriorItem>();
@@ -640,6 +659,28 @@ export async function runGenerationFor(
       new_reading_source: readingSource,
       ...(readingSource === "manual" && manualReason
         ? { manual_reason: manualReason }
+        : {}),
+      // #218: capture the reading-side snapshot of the row immediately BEFORE
+      // this regeneration overwrites it. Present only on UPDATE (when prior
+      // exists); absent on fresh INSERT. Numerics use `Number(x)`-or-null
+      // coercion to match the existing previous_total_amount precision
+      // pattern above. Note: `previous_snapshot.manual_reason` is the
+      // PREVIOUS reason, distinct from the top-level `manual_reason` (NEW).
+      ...(prior
+        ? {
+            previous_snapshot: {
+              start_kwh:
+                prior.start_kwh != null ? Number(prior.start_kwh) : null,
+              end_kwh: prior.end_kwh != null ? Number(prior.end_kwh) : null,
+              usage_kwh:
+                prior.usage_kwh != null ? Number(prior.usage_kwh) : null,
+              tier_breakdown: prior.tier_breakdown,
+              device_id: prior.device_id,
+              entered_by_user_id: prior.entered_by_user_id,
+              entered_at: prior.entered_at,
+              manual_reason: prior.manual_reason,
+            },
+          }
         : {}),
     };
 

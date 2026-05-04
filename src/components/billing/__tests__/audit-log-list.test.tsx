@@ -71,6 +71,24 @@ const ENTRIES: BillingAuditLogEntry[] = [
       new_reading_source: "manual",
       manual_reason: "Operator estimate",
       period_was_closed: true,
+      // #218: previous_snapshot is additive JSONB on regenerate events. The
+      // humanizer reads only specific top-level keys via
+      // `entry.details?.["…"]` and never iterates `Object.keys(details)`,
+      // so this field is silently ignored by the existing renderers (as
+      // intended — display is OOS for #218; this fixture guards against
+      // future "improve the humanizer" regressions accidentally surfacing
+      // the snapshot or swapping its `manual_reason` with the top-level
+      // NEW reason).
+      previous_snapshot: {
+        start_kwh: 100,
+        end_kwh: 350,
+        usage_kwh: 250,
+        tier_breakdown: [{ label: "T1", kwh: 250, amount: 12500 }],
+        device_id: null,
+        entered_by_user_id: "11111111-1111-4111-8111-111111111111",
+        entered_at: "2026-04-20T10:00:00Z",
+        manual_reason: "initial estimate",
+      },
     },
   },
   {
@@ -177,6 +195,12 @@ describe("<AuditLogList> — list rendering", () => {
       container.querySelectorAll(".italic.text-muted-foreground")
     ).find((el) => el.textContent?.includes("Operator estimate"));
     expect(reasonEl).toBeDefined();
+    // #218 naming-clash guard: `previous_snapshot.manual_reason` is the
+    // PREVIOUS reason, distinct from the top-level (NEW) `manual_reason`.
+    // The humanizer reads only top-level keys; it must not surface the
+    // snapshot's `manual_reason` as raw display, and a future PR must not
+    // silently swap the two semantically-distinct keys.
+    expect(screen.queryByText("initial estimate")).toBeNull();
   });
 
   it("renders 3-state actor names (System / Restricted / verbatim)", () => {
