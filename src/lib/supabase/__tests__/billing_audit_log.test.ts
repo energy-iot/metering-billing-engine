@@ -62,6 +62,21 @@ const FIXTURE = {
   mgB: "dddddddd-dddd-4000-8002-00000000000b",
   hhB: "dddddddd-dddd-4000-8005-00000000000b",
   periodB: "dddddddd-dddd-4000-8006-00000000000b",
+
+  // #218: isolated fixture for previous_snapshot tests. Distinct from A
+  // because the AC #242 UPDATE-via-CONFLICT test mutates periodA/hhA row
+  // state and downstream assertions would couple to ordering. C is
+  // un-metered (no household_devices row, no edge/device) so
+  // runGenerationFor routes through the manual-override path without
+  // contacting OpenEMS.
+  orgC: "dddddddd-dddd-4000-8000-00000000000c",
+  commC: "dddddddd-dddd-4000-8001-00000000000c",
+  mgC: "dddddddd-dddd-4000-8002-00000000000c",
+  hhC: "dddddddd-dddd-4000-8005-00000000000c",
+  periodC: "dddddddd-dddd-4000-8006-00000000000c",
+  // periodC2 is a SEPARATE period with no prior line item — for the fresh
+  // INSERT (no previous_snapshot) test path.
+  periodC2: "dddddddd-dddd-4000-8006-00000000001c",
 };
 
 // Test users created in beforeAll.
@@ -80,7 +95,7 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
     const svc = await serviceClient();
 
     await cleanupTestData({
-      orgIds: [FIXTURE.orgA, FIXTURE.orgB],
+      orgIds: [FIXTURE.orgA, FIXTURE.orgB, FIXTURE.orgC],
       userEmails: [EMAIL_SUPER, EMAIL_ORGA, EMAIL_ORGB],
     });
 
@@ -164,6 +179,48 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
       status: "draft",
     });
 
+    // ── Fixture C — #218 previous_snapshot isolated fixture ──────────────
+    // Un-metered household: NO household_devices row, NO edge/device.
+    // runGenerationFor routes through the manual-override path so OpenEMS
+    // is never contacted. A rate_schedules row is required (un-metered or
+    // not) — runGenerationFor returns fatal 400 without one.
+    await svc.from("organizations").insert({ id: FIXTURE.orgC, name: "BC1 Org C" });
+    await svc.from("communities").insert({ id: FIXTURE.commC, org_id: FIXTURE.orgC, name: "BC1 Comm C" });
+    await svc.from("microgrids").insert({
+      id: FIXTURE.mgC,
+      community_id: FIXTURE.commC,
+      name: "BC1 MG C",
+      currency: "UGX",
+    });
+    await svc.from("rate_schedules").insert({
+      microgrid_id: FIXTURE.mgC,
+      tiers: [
+        { label: "T1", min_kwh: 0, max_kwh: null, rate_per_kwh: 50 },
+      ],
+      service_charge: 0,
+      tax_rate: 0,
+    });
+    await svc.from("households").insert({
+      id: FIXTURE.hhC,
+      microgrid_id: FIXTURE.mgC,
+      display_name: "BC1 Household C",
+      primary_phone: "+256700000003",
+    });
+    await svc.from("billing_periods").insert({
+      id: FIXTURE.periodC,
+      microgrid_id: FIXTURE.mgC,
+      start_date: "2026-04-01",
+      end_date: "2026-04-30",
+      status: "draft",
+    });
+    await svc.from("billing_periods").insert({
+      id: FIXTURE.periodC2,
+      microgrid_id: FIXTURE.mgC,
+      start_date: "2026-05-01",
+      end_date: "2026-05-31",
+      status: "draft",
+    });
+
     // Test users
     alejandroSuperAdmin = await createTestUser({
       email: EMAIL_SUPER,
@@ -184,7 +241,7 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
   afterAll(async () => {
     if (skip) return;
     await cleanupTestData({
-      orgIds: [FIXTURE.orgA, FIXTURE.orgB],
+      orgIds: [FIXTURE.orgA, FIXTURE.orgB, FIXTURE.orgC],
       userEmails: [EMAIL_SUPER, EMAIL_ORGA, EMAIL_ORGB],
     });
   }, 60_000);
@@ -664,6 +721,242 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
     expect(after?.paid_at).toBe(paidBefore?.paid_at);
     expect(after?.paid_by_user_id).toBe(paidBefore?.paid_by_user_id);
     expect(after?.payment_notes).toBe(paidBefore?.payment_notes);
+  });
+
+  // ── #218: previous_snapshot capture (RPC pass-through, builder, absence) ───
+  //
+  // Three orthogonal axes:
+  //   (a) RPC pass-through — caller-built JSONB lands byte-for-byte in
+  //       billing_audit_log.details (the RPC treats the blob as opaque).
+  //   (b) Builder end-to-end — runGenerationFor (real, no mock) populates
+  //       previous_snapshot from the prior row on UPDATE; naming-clash
+  //       contract (top-level manual_reason = NEW; previous_snapshot.
+  //       manual_reason = PREVIOUS) is preserved.
+  //   (c) Absence — fresh INSERT (no prior) does NOT include
+  //       previous_snapshot.
+
+  it("fn_record_line_item_with_audit: round-trips _audit_details.previous_snapshot byte-for-byte (RPC pass-through, #218)", async () => {
+    const svc = await serviceClient();
+
+    // Build a hand-crafted previous_snapshot JSONB. We use the existing A
+    // fixture's deviceA UUID inside the snapshot just so the value is a
+    // realistic UUID; the snapshot is just data — the RPC doesn't FK-check
+    // device_id inside the JSONB.
+    const seededEnteredAt = "2026-04-15T08:30:00.000Z";
+    const seededSnapshot = {
+      start_kwh: 100,
+      end_kwh: 350,
+      usage_kwh: 250,
+      tier_breakdown: [{ label: "T1", kwh: 250, amount: 12500 }],
+      device_id: FIXTURE.deviceA,
+      entered_by_user_id: alejandroSuperAdmin.userId,
+      entered_at: seededEnteredAt,
+      manual_reason: "initial estimate",
+    };
+
+    const { error } = await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 300,
+      _start_kwh: 100,
+      _end_kwh: 400,
+      _tier_breakdown: [{ label: "T1", kwh: 300, amount: 15000 }],
+      _total_amount: 15000,
+      _reading_source: "manual",
+      _entered_by_user_id: alejandroSuperAdmin.userId,
+      _manual_reason: "corrected",
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: {
+        household_name: "BC1 Household A",
+        previous_total_amount: 12500,
+        new_total_amount: 15000,
+        previous_reading_source: "manual",
+        new_reading_source: "manual",
+        manual_reason: "corrected",
+        previous_snapshot: seededSnapshot,
+      },
+    });
+    expect(error).toBeNull();
+
+    const { data: lastAudit } = await svc
+      .from("billing_audit_log")
+      .select("details")
+      .eq("billing_period_id", FIXTURE.periodA)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const details = lastAudit?.[0]?.details as Record<string, unknown>;
+    const snap = details?.previous_snapshot as Record<string, unknown>;
+
+    expect(snap).toBeTruthy();
+    expect(snap.start_kwh).toBe(100);
+    expect(snap.end_kwh).toBe(350);
+    expect(snap.usage_kwh).toBe(250);
+    expect(snap.device_id).toBe(FIXTURE.deviceA);
+    expect(snap.entered_by_user_id).toBe(alejandroSuperAdmin.userId);
+    expect(snap.manual_reason).toBe("initial estimate");
+    expect(snap.tier_breakdown).toEqual([
+      { label: "T1", kwh: 250, amount: 12500 },
+    ]);
+    // TIMESTAMPTZ → JSON; Postgres may add microsecond precision absent in
+    // JS Date.toISOString(). Compare via Date round-trip equality.
+    expect(new Date(snap.entered_at as string).toISOString()).toBe(
+      new Date(seededEnteredAt).toISOString()
+    );
+
+    // Top-level keys (humanizer reads these, not the snapshot's keys) are
+    // preserved alongside the additive previous_snapshot field.
+    expect(details.new_total_amount).toBe(15000);
+    expect(details.previous_total_amount).toBe(12500);
+    expect(details.manual_reason).toBe("corrected");
+
+    // Naming-clash contract: top-level manual_reason is the NEW reason;
+    // previous_snapshot.manual_reason is the PREVIOUS reason. Distinct keys.
+    expect(details.manual_reason).not.toBe(snap.manual_reason);
+
+    // Payment keys are NOT present in the snapshot — the test caller didn't
+    // put them in, and the RPC doesn't add them.
+    expect(snap).not.toHaveProperty("payment_status");
+    expect(snap).not.toHaveProperty("paid_at");
+    expect(snap).not.toHaveProperty("paid_by_user_id");
+    expect(snap).not.toHaveProperty("pesapal_order_id");
+  });
+
+  it("runGenerationFor: builds previous_snapshot from the prior row on UPDATE (#218 builder e2e)", async () => {
+    const svc = await serviceClient();
+
+    // Pre-pin a prior line item for (periodC, hhC) via service-role UPSERT.
+    // Setting reading_source='manual' with non-null entered_at /
+    // manual_reason avoids a degenerate test (an 'edge' row would have
+    // those fields NULL per the RPC, masking the snapshot capture).
+    const priorEnteredAt = new Date("2026-04-10T08:00:00.000Z").toISOString();
+    const { data: priorRow, error: priorErr } = await svc
+      .from("billing_line_items")
+      .insert({
+        billing_period_id: FIXTURE.periodC,
+        household_id: FIXTURE.hhC,
+        device_id: null,
+        usage_kwh: 250,
+        start_kwh: 100,
+        end_kwh: 350,
+        tier_breakdown: [{ label: "T1", kwh: 250, amount: 12500 }],
+        total_amount: 12500,
+        reading_source: "manual",
+        entered_by_user_id: alejandroSuperAdmin.userId,
+        entered_at: priorEnteredAt,
+        manual_reason: "initial estimate",
+      })
+      .select("id")
+      .single<{ id: string }>();
+    expect(priorErr).toBeNull();
+    const priorLineItemId = priorRow!.id;
+
+    // Now call runGenerationFor (the real function) as the super_admin so
+    // the RPC's SECURITY INVOKER + RLS-INSERT-WITH-CHECK fires under a
+    // proper auth.uid() — service-role would bypass RLS and mask any
+    // regression.
+    const { runGenerationFor } = await import("@/lib/billing/generate");
+    const out = await runGenerationFor({
+      supabase: alejandroSuperAdmin.client,
+      periodId: FIXTURE.periodC,
+      householdIds: [FIXTURE.hhC],
+      manualReadings: [
+        {
+          householdId: FIXTURE.hhC,
+          startKwh: 100,
+          endKwh: 400,
+          reason: "corrected",
+        },
+      ],
+      mode: "write",
+      actorUserId: alejandroSuperAdmin.userId,
+    });
+    if ("kind" in out && out.kind === "fatal") {
+      throw new Error(
+        `runGenerationFor returned fatal ${out.status}: ${out.body.error}`
+      );
+    }
+    const results = (out as { results: { kind: string; householdId: string }[] }).results;
+    const written = results.find((r) => r.householdId === FIXTURE.hhC);
+    expect(written?.kind).toBe("written");
+
+    // Read back the latest audit row for this line item.
+    const { data: lastAudit } = await svc
+      .from("billing_audit_log")
+      .select("event_type, details")
+      .eq("billing_line_item_id", priorLineItemId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    expect(lastAudit?.length).toBe(1);
+    expect(lastAudit?.[0]?.event_type).toBe("line_item_regenerated");
+    const details = lastAudit?.[0]?.details as Record<string, unknown>;
+    const snap = details?.previous_snapshot as Record<string, unknown>;
+
+    // Snapshot reflects the seeded prior row (pre-overwrite state).
+    expect(snap).toBeTruthy();
+    // Numeric coercion: builder uses Number(x)-or-null.
+    expect(snap.start_kwh).toBe(100);
+    expect(snap.end_kwh).toBe(350);
+    expect(snap.usage_kwh).toBe(250);
+    expect(snap.tier_breakdown).toEqual([
+      { label: "T1", kwh: 250, amount: 12500 },
+    ]);
+    expect(snap.device_id).toBeNull();
+    expect(snap.entered_by_user_id).toBe(alejandroSuperAdmin.userId);
+    expect(new Date(snap.entered_at as string).toISOString()).toBe(
+      new Date(priorEnteredAt).toISOString()
+    );
+
+    // Top-level previous_total_amount also reflects the prior row.
+    expect(details.previous_total_amount).toBe(12500);
+    // new_total_amount reflects the recomputed total: usage_kwh = 300 at
+    // 50 UGX/kWh = 15000.
+    expect(details.new_total_amount).toBe(15000);
+
+    // Naming-clash contract: top-level manual_reason is the NEW reason
+    // ('corrected'), snapshot's manual_reason is the PREVIOUS reason
+    // ('initial estimate'). Both must coexist; the test fails if a future
+    // implementer accidentally swaps or merges them.
+    expect(details.manual_reason).toBe("corrected");
+    expect(snap.manual_reason).toBe("initial estimate");
+  });
+
+  it("runGenerationFor: fresh INSERT (no prior) emits NO previous_snapshot key (#218 absence)", async () => {
+    const svc = await serviceClient();
+
+    const { runGenerationFor } = await import("@/lib/billing/generate");
+    const out = await runGenerationFor({
+      supabase: alejandroSuperAdmin.client,
+      periodId: FIXTURE.periodC2,
+      householdIds: [FIXTURE.hhC],
+      manualReadings: [
+        {
+          householdId: FIXTURE.hhC,
+          startKwh: 0,
+          endKwh: 100,
+          reason: "first reading",
+        },
+      ],
+      mode: "write",
+      actorUserId: alejandroSuperAdmin.userId,
+    });
+    if ("kind" in out && out.kind === "fatal") {
+      throw new Error(
+        `runGenerationFor returned fatal ${out.status}: ${out.body.error}`
+      );
+    }
+
+    const { data: lastAudit } = await svc
+      .from("billing_audit_log")
+      .select("event_type, details")
+      .eq("billing_period_id", FIXTURE.periodC2)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    expect(lastAudit?.length).toBe(1);
+    expect(lastAudit?.[0]?.event_type).toBe("line_item_generated");
+    const details = lastAudit?.[0]?.details as Record<string, unknown>;
+    // Strict absence: the key is not present (vs present-but-null/empty).
+    expect(details).not.toHaveProperty("previous_snapshot");
   });
 
   // ── Atomicity ─────────────────────────────────────────────────────────────

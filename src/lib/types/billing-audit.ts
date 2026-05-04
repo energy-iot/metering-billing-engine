@@ -60,11 +60,53 @@ export type LineItemRegeneratedDetails = {
   previous_reading_source: "edge" | "manual" | null;
   /** reading_source on the post-write line item. */
   new_reading_source: "edge" | "manual";
-  /** present only when new_reading_source === 'manual' AND a non-empty reason was supplied. */
+  /** present only when new_reading_source === 'manual' AND a non-empty reason was supplied.
+   *  This is the NEW manual reason; the PREVIOUS reason lives in
+   *  previous_snapshot.manual_reason (see below). */
   manual_reason?: string;
   /** added by fn_record_line_item_with_audit (NOT by the route handler) when
    *  the period.status was 'closed' at write time. Absent otherwise. */
   period_was_closed?: true;
+  /** Snapshot of the reading-side fields on the row immediately BEFORE this
+   *  regeneration overwrote them. Present only on UPDATE (when prior exists);
+   *  absent on fresh INSERT. Optional for backward-compat with audit rows
+   *  written before this field was introduced (#218).
+   *
+   *  Provenance: added by the CALLER (runGenerationFor) before the RPC
+   *  call, NOT by the RPC. Contrast `period_was_closed` above, which is
+   *  added by the RPC (00029:291 jsonb merge). Both keys land in the
+   *  same JSONB blob. */
+  previous_snapshot?: PreviousReadingSnapshot;
+};
+
+/** Pre-overwrite snapshot of the reading-side columns on a billing_line_items
+ *  row. Captured by runGenerationFor and persisted into
+ *  billing_audit_log.details.previous_snapshot for line_item_regenerated
+ *  events. Numerics are coerced to JS Number to match the existing
+ *  previous_total_amount pattern (see #218 Dev Notes for precision tradeoff). */
+export type PreviousReadingSnapshot = {
+  /** previous billing_line_items.start_kwh (NUMERIC → JS Number) */
+  start_kwh: number | null;
+  /** previous billing_line_items.end_kwh (NUMERIC → JS Number) */
+  end_kwh: number | null;
+  /** previous billing_line_items.usage_kwh (NUMERIC → JS Number) */
+  usage_kwh: number | null;
+  /** previous billing_line_items.tier_breakdown (JSONB; opaque, persisted as-is).
+   *  Type intentionally `unknown` — the audit contract is "round-trip the
+   *  JSONB blob unchanged", we don't validate the per-tier shape here.
+   *  If a future consumer needs typed access, cast at the consumer
+   *  (`as TierBreakdown[]`); do NOT widen this type. */
+  tier_breakdown: unknown;
+  /** previous billing_line_items.device_id (UUID or NULL when un-metered) */
+  device_id: string | null;
+  /** previous billing_line_items.entered_by_user_id — who entered the previous
+   *  reading. UUID; not PII per the entity model. */
+  entered_by_user_id: string | null;
+  /** previous billing_line_items.entered_at (ISO TIMESTAMPTZ string or NULL). */
+  entered_at: string | null;
+  /** previous billing_line_items.manual_reason — the PREVIOUS reason string.
+   *  Distinct from the top-level manual_reason which is the NEW reason. */
+  manual_reason: string | null;
 };
 
 // ── Read-endpoint entry shape ───────────────────────────────────────────────
