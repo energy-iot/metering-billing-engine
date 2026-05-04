@@ -49,6 +49,13 @@ const FIXTURE = {
   hhA: "dddddddd-dddd-4000-8005-00000000000a",
   periodA: "dddddddd-dddd-4000-8006-00000000000a",
 
+  // Extra households on mgA, isolated from hhA so the link-invalidation
+  // tests (#217 / 00037) can run against fresh rows without contaminating
+  // the existing hhA-based assertions.
+  hhA_inv1: "dddddddd-dddd-4000-8005-00000000001a",
+  hhA_inv2: "dddddddd-dddd-4000-8005-00000000002a",
+  hhA_inv3: "dddddddd-dddd-4000-8005-00000000003a",
+
   // Org/community/microgrid for tenant B (cross-org isolation tests).
   orgB: "dddddddd-dddd-4000-8000-00000000000b",
   commB: "dddddddd-dddd-4000-8001-00000000000b",
@@ -105,6 +112,27 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
       display_name: "BC1 Household A",
       primary_phone: "+256700000001",
     });
+    // Three extra households for the #217 link-invalidation cases (A/B/C).
+    await svc.from("households").insert([
+      {
+        id: FIXTURE.hhA_inv1,
+        microgrid_id: FIXTURE.mgA,
+        display_name: "BC1 Household A-inv1",
+        primary_phone: "+256700001001",
+      },
+      {
+        id: FIXTURE.hhA_inv2,
+        microgrid_id: FIXTURE.mgA,
+        display_name: "BC1 Household A-inv2",
+        primary_phone: "+256700001002",
+      },
+      {
+        id: FIXTURE.hhA_inv3,
+        microgrid_id: FIXTURE.mgA,
+        display_name: "BC1 Household A-inv3",
+        primary_phone: "+256700001003",
+      },
+    ]);
     await svc.from("billing_periods").insert({
       id: FIXTURE.periodA,
       microgrid_id: FIXTURE.mgA,
@@ -386,6 +414,256 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
       .from("billing_periods")
       .update({ status: "draft", closed_at: null })
       .eq("id", FIXTURE.periodA);
+  });
+
+  // ── #217 / 00037 — payment-link auto-invalidation on amount change ────────
+  //
+  // Each case uses a distinct household so the post-state on one case does
+  // not contaminate the next. The seed for each case is INSERT-via-RPC for
+  // the `total_amount` baseline, then a direct UPDATE on the row to plant
+  // the cached payment fields (payment_status / paid_at / paid_by_user_id /
+  // pesapal_redirect_url / pesapal_order_id / payment_failed_at). The
+  // direct UPDATE bypasses the state machine deliberately — the fixture is
+  // simulating a row that has accumulated payment cache via past flows; the
+  // test focuses on what happens when `fn_record_line_item_with_audit` runs
+  // a re-key.
+
+  it("00037 / #217 (Case A): UPSERT-UPDATE NULLs pesapal_redirect_url + pesapal_order_id + payment_failed_at when amount changes (unpaid row)", async () => {
+    const svc = await serviceClient();
+
+    // Seed: insert via RPC at total_amount=1000 then plant the payment cache.
+    await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv1,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 10,
+      _start_kwh: 0,
+      _end_kwh: 10,
+      _tier_breakdown: [{ label: "T1", kwh: 10, amount: 1000 }],
+      _total_amount: 1000,
+      _reading_source: "edge",
+      _entered_by_user_id: null,
+      _manual_reason: null,
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv1" },
+    });
+    const failedAt = new Date().toISOString();
+    await svc
+      .from("billing_line_items")
+      .update({
+        pesapal_redirect_url: "https://pesapal.test/A",
+        pesapal_order_id: "ord-A",
+        payment_failed_at: failedAt,
+        // payment_status remains 'unpaid' (default)
+      })
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv1);
+
+    // Re-key with a different total_amount.
+    const { error } = await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv1,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 15,
+      _start_kwh: 0,
+      _end_kwh: 15,
+      _tier_breakdown: [{ label: "T1", kwh: 15, amount: 1500 }],
+      _total_amount: 1500,
+      _reading_source: "manual",
+      _entered_by_user_id: alejandroSuperAdmin.userId,
+      _manual_reason: "operator correction",
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv1" },
+    });
+    expect(error).toBeNull();
+
+    const { data: after } = await svc
+      .from("billing_line_items")
+      .select(
+        "total_amount, pesapal_redirect_url, pesapal_order_id, payment_failed_at, payment_status",
+      )
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv1)
+      .single<{
+        total_amount: number;
+        pesapal_redirect_url: string | null;
+        pesapal_order_id: string | null;
+        payment_failed_at: string | null;
+        payment_status: string;
+      }>();
+
+    expect(Number(after?.total_amount)).toBe(1500);
+    expect(after?.pesapal_redirect_url).toBeNull();
+    expect(after?.pesapal_order_id).toBeNull();
+    expect(after?.payment_failed_at).toBeNull();
+    expect(after?.payment_status).toBe("unpaid");
+  });
+
+  it("00037 / #217 (Case B): UPSERT-UPDATE preserves pesapal_redirect_url + pesapal_order_id + payment_failed_at when amount is unchanged", async () => {
+    const svc = await serviceClient();
+
+    await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv2,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 20,
+      _start_kwh: 0,
+      _end_kwh: 20,
+      _tier_breakdown: [{ label: "T1", kwh: 20, amount: 2000 }],
+      _total_amount: 2000,
+      _reading_source: "edge",
+      _entered_by_user_id: null,
+      _manual_reason: null,
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv2" },
+    });
+    const failedAt = new Date().toISOString();
+    await svc
+      .from("billing_line_items")
+      .update({
+        pesapal_redirect_url: "https://pesapal.test/B",
+        pesapal_order_id: "ord-B",
+        payment_failed_at: failedAt,
+      })
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv2);
+
+    // Re-run with the SAME total_amount — auto-invalidation must NOT fire.
+    const { error } = await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv2,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 20,
+      _start_kwh: 0,
+      _end_kwh: 20,
+      _tier_breakdown: [{ label: "T1", kwh: 20, amount: 2000 }],
+      _total_amount: 2000,
+      _reading_source: "edge",
+      _entered_by_user_id: null,
+      _manual_reason: null,
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv2" },
+    });
+    expect(error).toBeNull();
+
+    const { data: after } = await svc
+      .from("billing_line_items")
+      .select(
+        "total_amount, pesapal_redirect_url, pesapal_order_id, payment_failed_at",
+      )
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv2)
+      .single<{
+        total_amount: number;
+        pesapal_redirect_url: string | null;
+        pesapal_order_id: string | null;
+        payment_failed_at: string | null;
+      }>();
+    expect(Number(after?.total_amount)).toBe(2000);
+    expect(after?.pesapal_redirect_url).toBe("https://pesapal.test/B");
+    expect(after?.pesapal_order_id).toBe("ord-B");
+    expect(after?.payment_failed_at).toBeTruthy();
+  });
+
+  it("00037 / #217 (Case C): UPSERT-UPDATE NULLs pesapal_redirect_url + pesapal_order_id on amount change but PRESERVES payment_status='paid' + paid_at + paid_by_user_id", async () => {
+    const svc = await serviceClient();
+
+    // Seed: insert via RPC at total_amount=3000 then mark paid via the
+    // canonical state-machine RPC (so the audit-fields CHECK constraint is
+    // satisfied), then plant pesapal_redirect_url separately.
+    await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv3,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 30,
+      _start_kwh: 0,
+      _end_kwh: 30,
+      _tier_breakdown: [{ label: "T1", kwh: 30, amount: 3000 }],
+      _total_amount: 3000,
+      _reading_source: "edge",
+      _entered_by_user_id: null,
+      _manual_reason: null,
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv3" },
+    });
+    const { data: row } = await svc
+      .from("billing_line_items")
+      .select("id")
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv3)
+      .single<{ id: string }>();
+    const liId = row!.id;
+
+    await svc.rpc("fn_apply_payment_event", {
+      _line_item_id: liId,
+      _to_status: "paid",
+      _source: "manual",
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _raw_payload: { payment_notes: "cash collected pre-rekey" },
+    });
+    await svc
+      .from("billing_line_items")
+      .update({
+        pesapal_redirect_url: "https://pesapal.test/C",
+        pesapal_order_id: "ord-C",
+      })
+      .eq("id", liId);
+
+    const { data: paidBefore } = await svc
+      .from("billing_line_items")
+      .select("payment_status, paid_at, paid_by_user_id, payment_notes")
+      .eq("id", liId)
+      .single<{
+        payment_status: string;
+        paid_at: string | null;
+        paid_by_user_id: string | null;
+        payment_notes: string | null;
+      }>();
+    expect(paidBefore?.payment_status).toBe("paid");
+    expect(paidBefore?.paid_at).toBeTruthy();
+
+    // Re-key with a different total_amount.
+    const { error } = await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv3,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 35,
+      _start_kwh: 0,
+      _end_kwh: 35,
+      _tier_breakdown: [{ label: "T1", kwh: 35, amount: 3500 }],
+      _total_amount: 3500,
+      _reading_source: "manual",
+      _entered_by_user_id: alejandroSuperAdmin.userId,
+      _manual_reason: "dispute reread",
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv3" },
+    });
+    expect(error).toBeNull();
+
+    const { data: after } = await svc
+      .from("billing_line_items")
+      .select(
+        "total_amount, pesapal_redirect_url, pesapal_order_id, payment_status, paid_at, paid_by_user_id, payment_notes",
+      )
+      .eq("id", liId)
+      .single<{
+        total_amount: number;
+        pesapal_redirect_url: string | null;
+        pesapal_order_id: string | null;
+        payment_status: string;
+        paid_at: string | null;
+        paid_by_user_id: string | null;
+        payment_notes: string | null;
+      }>();
+    expect(Number(after?.total_amount)).toBe(3500);
+    // Pesapal cache invalidated (operator must reconcile manually).
+    expect(after?.pesapal_redirect_url).toBeNull();
+    expect(after?.pesapal_order_id).toBeNull();
+    // Past payment record permanent — survives the re-key.
+    expect(after?.payment_status).toBe("paid");
+    expect(after?.paid_at).toBe(paidBefore?.paid_at);
+    expect(after?.paid_by_user_id).toBe(paidBefore?.paid_by_user_id);
+    expect(after?.payment_notes).toBe(paidBefore?.payment_notes);
   });
 
   // ── Atomicity ─────────────────────────────────────────────────────────────
