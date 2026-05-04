@@ -3,7 +3,14 @@
  *
  * Generates the hosted-checkout URL for exactly one billing_line_items row.
  * Enforces "one bill, one payment link". All order fields are derived from
- * Supabase records the caller can see via RLS — the request body is ignored.
+ * Supabase records the caller can see via RLS.
+ *
+ * Request body (optional, JSON):
+ *   { force?: boolean }   — when true, bypass the redirect-URL cache and mint
+ *                            a fresh Pesapal session. Used by the operator's
+ *                            "Regenerate payment link" UI (#217). Default
+ *                            false; missing/empty/`{}` body is backward-
+ *                            compatible with the pre-#217 surface.
  *
  * Path chain:
  *   lineItem → billing_period → microgrid → community (provider config)
@@ -61,7 +68,7 @@ type LineItemScopeRow = {
 };
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ lineItemId: string }> },
 ): Promise<NextResponse> {
   const startedAt = Date.now();
@@ -73,6 +80,13 @@ export async function POST(
       { status: 400 },
     );
   }
+
+  // Parse optional `{ force?: boolean }` body. Backwards-compatible: empty
+  // body / no body / `{}` / `{ force: false }` all default to `force: false`.
+  const body = (await request.json().catch(() => ({}))) as {
+    force?: unknown;
+  };
+  const force = body?.force === true;
 
   const supabase = await createClient();
 
@@ -162,6 +176,7 @@ export async function POST(
   try {
     result = await ensurePaymentLinkForLineItem(supabase, lineItemId, {
       actorUserId,
+      force,
     });
   } catch (err) {
     const mapped = mapPaymentError(err);

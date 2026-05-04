@@ -155,8 +155,12 @@ function makeMockClient(opts: {
           },
         }),
       }),
-      update: (patch: { pesapal_redirect_url: string }) => ({
+      update: (patch: {
+        pesapal_redirect_url: string;
+        pesapal_order_id?: string;
+      }) => ({
         eq: (_col: string, _val: string) => ({
+          // force=false path: UPDATE-NULL guard via .is(...).
           is: (_col2: string, _val2: null) => ({
             select: (_cols: string) => {
               return Promise.resolve(
@@ -178,6 +182,19 @@ function makeMockClient(opts: {
               );
             },
           }),
+          // force=true path: unconditional UPDATE — no .is() guard.
+          select: (_cols: string) => {
+            state.persistedUrl = patch.pesapal_redirect_url;
+            return Promise.resolve({
+              data: [
+                {
+                  id: LINE_ITEM_ID,
+                  pesapal_redirect_url: patch.pesapal_redirect_url,
+                },
+              ],
+              error: null,
+            });
+          },
         }),
       }),
     };
@@ -392,6 +409,112 @@ describe("ensurePaymentLinkForLineItem", () => {
     expect(r.redirectUrl).toBe(GOOD_RESULT.redirectUrl);
     expect(state.persistedUrl).toBe(GOOD_RESULT.redirectUrl);
     // Audit call attempted exactly once and warned.
+    expect(state.auditCalls.length).toBe(1);
+    const matched = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("audit_write_failed"));
+    expect(matched).toBeTruthy();
+    warnSpy.mockRestore();
+  });
+
+  // ── #217 — force=true bypasses cache and mints fresh ─────────────────────
+  it("force=true bypasses cache and mints fresh even when pesapal_redirect_url is non-null", async () => {
+    const cached = "https://pay.pesapal.com/checkout?token=CACHED_A";
+    const { client, state } = makeMockClient({
+      initialRow: { pesapal_redirect_url: cached, payment_status: "link_generated" },
+    });
+    const { ensurePaymentLinkForLineItem } = await import(
+      "../ensure-payment-link"
+    );
+
+    const r = await ensurePaymentLinkForLineItem(
+      client as never,
+      LINE_ITEM_ID,
+      { force: true, actorUserId: "actor-1" },
+    );
+
+    // Fresh mint, cache overwritten.
+    expect(r.wasMinted).toBe(true);
+    expect(r.redirectUrl).toBe(GOOD_RESULT.redirectUrl);
+    expect(r.redirectUrl).not.toBe(cached);
+    expect(state.persistedUrl).toBe(GOOD_RESULT.redirectUrl);
+    // submitOrder fired.
+    expect(generatePaymentLinkMock).toHaveBeenCalledTimes(1);
+    // Exactly one audit write with link_generated + generate_link.
+    expect(state.auditCalls.length).toBe(1);
+    const [fn, args] = state.auditCalls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(fn).toBe("fn_apply_payment_event");
+    expect(args._to_status).toBe("link_generated");
+    expect(args._source).toBe("generate_link");
+  });
+
+  // ── #217 regression — default (force=false) still cache-hits ─────────────
+  it("force=false (default) returns cache-hit when redirect_url is non-null", async () => {
+    const cached = "https://pay.pesapal.com/checkout?token=DEFAULT_CACHED";
+    const { client, state } = makeMockClient({
+      initialRow: { pesapal_redirect_url: cached, payment_status: "link_generated" },
+    });
+    const { ensurePaymentLinkForLineItem } = await import(
+      "../ensure-payment-link"
+    );
+
+    // Explicit force=false.
+    const rExplicit = await ensurePaymentLinkForLineItem(
+      client as never,
+      LINE_ITEM_ID,
+      { force: false },
+    );
+    expect(rExplicit.wasMinted).toBe(false);
+    expect(rExplicit.redirectUrl).toBe(cached);
+
+    // Reset coalescer between calls inside the same test so the second call
+    // doesn't piggyback onto the first promise.
+    const mod = await import("../ensure-payment-link");
+    mod._resetEnsurePaymentLinkCoalescerForTests();
+
+    // Default — no opts at all.
+    const rDefault = await ensurePaymentLinkForLineItem(
+      client as never,
+      LINE_ITEM_ID,
+    );
+    expect(rDefault.wasMinted).toBe(false);
+    expect(rDefault.redirectUrl).toBe(cached);
+
+    // Neither call hit submitOrder; zero audit writes for both.
+    expect(generatePaymentLinkMock).not.toHaveBeenCalled();
+    expect(state.auditCalls).toEqual([]);
+  });
+
+  // ── #217 — force=true on a paid row still warns + returns ────────────────
+  it("force=true on a paid row whose redirect_url was just NULL'd warns on audit-write but returns wasMinted: true", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { client, state } = makeMockClient({
+      // Aaron's exact post-migration state: paid row whose pesapal_redirect_url
+      // was just NULL'd by 00037's auto-invalidation on amount change. Operator
+      // would not see "Regenerate payment link" in the menu (it surfaces only
+      // on link_generated rows), but the helper contract still tolerates it.
+      initialRow: { pesapal_redirect_url: null, payment_status: "paid" },
+      rpcError: {
+        code: "P0001",
+        message: "invalid_transition: paid → link_generated",
+      },
+    });
+    const { ensurePaymentLinkForLineItem } = await import(
+      "../ensure-payment-link"
+    );
+
+    const r = await ensurePaymentLinkForLineItem(
+      client as never,
+      LINE_ITEM_ID,
+      { force: true, actorUserId: "actor-1" },
+    );
+
+    expect(r.wasMinted).toBe(true);
+    expect(r.redirectUrl).toBe(GOOD_RESULT.redirectUrl);
+    expect(state.persistedUrl).toBe(GOOD_RESULT.redirectUrl);
     expect(state.auditCalls.length).toBe(1);
     const matched = warnSpy.mock.calls
       .map((c) => String(c[0]))

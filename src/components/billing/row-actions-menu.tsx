@@ -135,7 +135,13 @@ export function computeMenuItems(input: {
   handlers: {
     onRequestRegenerate: (mode: "edge" | "manual") => void;
     onRequestSwitchToManual: () => void;
-    onGenerateLink: () => void;
+    /**
+     * Generate / regenerate payment link. Pass `{ force: true }` to bypass
+     * the redirect-URL cache (operator's explicit "Regenerate payment link"
+     * — #217). Default / no-arg keeps the cache-hit fast path for "Generate"
+     * on an unpaid row.
+     */
+    onGenerateLink: (opts?: { force?: boolean }) => void;
     onCopyLink: () => void;
     onMarkAsPaid: () => void;
     onMarkAsRefunded: () => void;
@@ -231,14 +237,18 @@ export function computeMenuItems(input: {
         kind: "action",
         key: "generate-link",
         label: "Generate payment link",
-        onSelect: handlers.onGenerateLink,
+        // First-mint path — cache is empty by definition; no force needed.
+        onSelect: () => handlers.onGenerateLink(),
       });
     } else if (lineItem.payment_status === "link_generated") {
       paymentLinkItems.push({
         kind: "action",
         key: "regenerate-link",
         label: "Regenerate payment link",
-        onSelect: handlers.onGenerateLink,
+        // Operator-explicit Regenerate (#217) — bypass the cache so the
+        // returned URL reflects the current total_amount, not the previous
+        // session's amount.
+        onSelect: () => handlers.onGenerateLink({ force: true }),
       });
     }
     // "Copy payment link" only when a URL is currently in component state
@@ -497,39 +507,50 @@ export function RowActionsMenu(props: RowActionsMenuProps) {
   );
 
   // ── Payment-link generation ───────────────────────────────────────────────
-  const generatePaymentLink = React.useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/billing-line-items/${lineItem.id}/url`,
-        { method: "POST" },
-      );
-      if (!res.ok) {
+  // `opts.force=true` flips the route into "bypass cache + mint fresh"
+  // (operator's explicit Regenerate — #217). Default / no-arg keeps the
+  // cache-hit fast path for first-mint on unpaid rows.
+  const generatePaymentLink = React.useCallback(
+    async (opts?: { force?: boolean }) => {
+      const force = opts?.force === true;
+      try {
+        const res = await fetch(
+          `/api/billing-line-items/${lineItem.id}/url`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force }),
+          },
+        );
+        if (!res.ok) {
+          pushPaymentLinkError();
+          return;
+        }
+        const data = (await res.json()) as {
+          redirectUrl: string;
+          orderTrackingId: string;
+          merchantReference: string;
+        };
+        setPendingUrl(data.redirectUrl);
+      } catch {
         pushPaymentLinkError();
-        return;
       }
-      const data = (await res.json()) as {
-        redirectUrl: string;
-        orderTrackingId: string;
-        merchantReference: string;
-      };
-      setPendingUrl(data.redirectUrl);
-    } catch {
-      pushPaymentLinkError();
-    }
-    function pushPaymentLinkError() {
-      onRowBanner({
-        id: `${lineItem.id}-link-err-${Date.now()}`,
-        lineItemId: lineItem.id,
-        tone: "destructive",
-        message: "Failed to generate payment link.",
-        action: {
-          label: "Retry",
-          onClick: () => void generatePaymentLink(),
-        },
-        durationMs: ERROR_RETRY_BANNER_DURATION_MS,
-      });
-    }
-  }, [lineItem.id, onRowBanner]);
+      function pushPaymentLinkError() {
+        onRowBanner({
+          id: `${lineItem.id}-link-err-${Date.now()}`,
+          lineItemId: lineItem.id,
+          tone: "destructive",
+          message: "Failed to generate payment link.",
+          action: {
+            label: "Retry",
+            onClick: () => void generatePaymentLink(opts),
+          },
+          durationMs: ERROR_RETRY_BANNER_DURATION_MS,
+        });
+      }
+    },
+    [lineItem.id, onRowBanner],
+  );
 
   const copyPaymentLink = React.useCallback(() => {
     if (!pendingUrl) return;
@@ -639,7 +660,7 @@ export function RowActionsMenu(props: RowActionsMenuProps) {
         handlers: {
           onRequestRegenerate: handleRegenerate,
           onRequestSwitchToManual: handleSwitchToManual,
-          onGenerateLink: () => void generatePaymentLink(),
+          onGenerateLink: (opts) => void generatePaymentLink(opts),
           onCopyLink: copyPaymentLink,
           onMarkAsPaid: () => setMarkPaidOpen(true),
           onMarkAsRefunded: () => setMarkRefundedOpen(true),

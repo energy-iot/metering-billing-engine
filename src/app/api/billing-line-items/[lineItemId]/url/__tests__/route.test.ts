@@ -61,10 +61,20 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 
-function makeReq(): NextRequest {
+function makeReq(body?: unknown): NextRequest {
+  if (body === undefined) {
+    return new NextRequest(
+      `http://localhost/api/billing-line-items/${LINE_ITEM_ID}/url`,
+      { method: "POST" },
+    );
+  }
   return new NextRequest(
     `http://localhost/api/billing-line-items/${LINE_ITEM_ID}/url`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
   );
 }
 
@@ -305,5 +315,51 @@ describe("POST /api/billing-line-items/[lineItemId]/url", () => {
     expect(body.reason).toBe("ipn_not_registered");
     expect(String(body.error)).toMatch(/IPN/i);
     expect(String(body.error)).toMatch(/Save & test/i);
+  });
+
+  // ─── (10) #217 — { force: true } body threads to helper ──────────────────
+  it("(10) { force: true } body threads through to ensurePaymentLinkForLineItem", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(makeReq({ force: true }), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
+    const [_client, lineId, opts] = ensurePaymentLinkMock.mock.calls[0];
+    expect(lineId).toBe(LINE_ITEM_ID);
+    expect(opts.force).toBe(true);
+    expect(opts.actorUserId).toBe("actor-user-1");
+  });
+
+  // ─── (11) #217 — backward-compat: no body / {} / { force: false } ────────
+  it("(11) no body defaults force=false (backwards-compat with pre-#217 callers)", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
+    const [, , opts] = ensurePaymentLinkMock.mock.calls[0];
+    expect(opts.force).toBe(false);
+  });
+
+  it("(11b) empty JSON body {} defaults force=false", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(makeReq({}), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    const [, , opts] = ensurePaymentLinkMock.mock.calls[0];
+    expect(opts.force).toBe(false);
+  });
+
+  it("(11c) explicit { force: false } sets force=false", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(makeReq({ force: false }), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    const [, , opts] = ensurePaymentLinkMock.mock.calls[0];
+    expect(opts.force).toBe(false);
   });
 });

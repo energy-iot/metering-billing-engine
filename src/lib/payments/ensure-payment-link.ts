@@ -95,6 +95,25 @@ export interface EnsurePaymentLinkOptions {
   actorUserId?: string | null;
   /** Override the callback URL; defaults to NEXT_PUBLIC_PAYMENT_CALLBACK_URL. */
   callbackUrl?: string;
+  /**
+   * Operator-explicit "Regenerate" (#217). When true:
+   *   - Skip the cache-check (any existing pesapal_redirect_url is overwritten).
+   *   - Skip the in-memory coalescer in BOTH directions (the operator does
+   *     not piggyback onto a tenant /pay's mint, and concurrent tenant /pay
+   *     callers do not coalesce onto the operator's force result).
+   *   - Mint a fresh Pesapal session.
+   *   - UPDATE both `pesapal_redirect_url` AND `pesapal_order_id` in a single
+   *     statement UNCONDITIONALLY (no WHERE pesapal_redirect_url IS NULL
+   *     guard) so the row is internally consistent at every observable instant.
+   *   - Fire the `link_generated` audit-write side effect with the existing
+   *     warn-loudly-but-still-return semantic on rejection (paid →
+   *     link_generated raises P0001; the helper warns and returns the URL).
+   *
+   * Default `false` — current behaviour preserved for tenant /pay callers
+   * (they share the cache; the cache exists to dedupe their parallel
+   * redirect clicks).
+   */
+  force?: boolean;
 }
 
 // ── In-memory coalescer ──────────────────────────────────────────────────────
@@ -220,6 +239,8 @@ async function mintAndPersist(
   },
   opts: EnsurePaymentLinkOptions,
 ): Promise<EnsurePaymentLinkResult> {
+  const force = opts.force === true;
+
   // 1. Resolve community payment config (config + decrypted secret).
   const paymentConfig = await getCommunityPaymentConfig(
     supabase,
@@ -269,14 +290,35 @@ async function mintAndPersist(
     currency,
   });
 
-  // 6. Optimistic-concurrency persist: only the first caller's UPDATE wins.
-  //    The WHERE ... IS NULL guard is the serialisation point.
-  const { data: updated, error: updateErr } = await supabase
-    .from("billing_line_items")
-    .update({ pesapal_redirect_url: result.redirectUrl })
-    .eq("id", lineItemId)
-    .is("pesapal_redirect_url", null)
-    .select("id, pesapal_redirect_url");
+  // 6. Persist. Two paths:
+  //
+  //    force=false (default):
+  //      Optimistic-concurrency UPDATE-NULL guard. Only the first caller's
+  //      UPDATE wins; the loser re-SELECTs the winner's URL.
+  //
+  //    force=true (operator-explicit "Regenerate" — #217):
+  //      Drop the WHERE-IS-NULL guard. Operator intent is to overwrite any
+  //      stale cache. Write both `pesapal_redirect_url` AND `pesapal_order_id`
+  //      in the same UPDATE so the row is internally consistent at every
+  //      observable instant (no momentary stale-pair window). Always treat
+  //      this caller as the winner — fire the audit write directly.
+  const updateBuilder = force
+    ? supabase
+        .from("billing_line_items")
+        .update({
+          pesapal_redirect_url: result.redirectUrl,
+          pesapal_order_id: result.providerReference,
+        })
+        .eq("id", lineItemId)
+        .select("id, pesapal_redirect_url")
+    : supabase
+        .from("billing_line_items")
+        .update({ pesapal_redirect_url: result.redirectUrl })
+        .eq("id", lineItemId)
+        .is("pesapal_redirect_url", null)
+        .select("id, pesapal_redirect_url");
+
+  const { data: updated, error: updateErr } = await updateBuilder;
 
   if (updateErr) {
     throw new PaymentError(
@@ -287,7 +329,7 @@ async function mintAndPersist(
     );
   }
 
-  if (updated && updated.length > 0) {
+  if (force || (updated && updated.length > 0)) {
     // Winner. Fire the audit write (warn-loudly-but-still-return on failure).
     try {
       const { error: rpcErr } = await supabase.rpc("fn_apply_payment_event", {
@@ -375,13 +417,26 @@ export async function ensurePaymentLinkForLineItem(
   lineItemId: string,
   options: EnsurePaymentLinkOptions = {},
 ): Promise<EnsurePaymentLinkResult> {
-  const existing = inflight.get(lineItemId);
-  if (existing) return existing;
+  const force = options.force === true;
+
+  // Operator-explicit "Regenerate" (#217) bypasses the in-memory coalescer in
+  // BOTH directions: do NOT piggyback onto an in-flight tenant /pay mint, and
+  // do NOT register the force-promise into the coalescer for tenant callers
+  // to share. Tenant /pay callers continue to run their own UPDATE-NULL
+  // guarded path; their submitOrder result becomes an orphan if the
+  // operator's force UPDATE lands later, but that is the documented trade-off
+  // (one tenant gets a working session for one redirect; the persisted URL
+  // is the operator's fresh one).
+  if (!force) {
+    const existing = inflight.get(lineItemId);
+    if (existing) return existing;
+  }
 
   const promise = (async () => {
-    // 1. Cache check — plain SELECT (no FOR UPDATE).
+    // 1. Cache check — plain SELECT (no FOR UPDATE). Skipped under force=true:
+    //    the operator's intent is "mint fresh regardless of any cached URL."
     const scope = await loadLineItemScope(supabase, lineItemId);
-    if (scope.pesapalRedirectUrl) {
+    if (!force && scope.pesapalRedirectUrl) {
       return {
         redirectUrl: scope.pesapalRedirectUrl,
         orderTrackingId: null,
@@ -390,7 +445,8 @@ export async function ensurePaymentLinkForLineItem(
       } satisfies EnsurePaymentLinkResult;
     }
 
-    // 2. Cache miss — mint via Pesapal + UPDATE-NULL-guarded persist.
+    // 2. Mint via Pesapal + persist. force=false uses the UPDATE-NULL guard;
+    //    force=true unconditionally overwrites both URL and order id.
     return mintAndPersist(
       supabase,
       lineItemId,
@@ -399,11 +455,15 @@ export async function ensurePaymentLinkForLineItem(
     );
   })();
 
-  inflight.set(lineItemId, promise);
+  if (!force) {
+    inflight.set(lineItemId, promise);
+  }
   try {
     return await promise;
   } finally {
-    inflight.delete(lineItemId);
+    if (!force) {
+      inflight.delete(lineItemId);
+    }
   }
 }
 
