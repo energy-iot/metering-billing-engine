@@ -54,6 +54,14 @@ export interface RowActionsMenuLineItem {
   payment_status: BillingLineItemPaymentStatus;
   reading_source: ReadingSource;
   total_amount: number;
+  /**
+   * Cached Pesapal redirect URL on the row (set by the helper's mint path
+   * and cleared by the 00037 auto-invalidation trigger when total_amount
+   * changes). Distinct from `pendingUrl` (component state) and from
+   * `payment_status` (state-machine intent). Drives the Generate vs
+   * Regenerate menu signal — see #221.
+   */
+  pesapal_redirect_url: string | null;
 }
 
 export interface RowActionsMenuHousehold {
@@ -122,6 +130,26 @@ export type MenuItem =
  * function — no side effects. Assertion-tested via inclusion checks (NOT
  * snapshots) for the 6 named states from the designer matrix; see
  * `__tests__/row-actions-menu.test.tsx`.
+ *
+ * Generate vs Regenerate signal (#221): driven by
+ * `lineItem.pesapal_redirect_url` (the truth-of-cache — what the helper's
+ * mint path will cache-hit on), NOT `payment_status` (the truth-of-intent
+ * — what the system thinks the customer is doing). The two can drift in
+ * legitimate scenarios:
+ *   - Operator clicked "Mark as unpaid" on a `link_generated` row —
+ *     `fn_apply_payment_event` resets payment_status but does NOT clear
+ *     pesapal_redirect_url (00028:331-373).
+ *   - Pre-#157 history.
+ *   - Helper warn-and-return paths that wrote a fresh URL before the
+ *     audit RPC rejected the status transition (ensure-payment-link.ts
+ *     :305-374).
+ * In all those cases the menu's question is "is there a link to
+ * regenerate?" — that's a cache question, not an intent question.
+ *
+ * Paid rows are excluded from the payment-link group entirely (see the
+ * explicit `!isPaid` gate). Operator workflow on paid is "Mark as
+ * unpaid" first (URL preserved by design), then "Regenerate" appears
+ * naturally with the new signal.
  */
 export function computeMenuItems(input: {
   microgridId: string;
@@ -229,18 +257,36 @@ export function computeMenuItems(input: {
 
   // ── Payment-link group ─────────────────────────────────────────────────────
   // Hidden entirely when payment is not configured (gate banner above the
-  // table already explains why).
+  // table already explains why) OR on terminal/paid rows.
+  //
+  // Paid rows are excluded via the explicit `!isPaid` check: under the
+  // OLD if/else-if logic on payment_status, `paid` rows fell through (no
+  // branch matched). Under the URL-presence signal (#221), a paid row
+  // with a non-null URL would otherwise surface "Regenerate" — that's
+  // not the operator's flow. They Mark as unpaid first (which preserves
+  // the URL per fn_apply_payment_event 00028:331-373), and then
+  // Regenerate appears naturally. Note: `paid` is NOT folded into
+  // `isTerminal` because `isTerminal` also gates the source/regenerate
+  // group at :182, where paid rows MUST still see "Regenerate from edge
+  // data" / "Switch to manual entry…" per State 4 of the designer matrix.
   const paymentLinkItems: MenuItem[] = [];
-  if (isPaymentConfigured && !isTerminal) {
-    if (lineItem.payment_status === "unpaid") {
+  if (isPaymentConfigured && !isTerminal && !isPaid) {
+    // Signal: URL-presence (truth-of-cache), NOT payment_status
+    // (truth-of-intent). Loose `== null` to harden against any typing
+    // slip (the field is `string | null` per the schema).
+    if (lineItem.pesapal_redirect_url == null) {
       paymentLinkItems.push({
         kind: "action",
         key: "generate-link",
         label: "Generate payment link",
         // First-mint path — cache is empty by definition; no force needed.
+        // Wrapper preserved (NOT a bare `handlers.onGenerateLink` reference)
+        // — Radix `onSelect` passes an `Event` argument; the wrapper drops
+        // it so TypeScript matches the `(opts?: { force?: boolean }) => void`
+        // call shape.
         onSelect: () => handlers.onGenerateLink(),
       });
-    } else if (lineItem.payment_status === "link_generated") {
+    } else {
       paymentLinkItems.push({
         kind: "action",
         key: "regenerate-link",

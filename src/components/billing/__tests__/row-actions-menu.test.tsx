@@ -52,6 +52,7 @@ function makeProps(
       payment_status: "unpaid",
       reading_source: "edge",
       total_amount: 12500,
+      pesapal_redirect_url: null,
     },
     household: { id: "h-1", display_name: "Alice Mukasa" },
     period: {
@@ -120,6 +121,7 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "unpaid",
         reading_source: "edge",
         total_amount: 100,
+        pesapal_redirect_url: null,
       },
       edgeAvailable: true,
       isPaymentConfigured: true,
@@ -144,6 +146,9 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "link_generated",
         reading_source: "manual",
         total_amount: 100,
+        // #221 — link_generated implies a URL exists; new signal surfaces
+        // "Regenerate payment link" as well as the 3 status transitions.
+        pesapal_redirect_url: "https://pay.example/state2",
       },
       edgeAvailable: true,
       isPaymentConfigured: true,
@@ -158,6 +163,8 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     // Manual + edgeAvailable → both source toggles
     expect(labels).toContain("Switch back to edge data");
     expect(labels).toContain("Re-enter manual readings…");
+    // #221 — URL-presence signal surfaces "Regenerate payment link".
+    expect(labels).toContain("Regenerate payment link");
     // PDF3 (#205) — Download bill (PDF) is always present.
     expect(labels).toContain("Download bill (PDF)");
   });
@@ -170,6 +177,7 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "unpaid",
         reading_source: "manual",
         total_amount: 100,
+        pesapal_redirect_url: null,
       },
       edgeAvailable: false,
       isPaymentConfigured: true,
@@ -193,6 +201,10 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "paid",
         reading_source: "edge",
         total_amount: 100,
+        // #221 — URL populated to exercise the paid-exclusion: even with
+        // a cached URL on a paid row, payment-link items must NOT appear
+        // (operator must Mark as unpaid first).
+        pesapal_redirect_url: "https://pay.example/state4",
       },
       edgeAvailable: true,
       isPaymentConfigured: true,
@@ -207,6 +219,10 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
     );
     expect(regenEdge).toBeTruthy();
     expect(regenEdge?.kind === "action" && regenEdge.warning).toBe(true);
+    // #221 — paid rows are excluded from the payment-link group entirely
+    // (regardless of cached URL). Operator workflow: Mark as unpaid first.
+    expect(labels).not.toContain("Regenerate payment link");
+    expect(labels).not.toContain("Generate payment link");
     // PDF3 (#205) — Download bill (PDF) is always present.
     expect(labels).toContain("Download bill (PDF)");
   });
@@ -219,6 +235,7 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "refunded",
         reading_source: "edge",
         total_amount: 100,
+        pesapal_redirect_url: null,
       },
       edgeAvailable: true,
       isPaymentConfigured: true,
@@ -249,6 +266,10 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
         payment_status: "paid",
         reading_source: "edge",
         total_amount: 100,
+        // #221 — URL populated to assert paid-exclusion still applies on
+        // a closed period (regardless of period status, paid blocks the
+        // payment-link group).
+        pesapal_redirect_url: "https://pay.example/state6",
       },
       edgeAvailable: true,
       isPaymentConfigured: true,
@@ -266,6 +287,144 @@ describe("computeMenuItems — designer matrix (6 states)", () => {
       .filter((i) => i.kind === "action" || i.kind === "link")
       .map((i) => (i.kind === "action" ? i.label : i.label));
     expect(labels).toContain("Download bill (PDF)");
+  });
+});
+
+// ── #221: Generate vs Regenerate signal (URL-presence, not payment_status) ───
+//
+// `pesapal_redirect_url` is the truth-of-cache; `payment_status` is the
+// truth-of-intent. They can drift. The menu's question is "is there a link
+// to regenerate?" — a cache question. Cases A/B/C/D below cover the four
+// (status × URL-presence) corners that matter for the gate.
+
+describe("computeMenuItems — #221 Generate vs Regenerate signal", () => {
+  const baseInput = {
+    microgridId: "mg-1",
+    household: { id: "h-1", display_name: "Test" },
+    period: {
+      id: "p-1",
+      status: "draft" as const,
+      start_date: "2026-04-01",
+      end_date: "2026-04-30",
+    },
+    pendingUrl: null as string | null,
+    edgeAvailable: true,
+    isPaymentConfigured: true,
+    handlers: {
+      onRequestRegenerate: vi.fn(),
+      onRequestSwitchToManual: vi.fn(),
+      onGenerateLink: vi.fn(),
+      onCopyLink: vi.fn(),
+      onMarkAsPaid: vi.fn(),
+      onMarkAsRefunded: vi.fn(),
+      onMarkAsUnpaid: vi.fn(),
+      onCancelLink: vi.fn(),
+      onMarkAsFailed: vi.fn(),
+      onDownloadPdf: vi.fn(),
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("Case A: unpaid + URL=null → 'Generate payment link' present, 'Regenerate' absent", () => {
+    const items = computeMenuItems({
+      ...baseInput,
+      lineItem: {
+        id: "li-A",
+        payment_status: "unpaid",
+        reading_source: "edge",
+        total_amount: 100,
+        pesapal_redirect_url: null,
+      },
+    });
+    const labels = items
+      .filter((i) => i.kind === "action")
+      .map((i) => (i.kind === "action" ? i.label : ""));
+    expect(labels).toContain("Generate payment link");
+    expect(labels).not.toContain("Regenerate payment link");
+  });
+
+  it("Case B: unpaid + URL populated (drift) → 'Regenerate' present, 'Generate' absent; click passes { force: true }", () => {
+    const onGenerateLink = vi.fn();
+    const items = computeMenuItems({
+      ...baseInput,
+      handlers: { ...baseInput.handlers, onGenerateLink },
+      lineItem: {
+        id: "li-B",
+        payment_status: "unpaid",
+        reading_source: "edge",
+        total_amount: 100,
+        // The Aaron-reported drift scenario: payment_status='unpaid' but
+        // a stale URL is cached on the row (e.g. operator clicked "Mark
+        // as unpaid" on a previously-link_generated row).
+        pesapal_redirect_url: "https://pay.example/case-b",
+      },
+    });
+    const labels = items
+      .filter((i) => i.kind === "action")
+      .map((i) => (i.kind === "action" ? i.label : ""));
+    expect(labels).toContain("Regenerate payment link");
+    expect(labels).not.toContain("Generate payment link");
+
+    // Click the regenerate item; confirm `force: true` flows through.
+    const regen = items.find(
+      (i) => i.kind === "action" && i.label === "Regenerate payment link",
+    );
+    expect(regen?.kind).toBe("action");
+    if (regen?.kind === "action") {
+      regen.onSelect();
+    }
+    expect(onGenerateLink).toHaveBeenCalledWith({ force: true });
+  });
+
+  it("Case C: link_generated + URL populated → 'Regenerate' present; click passes { force: true }", () => {
+    const onGenerateLink = vi.fn();
+    const items = computeMenuItems({
+      ...baseInput,
+      handlers: { ...baseInput.handlers, onGenerateLink },
+      lineItem: {
+        id: "li-C",
+        payment_status: "link_generated",
+        reading_source: "edge",
+        total_amount: 100,
+        pesapal_redirect_url: "https://pay.example/case-c",
+      },
+    });
+    const labels = items
+      .filter((i) => i.kind === "action")
+      .map((i) => (i.kind === "action" ? i.label : ""));
+    expect(labels).toContain("Regenerate payment link");
+    expect(labels).not.toContain("Generate payment link");
+
+    const regen = items.find(
+      (i) => i.kind === "action" && i.label === "Regenerate payment link",
+    );
+    expect(regen?.kind).toBe("action");
+    if (regen?.kind === "action") {
+      regen.onSelect();
+    }
+    expect(onGenerateLink).toHaveBeenCalledWith({ force: true });
+  });
+
+  it("Case D: paid + URL populated → no payment-link entries (gated by !isPaid)", () => {
+    const items = computeMenuItems({
+      ...baseInput,
+      lineItem: {
+        id: "li-D",
+        payment_status: "paid",
+        reading_source: "edge",
+        total_amount: 100,
+        pesapal_redirect_url: "https://pay.example/case-d",
+      },
+    });
+    const labels = items
+      .filter((i) => i.kind === "action")
+      .map((i) => (i.kind === "action" ? i.label : ""));
+    // Both link items absent — operator workflow is "Mark as unpaid" first.
+    expect(labels).not.toContain("Generate payment link");
+    expect(labels).not.toContain("Regenerate payment link");
   });
 });
 
@@ -302,6 +461,7 @@ describe("RowActionsMenu — payment-status PATCH per ALLOWED_MANUAL_TRANSITIONS
           payment_status: "paid",
           reading_source: "edge",
           total_amount: 100,
+          pesapal_redirect_url: null,
         },
       }),
     );
@@ -331,6 +491,11 @@ describe("RowActionsMenu — payment-status PATCH per ALLOWED_MANUAL_TRANSITIONS
           payment_status: "link_generated",
           reading_source: "edge",
           total_amount: 100,
+          // #221 — link_generated implies a URL is cached; the existing
+          // 3-status-transition assertions below are unchanged (Regenerate
+          // payment link is also visible but not asserted here — see the
+          // designer-matrix State 2 test for that coverage).
+          pesapal_redirect_url: "https://pay.example/link-gen",
         },
       }),
     );
@@ -376,6 +541,7 @@ describe("RowActionsMenu — fallback regenerate handler", () => {
           payment_status: "unpaid",
           reading_source: "edge",
           total_amount: 100,
+          pesapal_redirect_url: null,
         },
       }),
     );
@@ -423,6 +589,7 @@ describe("RowActionsMenu — fallback regenerate handler", () => {
           payment_status: "unpaid",
           reading_source: "edge",
           total_amount: 100,
+          pesapal_redirect_url: null,
         },
       }),
     );
@@ -466,6 +633,8 @@ describe("RowActionsMenu — IPN auto-close on payment_status change", () => {
         payment_status: "link_generated",
         reading_source: "edge",
         total_amount: 100,
+        // #221 — link_generated implies a cached URL exists.
+        pesapal_redirect_url: "https://pay.example/ipn-test",
       },
     });
 
@@ -534,6 +703,7 @@ describe("RowActionsMenu — payment-link generation error", () => {
           payment_status: "unpaid",
           reading_source: "edge",
           total_amount: 100,
+          pesapal_redirect_url: null,
         },
       }),
     );
@@ -596,6 +766,7 @@ describe("RowActionsMenu — bill download error", () => {
           payment_status: "unpaid",
           reading_source: "edge",
           total_amount: 100,
+          pesapal_redirect_url: null,
         },
       }),
     );

@@ -14,7 +14,7 @@
 //     (f) Gate banner absent when isPaymentConfigured=true
 
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BillingTable } from "../BillingTable";
 import { LocaleProvider } from "../format/locale-context";
 import type {
@@ -57,6 +57,16 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     unobserve() {}
     disconnect() {}
   };
+}
+
+// Radix DropdownMenu also uses PointerEvents in jsdom — stub it for the
+// #221 regression-guard test that opens the kebab menu.
+if (typeof globalThis.PointerEvent === "undefined") {
+  globalThis.PointerEvent = class PointerEvent extends MouseEvent {
+    constructor(type: string, init?: PointerEventInit) {
+      super(type, init);
+    }
+  } as typeof PointerEvent;
 }
 
 // ─── Fixture data ───────────────────────────────────────────────────────────
@@ -545,5 +555,52 @@ describe("BillingTable", () => {
       (b) => /row actions for/i.test(b.getAttribute("aria-label") ?? ""),
     );
     expect(kebabs.length).toBe(3);
+  });
+
+  // ── #221 regression-guard ────────────────────────────────────────────────
+  //
+  // BillingTable.tsx:604-609 hand-builds the lineItem prop forwarded to
+  // <RowActionsMenu>. If `pesapal_redirect_url` is dropped from that
+  // literal, the menu loses its Generate-vs-Regenerate signal silently —
+  // the type widening alone wouldn't catch it (Architect evolution-log
+  // entry on hand-fabricated `.returns<>` traps). This test renders the
+  // full prop chain with a drift-state row and verifies "Regenerate
+  // payment link" reaches the dropdown.
+  it("(#221) forwards pesapal_redirect_url through the prop chain — drift row shows Regenerate", async () => {
+    const driftLineItems: BillingLineItem[] = [
+      {
+        ...lineItems[0],
+        // The drift state from #221: payment_status='unpaid' but a URL
+        // is cached on the row.
+        payment_status: "unpaid",
+        pesapal_redirect_url: "https://pay.example/drift",
+      },
+      lineItems[1],
+      lineItems[2],
+    ];
+
+    render(
+      <Wrapper>
+        <BillingTable
+          {...baseProps}
+          lineItems={driftLineItems}
+          isPaymentConfigured={true}
+        />
+      </Wrapper>,
+    );
+
+    // Open the kebab menu for the drift row (h-1 / Alice).
+    const trigger = screen.getByRole("button", {
+      name: /row actions for alice/i,
+    });
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { bubbles: true, cancelable: true });
+      fireEvent.click(trigger);
+    });
+
+    await waitFor(() => screen.getByText(/regenerate payment link/i));
+    expect(screen.getByText(/regenerate payment link/i)).toBeTruthy();
+    // And explicitly NOT "Generate payment link".
+    expect(screen.queryByText(/^generate payment link$/i)).toBeNull();
   });
 });
