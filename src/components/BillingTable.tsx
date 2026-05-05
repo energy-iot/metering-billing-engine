@@ -606,6 +606,8 @@ export function BillingTable({
                 payment_status: item.payment_status,
                 reading_source: item.reading_source,
                 total_amount: item.total_amount,
+                // #221 — drives the Generate vs Regenerate menu signal.
+                pesapal_redirect_url: item.pesapal_redirect_url,
               }}
               household={{ id: h.id, display_name: h.display_name }}
               period={{
