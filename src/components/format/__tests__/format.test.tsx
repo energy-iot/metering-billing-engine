@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
 import { LocaleProvider } from "../locale-context";
 import { Currency } from "../currency";
-import { formatCurrency } from "../currency";
+import { formatCurrency, formatRate } from "../currency";
 import { Kwh } from "../kwh";
 import { formatKwh } from "../kwh";
 import { LocalDate } from "../local-date";
@@ -107,5 +107,47 @@ describe("formatCurrency", () => {
     const result = formatCurrency(4216800, "en", "UGX", { bareNumber: false, maxFractionDigits: 2, minFractionDigits: 2 });
     expect(result.includes("UGX")).toBe(true);
     expect(result.includes("4,216,800.00")).toBe(true);
+  });
+});
+
+describe("formatRate", () => {
+  it("returns em-dash for null", () => {
+    expect(formatRate(null, "en")).toBe("—");
+  });
+
+  it("integer rate pads to minDigits=2", () => {
+    expect(formatRate(250, "en")).toBe("250.00");
+  });
+
+  it("one-decimal rate pads to minDigits=2", () => {
+    expect(formatRate(756.2, "en")).toBe("756.20");
+  });
+
+  it("three-decimal rate is preserved up to maxDigits=4", () => {
+    expect(formatRate(100.555, "en")).toBe("100.555");
+  });
+
+  it("five-decimal rate rounds half-away to maxDigits=4", () => {
+    expect(formatRate(100.55555, "en")).toBe("100.5556");
+  });
+
+  it("zero renders as 0.00", () => {
+    expect(formatRate(0, "en")).toBe("0.00");
+  });
+
+  it("negative rate renders with leading minus and padding", () => {
+    expect(formatRate(-250, "en")).toBe("-250.00");
+  });
+
+  it("custom minDigits/maxDigits override defaults (digits:3)", () => {
+    expect(formatRate(123.456, "en", { minDigits: 3, maxDigits: 3 })).toBe("123.456");
+  });
+
+  it("custom digits=3 pads whole number to three zeros", () => {
+    expect(formatRate(15, "en", { minDigits: 3, maxDigits: 3 })).toBe("15.000");
+  });
+
+  it("minDigits/maxDigits=0 rounds to integer", () => {
+    expect(formatRate(7.5, "en", { minDigits: 0, maxDigits: 0 })).toBe("8");
   });
 });

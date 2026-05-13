@@ -92,6 +92,22 @@ const RATE_SCHEDULE: RateSchedule = {
   created_at: "2026-04-01T00:00:00.000Z",
 } as RateSchedule;
 
+// F6 regression fixture (#224): NFE-2026-00003 reproduces Aaron's Tier 2 math
+// "0.117 × 756.20 = 88.4754 → 88" reconciliation. Sub-15 max_kwh forces the
+// 15.117 usage to spill into Tier 2 by 0.117 kWh.
+const RATE_SCHEDULE_REGRESSION: RateSchedule = {
+  id: "rs-regression",
+  microgrid_id: "mg-1",
+  service_charge: 10000,
+  service_charge_description: "Fixed monthly service fee",
+  tax_rate: 0,
+  tiers: [
+    { label: "Tier 1", min_kwh: 1, max_kwh: 15, rate_per_kwh: 250 },
+    { label: "Tier 2", min_kwh: 16, max_kwh: 80, rate_per_kwh: 756.2 },
+  ],
+  created_at: "2026-04-01T00:00:00.000Z",
+} as RateSchedule;
+
 const ORG: Organization = {
   id: "org-1",
   name: "WattWorks Foundation Limited",
@@ -374,6 +390,38 @@ function buildF5Input(): RenderInvoiceInput {
   };
 }
 
+// F6 (#224 regression): reproduces Arthur Bamwite's NFE-2026-00003 — the
+// stored Tier 2 usage of 0.117 kWh at rate 756.2 UGX/kWh must display so
+// that 0.117 × 756.20 ≈ 88 UGX reconciles for the customer.
+function buildF6Input(): RenderInvoiceInput {
+  return {
+    lineItem: makeLineItem({
+      start_kwh: 1000,
+      end_kwh: 1015.117,
+      usage_kwh: 15.117,
+      tier_breakdown: [
+        { label: "Tier 1", kwh: 15, amount: 3750 },
+        { label: "Tier 2", kwh: 0.117, amount: 88.4754 },
+      ],
+      // 3750 + 88.4754 + 10000 service_charge ≈ 13838 (no tax)
+      total_amount: 13838,
+      invoice_number: "NFE-2026-00003",
+    }),
+    household: HOUSEHOLD_AARON,
+    community: COMMUNITY_MINIMAL, // tax hidden — keep focus on rate/usage math
+    organization: ORG,
+    ratesSchedule: RATE_SCHEDULE_REGRESSION,
+    paymentRedirectUrl: null,
+    invoiceNumber: "NFE-2026-00003",
+    logoBytes: null,
+    meterDevice: METER_DEVICE,
+    enteredByUserName: null,
+    currency: "UGX",
+    billingPeriodStart: "2026-04-01",
+    billingPeriodEnd: "2026-04-30",
+  };
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("renderInvoicePdf — fixtures (#203 PDF1b)", () => {
@@ -454,6 +502,47 @@ describe("renderInvoicePdf — fixtures (#203 PDF1b)", () => {
     );
 
     maybeAssertByteStability("no-line-item-payment-link", buf);
+  });
+
+  it("F6 regression #224 — NFE-2026-00003 Tier 2 reconciles 0.117 × 756.20 to 88", async () => {
+    const input = buildF6Input();
+    const buf = await renderInvoicePdf(input);
+
+    await expectStructuralPdfShape(
+      buf,
+      [
+        "NFE-2026-00003",
+        // Tier 2 usage cell — preserved at digits:3, not rounded to "0.12".
+        "0.117",
+        // Current Reading / Total Consumption preserved at digits:3.
+        "15.117",
+        // Tier 2 rate cell — formatRate pads 756.2 → "756.20".
+        "756.20",
+        // Tier 1 rate cell — formatRate pads integer 250 → "250.00".
+        "250.00",
+      ],
+      [
+        // Old formatKwh(digits:2) would have rounded 0.117 → "0.12". The
+        // fixture's stored numbers (3750, 88.4754, 13838, 15.117, 0.117,
+        // 250, 756.2, 10000) deliberately don't include a "0.12" substring,
+        // so this assertion is targeted.
+        "0.12",
+        // Old formatCurrency(bareNumber:true) would have rendered 756.2 as
+        // "756". The trailing space avoids colliding with "756.20".
+        "756 ",
+      ],
+    );
+
+    // Per-row reconciliation: displayed_usage × displayed_rate must round
+    // to within ±1 UGX of displayed_amount. The integer-UGX rounding
+    // allowance is what makes the math feel right to the customer; exact
+    // equality is not the bar.
+    const reconcile = (usage: number, rate: number, amount: number) =>
+      Math.abs(Math.round(usage * rate) - amount) <= 1;
+    expect(reconcile(0.117, 756.20, 88)).toBe(true);
+    expect(reconcile(15.000, 250.00, 3750)).toBe(true);
+
+    maybeAssertByteStability("regression-nfe-2026-00003", buf);
   });
 
   it("rejects invalid invoice_config via parseInvoiceConfig (ZodError)", async () => {
