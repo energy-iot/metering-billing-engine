@@ -8,11 +8,18 @@ import { NextResponse, type NextRequest } from "next/server";
 // `/reset-password` is the consumption side reached by the recovery
 // email link — verifyOtp on that page installs the session cookie
 // (UX5d / #190).
+// `/p/<slug>` is the consumer-facing payment-link indirection (#223) —
+// customers click from WhatsApp with no MBE session; the slug is the
+// access token (6-8 chars base62 entropy + DB lookup, with IP rate-limit
+// applied downstream by the legacy /api/billing-line-items/<id>/pay route).
+// Trailing slash is intentional — avoids prefix-matching any future top-
+// level `/page` or `/profile` route.
 const PUBLIC_PATHS = [
   "/login",
   "/accept-invite",
   "/forgot-password",
   "/reset-password",
+  "/p/",
 ];
 
 export async function middleware(request: NextRequest) {

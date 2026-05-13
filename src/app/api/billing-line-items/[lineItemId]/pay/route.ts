@@ -6,6 +6,18 @@
  * and lands here; this route 302s them to the cached Pesapal hosted-checkout
  * URL, minting one on first call if necessary.
  *
+ * **Legacy / backward-compat note (#223):** As of #223 (2026-05) new PDF
+ * bills embed the shorter `/p/<6-8 char slug>` indirection instead of this
+ * long URL. The `/p/` route resolves the slug to a line_item_id and 302s
+ * here — both paths converge on the same `ensurePaymentLinkForLineItem`
+ * pipeline. This route is kept FOREVER for backward compatibility with
+ * bills already shipped to customers before the slug change: those PDFs
+ * embed the long URL in WhatsApp threads, and we cannot rewrite already-
+ * delivered messages. Behavior, status codes, and response shapes here
+ * MUST NOT change without an explicit follow-up ticket. New behavior
+ * (additional auditing, rate-limit knobs, etc.) is fine; observable
+ * semantics on the happy path are not.
+ *
  *   - NO session auth (the line-item ID is the access token; UUID v4 entropy
  *     + IP rate-limit defends against scraping).
  *   - Service-role Supabase client (RLS bypassed by design).

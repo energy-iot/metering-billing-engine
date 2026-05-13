@@ -34,11 +34,16 @@ const ORG_ID = "550e8400-e29b-41d4-a716-446655440004";
 
 const ensurePaymentLinkMock = vi.fn();
 const renderInvoicePdfMock = vi.fn();
+const mintShortSlugMock = vi.fn();
 
 let canAccessMicrogridReturn = true;
 
 vi.mock("@/lib/payments/ensure-payment-link", () => ({
   ensurePaymentLinkForLineItem: ensurePaymentLinkMock,
+}));
+
+vi.mock("@/lib/payments/short-slug", () => ({
+  mintUniqueShortSlug: mintShortSlugMock,
 }));
 
 vi.mock("@/lib/auth/access", () => ({
@@ -199,6 +204,7 @@ function lineItemRow(overrides: Record<string, unknown> = {}) {
     pesapal_order_id: null,
     pesapal_redirect_url: null,
     reading_source: "edge",
+    short_slug: null,
     start_kwh: 0,
     tier_breakdown: [{ label: "Tier 1", kwh: 100, amount: 50000 }],
     total_amount: 50000,
@@ -284,6 +290,7 @@ beforeEach(() => {
     merchantReference: "M-1",
     wasMinted: true,
   });
+  mintShortSlugMock.mockReset().mockResolvedValue("Kp9XrA");
   renderInvoicePdfMock.mockResolvedValue(
     Buffer.from("%PDF-1.4 stub for tests", "utf8"),
   );
@@ -353,16 +360,21 @@ describe("GET /api/billing-line-items/[lineItemId]/pdf", () => {
     expect(cd).toMatch(/^attachment; filename="NFE-2026-\d{5}\.pdf"$/);
   });
 
-  it("ensure-link succeeds → helper invoked once, paymentRedirectUrl threaded", async () => {
+  it("ensure-link succeeds → helper invoked once, paymentRedirectUrl threaded as /p/<slug> (#223)", async () => {
     const { GET } = await import("../route");
     const res = await GET(makeReq(), {
       params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
     });
     expect(res.status).toBe(200);
     expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
-    // Renderer received a non-null /pay URL because provider IS configured.
+    // Renderer received the SHORT URL (#223) — `/p/<slug>`, not the
+    // legacy `/api/billing-line-items/<id>/pay` URL. Slug-minting helper
+    // was invoked exactly once.
+    expect(mintShortSlugMock).toHaveBeenCalledTimes(1);
     const renderInput = renderInvoicePdfMock.mock.calls[0][0];
-    expect(renderInput.paymentRedirectUrl).toMatch(
+    expect(renderInput.paymentRedirectUrl).toMatch(/\/p\/Kp9XrA$/);
+    // Should NOT embed the legacy long URL.
+    expect(renderInput.paymentRedirectUrl).not.toMatch(
       /\/api\/billing-line-items\/.+\/pay$/,
     );
   });
@@ -382,7 +394,7 @@ describe("GET /api/billing-line-items/[lineItemId]/pdf", () => {
     expect(body.error).toMatch(/payment link could not be created/i);
   });
 
-  it("no-payment-provider configured → 200 PDF, helper NOT called, paymentRedirectUrl=null", async () => {
+  it("no-payment-provider configured → 200 PDF, helper NOT called, paymentRedirectUrl=null, slug NOT minted (#223)", async () => {
     const noProvider = lineItemRow();
     (
       noProvider.billing_periods.microgrids.communities as Record<string, unknown>
@@ -398,6 +410,11 @@ describe("GET /api/billing-line-items/[lineItemId]/pdf", () => {
     });
     expect(res.status).toBe(200);
     expect(ensurePaymentLinkMock).not.toHaveBeenCalled();
+    // #223 AC4: slug-mint MUST be constrained to inside the
+    // hasPaymentProvider branch. When the community has no provider,
+    // the helper must NOT be called — we don't burn slug entropy on
+    // rows whose PDF never embeds the link.
+    expect(mintShortSlugMock).not.toHaveBeenCalled();
     const renderInput = renderInvoicePdfMock.mock.calls[0][0];
     expect(renderInput.paymentRedirectUrl).toBeNull();
   });
@@ -436,22 +453,25 @@ describe("GET /api/billing-line-items/[lineItemId]/pdf", () => {
     );
   });
 
-  it("idempotency: two sequential calls invoke ensurePaymentLink at most once total (cached on 2nd)", async () => {
-    // 1st call: cache miss, helper invoked.
+  it("idempotency: two sequential calls invoke ensurePaymentLink + mintShortSlug at most once total (cached on 2nd) (#223)", async () => {
+    // 1st call: cache miss, helpers invoked.
     const { GET } = await import("../route");
     let res = await GET(makeReq(), {
       params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
     });
     expect(res.status).toBe(200);
+    expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
+    expect(mintShortSlugMock).toHaveBeenCalledTimes(1);
 
-    // Simulate that the line item now has the URL persisted (real
-    // ensurePaymentLinkForLineItem writes pesapal_redirect_url). For the
-    // 2nd call, swap the row to one with the URL populated; the route's
-    // pre-flight check will see it and skip the helper.
+    // Simulate that the line item now has the URL + slug persisted (real
+    // helpers write both). For the 2nd call, swap the row to one with
+    // both populated; the route's pre-flight checks will see them and
+    // skip both helpers.
     fromState.lineItem = {
       data: lineItemRow({
         invoice_number: "NFE-2026-00001",
         pesapal_redirect_url: "https://pay.pesapal.com/x",
+        short_slug: "Kp9XrA",
       }),
       error: null,
     };
@@ -460,7 +480,78 @@ describe("GET /api/billing-line-items/[lineItemId]/pdf", () => {
       params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
     });
     expect(res.status).toBe(200);
+    // Both helpers still called exactly ONCE total across the two calls
+    // — the 2nd call short-circuits on the cached values.
     expect(ensurePaymentLinkMock).toHaveBeenCalledTimes(1);
+    expect(mintShortSlugMock).toHaveBeenCalledTimes(1);
+    // 2nd render embeds the SAME slug that was on the row.
+    const secondRenderInput = renderInvoicePdfMock.mock.calls[1][0];
+    expect(secondRenderInput.paymentRedirectUrl).toMatch(/\/p\/Kp9XrA$/);
+  });
+
+  it("first render mints + embeds /p/<slug>; second render reuses persisted slug (#223 AC4)", async () => {
+    const { GET } = await import("../route");
+
+    // 1st render — row has NULL short_slug, helper mints "Kp9XrA".
+    let res = await GET(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    expect(mintShortSlugMock).toHaveBeenCalledTimes(1);
+    let renderInput = renderInvoicePdfMock.mock.calls[0][0];
+    expect(renderInput.paymentRedirectUrl).toMatch(/\/p\/Kp9XrA$/);
+
+    // 2nd render — row now has short_slug populated. The helper MUST NOT
+    // be re-called; the persisted slug is reused.
+    fromState.lineItem = {
+      data: lineItemRow({
+        invoice_number: "NFE-2026-00001",
+        pesapal_redirect_url: "https://pay.pesapal.com/x",
+        short_slug: "Kp9XrA",
+      }),
+      error: null,
+    };
+    res = await GET(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    // Stability: helper called ONCE total across both renders.
+    expect(mintShortSlugMock).toHaveBeenCalledTimes(1);
+    renderInput = renderInvoicePdfMock.mock.calls[1][0];
+    expect(renderInput.paymentRedirectUrl).toMatch(/\/p\/Kp9XrA$/);
+  });
+
+  it("concurrent /pdf race: loser ends up with winner's slug (re-SELECT path) (#223 AC3)", async () => {
+    // Simulate the loser path: mintUniqueShortSlug returns the WINNER's slug,
+    // not the local candidate. The /pdf route consumes its return value
+    // directly, so the rendered URL must reflect the winner's slug.
+    mintShortSlugMock.mockResolvedValueOnce("Winner");
+    const { GET } = await import("../route");
+    const res = await GET(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(200);
+    const renderInput = renderInvoicePdfMock.mock.calls[0][0];
+    expect(renderInput.paymentRedirectUrl).toMatch(/\/p\/Winner$/);
+  });
+
+  it("mintUniqueShortSlug failure → 422 with reason (#223)", async () => {
+    const { PaymentError } = await import("@/lib/payments/errors");
+    mintShortSlugMock.mockRejectedValueOnce(
+      new PaymentError(
+        "Slug mint exhausted retries",
+        "PAYMENT_INVALID_CONFIG",
+        500,
+      ),
+    );
+    const { GET } = await import("../route");
+    const res = await GET(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.reason).toBe("PAYMENT_INVALID_CONFIG");
+    expect(body.error).toMatch(/short payment slug could not be created/i);
   });
 
   it("invoice number race: 23505 unique violation → reload + use persisted value", async () => {

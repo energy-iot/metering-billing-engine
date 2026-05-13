@@ -220,6 +220,31 @@ describe("GET /api/billing-line-items/[lineItemId]/pay", () => {
     infoSpy.mockRestore();
   });
 
+  // ── Backward-compat regression for #223 ─────────────────────────────────
+  // The route was kept exactly as-is when #223 introduced the /p/<slug>
+  // indirection. Bills already in customer WhatsApp threads use this long
+  // URL, so removing or breaking this route is a hard NEVER. This test
+  // pins the happy-path 302 behavior at the level of an external caller.
+  it("(#223 backward-compat) route is NOT deleted and 302s correctly for legacy long URLs", async () => {
+    ensurePaymentLinkMock.mockResolvedValueOnce({
+      redirectUrl: "https://pay.pesapal.com/checkout?token=LEGACY",
+      orderTrackingId: null,
+      merchantReference: null,
+      wasMinted: false,
+    });
+    const routeModule = await import("../route");
+    // Sanity: the GET export exists (the route file was not deleted).
+    expect(typeof routeModule.GET).toBe("function");
+    const res = await routeModule.GET(makeReq(), {
+      params: Promise.resolve({ lineItemId: LINE_ITEM_ID }),
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://pay.pesapal.com/checkout?token=LEGACY",
+    );
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
   // ── IPv4 truncation in audit log ────────────────────────────────────────
   it("truncates IPv4 to /24 in audit log (last octet zeroed)", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});

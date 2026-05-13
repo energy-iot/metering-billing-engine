@@ -95,4 +95,32 @@ describe("middleware PUBLIC_PATHS", () => {
     expect(res.status).toBeLessThan(400);
     expect(res.headers.get("location")).toMatch(/\/login$/);
   });
+
+  // #223: /p/<slug> is the consumer-facing payment-link indirection.
+  // Customers arrive with no MBE session; the middleware MUST pass-through
+  // (the route's service-role SELECT is the access-control gate).
+  it("allows unauthenticated GET on /p/<slug> (consumer payment link — #223)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+    const middleware = await loadMiddleware();
+
+    const res = await middleware(makeRequest("/p/Kp9XrA"));
+
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.status).toBe(200);
+  });
+
+  it("authenticated GET on /p/<slug> is also pass-through (no redirect to /)", async () => {
+    getUserMock.mockResolvedValue({
+      data: { user: { id: "u1" } },
+      error: null,
+    });
+    const middleware = await loadMiddleware();
+
+    const res = await middleware(makeRequest("/p/Kp9XrA"));
+
+    // No redirect — neither to /login nor to / (the authenticated-on-/login
+    // branch is the only place a logged-in user gets redirected to root).
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.status).toBe(200);
+  });
 });

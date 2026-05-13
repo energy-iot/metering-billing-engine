@@ -87,6 +87,24 @@ Font.register({
   ],
 });
 
+// #223: disable hyphenation document-wide. @react-pdf/renderer's default
+// hyphenation callback breaks long tokens (URLs, email addresses, customer
+// names with no spaces) at sub-word boundaries — Aaron's 2026-05-04 bills
+// shipped with the Payment Link rendered as "ver-cel.app" (mid-domain
+// hyphen, looks like a typo). The fix is to register a callback that
+// returns the input word unchanged — short-circuiting all break points.
+//
+// API correction: `Font.registerHyphenationCallback` is the documented
+// @react-pdf/font API (global, document-wide). There is NO
+// `hyphenationCallback` prop on `<Text>` — earlier ticket drafts that
+// suggested per-Text were incorrect (verified against
+// @react-pdf/renderer's types).
+//
+// Even after the short-slug fix (#223) replaces the 116-char URL with
+// `/p/<6 char>`, this guard protects future long-URL surfaces (long
+// customer-support emails, microgrid addresses, etc.).
+Font.registerHyphenationCallback((word) => [word]);
+
 // ── Public types ─────────────────────────────────────────────────────────────
 
 export interface RenderInvoiceInput {

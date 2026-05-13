@@ -181,6 +181,8 @@ const lineItems: BillingLineItem[] = [
     // PDF1a (#202) invoice + redirect-url cache.
     invoice_number: null,
     pesapal_redirect_url: null,
+    // #223 short-slug indirection (lazy-minted on PDF render).
+    short_slug: null,
   },
   {
     id: "li-2",
@@ -211,6 +213,8 @@ const lineItems: BillingLineItem[] = [
     // PDF1a (#202) invoice + redirect-url cache.
     invoice_number: null,
     pesapal_redirect_url: null,
+    // #223 short-slug indirection (lazy-minted on PDF render).
+    short_slug: null,
   },
   {
     id: "li-3",
@@ -241,6 +245,8 @@ const lineItems: BillingLineItem[] = [
     // PDF1a (#202) invoice + redirect-url cache.
     invoice_number: null,
     pesapal_redirect_url: null,
+    // #223 short-slug indirection (lazy-minted on PDF render).
+    short_slug: null,
   },
 ];
 
