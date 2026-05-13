@@ -959,6 +959,87 @@ desc("00029_billing_line_item_source_and_audit.sql (#173)", () => {
     expect(details).not.toHaveProperty("previous_snapshot");
   });
 
+  // ── #227 / 00039 — write-time rounding inside the RPC ─────────────────────
+  //
+  // The function ROUNDs _usage_kwh / _start_kwh / _end_kwh to 3 decimals and
+  // _total_amount to 0 decimals at write time; tier_breakdown JSONB is
+  // unpacked + repacked with each element's kwh rounded to 3 and amount to 0.
+  // Caller-side TS rounding is layered defense; this test pins the SQL
+  // contract independently.
+  //
+  // PostgREST returns NUMERIC scalars as JS strings in some shapes; the row
+  // read uses `Number(x)` to normalise. JSONB-embedded numerics are returned
+  // as JS numbers natively. Don't flip these assertions.
+
+  it("00039 / #227: fn_record_line_item_with_audit ROUNDs usage_kwh + start/end + total_amount + tier_breakdown on the Peter Ntale fixture", async () => {
+    const svc = await serviceClient();
+
+    // Use the existing hhA_inv1 row (already created by Case A). The
+    // re-key with dust-bearing inputs MUST land rounded values.
+    const { error, data } = await svc.rpc("fn_record_line_item_with_audit", {
+      _billing_period_id: FIXTURE.periodA,
+      _household_id: FIXTURE.hhA_inv1,
+      _device_id: FIXTURE.deviceA,
+      _usage_kwh: 178.3500000000002,
+      _start_kwh: 83.57,
+      _end_kwh: 261.92,
+      _tier_breakdown: [
+        { label: "Tier 1", kwh: 178.3500000000002, amount: 88.4754 },
+      ],
+      _total_amount: 88.4754,
+      _reading_source: "manual",
+      _entered_by_user_id: alejandroSuperAdmin.userId,
+      _manual_reason: "#227 dust regression",
+      _actor_user_id: alejandroSuperAdmin.userId,
+      _audit_details: { household_name: "BC1 Household A-inv1" },
+    });
+    expect(error).toBeNull();
+    // RPC returns the persisted row as a composite. PostgREST may wrap
+    // it in an array shape — normalise.
+    const returnedRowRaw = Array.isArray(data) ? data[0] : data;
+    const returnedRow = returnedRowRaw as {
+      usage_kwh: number | string;
+      start_kwh: number | string;
+      end_kwh: number | string;
+      total_amount: number | string;
+      tier_breakdown: { label: string; kwh: number; amount: number }[];
+    };
+
+    // Primary regression: usage exactly 178.35, NOT 178.35000000000002.
+    expect(Number(returnedRow.usage_kwh)).toBe(178.35);
+    expect(Number(returnedRow.usage_kwh) * 1000).toBe(178350);
+    expect(Number(returnedRow.start_kwh)).toBe(83.57);
+    expect(Number(returnedRow.end_kwh)).toBe(261.92);
+    // total_amount rounds to integer 88.
+    expect(Number(returnedRow.total_amount)).toBe(88);
+
+    // Tier breakdown — JSONB scalars come back as JS numbers natively.
+    expect(returnedRow.tier_breakdown.length).toBe(1);
+    expect(returnedRow.tier_breakdown[0].label).toBe("Tier 1");
+    expect(returnedRow.tier_breakdown[0].kwh).toBe(178.35);
+    expect(returnedRow.tier_breakdown[0].amount).toBe(88);
+
+    // Re-read the persisted row to verify storage matches (not just the
+    // RETURNING shape).
+    const { data: stored } = await svc
+      .from("billing_line_items")
+      .select("usage_kwh, start_kwh, end_kwh, total_amount, tier_breakdown")
+      .eq("billing_period_id", FIXTURE.periodA)
+      .eq("household_id", FIXTURE.hhA_inv1)
+      .single<{
+        usage_kwh: number | string;
+        start_kwh: number | string;
+        end_kwh: number | string;
+        total_amount: number | string;
+        tier_breakdown: { label: string; kwh: number; amount: number }[];
+      }>();
+    expect(Number(stored!.usage_kwh)).toBe(178.35);
+    expect(Number(stored!.usage_kwh) * 1000).toBe(178350);
+    expect(Number(stored!.total_amount)).toBe(88);
+    expect(stored!.tier_breakdown[0].kwh).toBe(178.35);
+    expect(stored!.tier_breakdown[0].amount).toBe(88);
+  });
+
   // ── Atomicity ─────────────────────────────────────────────────────────────
 
   it("fn_record_line_item_with_audit: failed audit insert rolls back the line item upsert", async () => {
