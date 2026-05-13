@@ -39,6 +39,7 @@ import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { PaymentError } from "@/lib/payments";
 import { ensurePaymentLinkForLineItem } from "@/lib/payments/ensure-payment-link";
+import { mintUniqueShortSlug } from "@/lib/payments/short-slug";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
@@ -113,6 +114,7 @@ export async function GET(
       pesapal_order_id,
       pesapal_redirect_url,
       reading_source,
+      short_slug,
       start_kwh,
       tier_breakdown,
       total_amount,
@@ -224,6 +226,7 @@ export async function GET(
     community.payment_provider != null &&
     community.payment_provider_config != null;
   let lineItemPesapalUrl = (scoped.pesapal_redirect_url as string | null) ?? null;
+  let shortSlug = (scoped.short_slug as string | null) ?? null;
 
   if (hasPaymentProvider) {
     if (!lineItemPesapalUrl) {
@@ -259,12 +262,54 @@ export async function GET(
         );
       }
     }
-    // The renderer takes our STABLE `/pay` URL, not the raw Pesapal URL.
-    // The /pay redirect (D6) reads `pesapal_redirect_url` and 302s to it,
-    // so the operator's PDF stays valid even if the Pesapal session URL
-    // ever rotates.
+    // Mint the short slug (#223) AFTER ensurePaymentLink succeeds — order
+    // matters: if the ensure-payment-link 422'd above OR the community had
+    // no provider, we would NOT want to burn a slug on a row whose PDF
+    // never embeds the link. Lazy-mint keeps the column clean for
+    // already-shipped bills that never re-render.
+    //
+    // Stability invariant (#223): once minted, the slug never rotates.
+    // mintUniqueShortSlug() uses an UPDATE-NULL guard + loser-path re-SELECT;
+    // its return value is the row's PERSISTED slug (the local candidate when
+    // we win, the concurrent winner's slug when we lose). On retry-exhaustion
+    // it throws PaymentError — surface as 422 (same shape as ensure-link
+    // failure) so the operator gets a clear error rather than a 500.
+    if (!shortSlug) {
+      try {
+        shortSlug = await mintUniqueShortSlug(supabase, lineItemId);
+      } catch (err) {
+        const reason = err instanceof PaymentError ? err.code : "unknown_error";
+        const message =
+          err instanceof PaymentError
+            ? err.message
+            : "Failed to mint short payment slug.";
+        console.warn(
+          JSON.stringify({
+            event: "pdf.mint_short_slug_failed",
+            line_item_id: lineItemId,
+            community_id: communityId,
+            err_code: reason,
+            err_message: message,
+            at: new Date().toISOString(),
+          }),
+        );
+        return NextResponse.json(
+          {
+            error: "Cannot generate bill — short payment slug could not be created.",
+            reason,
+            details: message,
+          },
+          { status: 422 },
+        );
+      }
+    }
+    // The renderer embeds the SHORT `/p/<slug>` URL (#223). It 302s through
+    // to `/api/billing-line-items/<id>/pay` which reads `pesapal_redirect_url`
+    // and forwards to Pesapal — so the operator's PDF stays valid even if
+    // the Pesapal session URL ever rotates. The legacy long URL keeps
+    // working forever (#223 AC7) for bills already shipped to customers.
     const origin = resolveOrigin(request);
-    paymentRedirectUrl = `${origin}/api/billing-line-items/${lineItemId}/pay`;
+    paymentRedirectUrl = `${origin}/p/${shortSlug}`;
   }
 
   // 5. Resolve / generate invoice number.
@@ -481,6 +526,7 @@ export async function GET(
     pesapal_order_id: scoped.pesapal_order_id as string | null,
     pesapal_redirect_url: lineItemPesapalUrl,
     reading_source: scoped.reading_source as BillingLineItem["reading_source"],
+    short_slug: shortSlug,
     start_kwh: scoped.start_kwh as number | null,
     tier_breakdown: (scoped.tier_breakdown as unknown as BillingLineItem["tier_breakdown"]) ?? [],
     total_amount: scoped.total_amount as number,

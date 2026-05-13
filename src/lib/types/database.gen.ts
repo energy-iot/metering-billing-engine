@@ -107,6 +107,7 @@ export type Database = {
           pesapal_order_id: string | null
           pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          short_slug: string | null
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
@@ -132,6 +133,7 @@ export type Database = {
           pesapal_order_id?: string | null
           pesapal_redirect_url?: string | null
           reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          short_slug?: string | null
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -157,6 +159,7 @@ export type Database = {
           pesapal_order_id?: string | null
           pesapal_redirect_url?: string | null
           reading_source?: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          short_slug?: string | null
           start_kwh?: number | null
           tier_breakdown?: Json
           total_amount?: number
@@ -993,6 +996,7 @@ export type Database = {
           pesapal_order_id: string | null
           pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          short_slug: string | null
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
@@ -1120,6 +1124,7 @@ export type Database = {
           pesapal_order_id: string | null
           pesapal_redirect_url: string | null
           reading_source: Database["public"]["Enums"]["billing_line_item_reading_source"]
+          short_slug: string | null
           start_kwh: number | null
           tier_breakdown: Json
           total_amount: number
