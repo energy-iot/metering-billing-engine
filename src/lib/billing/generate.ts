@@ -52,6 +52,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { calculateTieredCost } from "@/lib/billing/calculations";
+import { roundKwh, roundAmount } from "@/lib/billing/precision";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import type { DeviceConfig } from "@/lib/adapters/types";
@@ -634,17 +635,28 @@ export async function runGenerationFor(
       rateSchedule.tax_rate
     );
 
+    // #227: round the reading-side numerics. `calc.tierBreakdown` and
+    // `calc.totalAmount` are already rounded by calculateTieredCost.
+    // Rounding here closes IEEE-754 dust from arithmetic like
+    // `261.92 - 83.570 === 178.35000000000002` before the values land
+    // in storage or in the preview payload.
+    const startKwhRounded = roundKwh(startKwh);
+    const endKwhRounded = roundKwh(endKwh);
+    const usageKwhRounded = roundKwh(usageKwh);
+    const previousTotalAmount =
+      prior ? roundAmount(Number(prior.total_amount)) : null;
+
     if (mode === "preview") {
       results.push({
         kind: "preview",
         householdId: hid,
         householdName,
-        startKwh,
-        endKwh,
-        usageKwh,
+        startKwh: startKwhRounded,
+        endKwh: endKwhRounded,
+        usageKwh: usageKwhRounded,
         tierBreakdown: calc.tierBreakdown,
         totalAmount: calc.totalAmount,
-        previousTotalAmount: prior ? Number(prior.total_amount) : null,
+        previousTotalAmount,
         previousPaymentStatus: prior?.payment_status ?? null,
       });
       continue;
@@ -653,7 +665,7 @@ export async function runGenerationFor(
     // mode === 'write' — call the audit-aware RPC.
     const auditDetails: LineItemRegeneratedDetails = {
       household_name: householdName,
-      previous_total_amount: prior ? Number(prior.total_amount) : null,
+      previous_total_amount: previousTotalAmount,
       new_total_amount: calc.totalAmount,
       previous_reading_source: prior?.reading_source ?? null,
       new_reading_source: readingSource,
@@ -690,9 +702,9 @@ export async function runGenerationFor(
         _billing_period_id: periodId,
         _household_id: hid,
         _device_id: deviceId,
-        _usage_kwh: usageKwh,
-        _start_kwh: startKwh,
-        _end_kwh: endKwh,
+        _usage_kwh: usageKwhRounded,
+        _start_kwh: startKwhRounded,
+        _end_kwh: endKwhRounded,
         _tier_breakdown: calc.tierBreakdown,
         _total_amount: calc.totalAmount,
         _reading_source: readingSource,
@@ -725,7 +737,7 @@ export async function runGenerationFor(
       householdId: hid,
       householdName,
       lineItem: writtenRow,
-      previousTotalAmount: prior ? Number(prior.total_amount) : null,
+      previousTotalAmount,
       previousPaymentStatus: prior?.payment_status ?? null,
       previousReadingSource: prior?.reading_source ?? null,
     });

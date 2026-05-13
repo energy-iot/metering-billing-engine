@@ -1,4 +1,5 @@
 import type { TierConfig, TierBreakdown } from "@/lib/types/domain";
+import { roundKwh, roundAmount } from "./precision";
 
 export type BillingCalculation = {
   tierBreakdown: TierBreakdown[];
@@ -9,6 +10,17 @@ export type BillingCalculation = {
   totalAmount: number; // netAmount + taxAmount
 };
 
+// #227: every numeric output that lands in storage or display is
+// rounded here so any caller (runGenerationFor, TierEditor preview,
+// usage/route test fixture, etc.) gets clean values. Defense-in-depth
+// with the rounding in `runGenerationFor` and `fn_record_line_item_with_audit`.
+//
+// kWh values use `roundKwh` (3 decimals = mWh precision). UGX amounts
+// use `roundAmount` (integer — UGX has no minor units, and the bill
+// display rounds to integer anyway). Tax is computed against the
+// already-integer netAmount so `taxAmount` and `totalAmount` are integer
+// by construction.
+
 export function calculateTieredCost(
   usageKwh: number,
   tiers: TierConfig[],
@@ -16,15 +28,15 @@ export function calculateTieredCost(
   taxRate: number
 ): BillingCalculation {
   if (usageKwh <= 0 || tiers.length === 0) {
-    const netAmount = serviceCharge;
-    const taxAmount = netAmount * taxRate;
+    const netAmount = roundAmount(serviceCharge);
+    const taxAmount = roundAmount(netAmount * taxRate);
     return {
       tierBreakdown: [],
       subtotal: 0,
-      serviceCharge,
+      serviceCharge: roundAmount(serviceCharge),
       netAmount,
       taxAmount,
-      totalAmount: netAmount + taxAmount,
+      totalAmount: roundAmount(netAmount + taxAmount),
     };
   }
 
@@ -41,22 +53,24 @@ export function calculateTieredCost(
 
     tierBreakdown.push({
       label: tier.label,
-      kwh: kwhInTier,
-      amount,
+      kwh: roundKwh(kwhInTier),
+      amount: roundAmount(amount),
     });
 
     remaining -= kwhInTier;
   }
 
-  const subtotal = tierBreakdown.reduce((sum, t) => sum + t.amount, 0);
-  const netAmount = subtotal + serviceCharge;
-  const taxAmount = netAmount * taxRate;
-  const totalAmount = netAmount + taxAmount;
+  const subtotal = roundAmount(
+    tierBreakdown.reduce((sum, t) => sum + t.amount, 0)
+  );
+  const netAmount = roundAmount(subtotal + serviceCharge);
+  const taxAmount = roundAmount(netAmount * taxRate);
+  const totalAmount = roundAmount(netAmount + taxAmount);
 
   return {
     tierBreakdown,
     subtotal,
-    serviceCharge,
+    serviceCharge: roundAmount(serviceCharge),
     netAmount,
     taxAmount,
     totalAmount,

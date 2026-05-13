@@ -73,6 +73,27 @@ function parseInput(raw: string):
   return { ok: true, value: n };
 }
 
+/**
+ * Format a persisted numeric value for an editable `<input type="number">`.
+ *
+ * #227 fix: replaces `String(value)`, which would surface IEEE-754 dust
+ * (e.g. `String(178.3500000000002)` → `"178.3500000000002"`) raw in the
+ * input field. `toFixed(3)` pins to 3-decimal kWh precision (mWh
+ * resolution — matches `roundKwh`), preserves the underlying number, and
+ * intentionally emits NO thousands separators so the value parses cleanly
+ * back through `<input type="number">`'s validator. Trailing zeros are
+ * padded (`178.4` → `"178.400"`) — that is the stable end-state once a
+ * fresh write lands.
+ *
+ * Used only when the cell (re)initialises and on revert paths. The
+ * keystroke `onChange` path leaves the user's raw typing untouched.
+ */
+function formatForInput(value: number | null): string {
+  if (value == null) return "";
+  if (!Number.isFinite(value)) return "";
+  return value.toFixed(3);
+}
+
 export function ManualUsageCell({
   lineItemId,
   field,
@@ -83,15 +104,13 @@ export function ManualUsageCell({
   className,
 }: ManualUsageCellProps) {
   const router = useRouter();
-  const [draft, setDraft] = React.useState<string>(
-    value == null ? "" : String(value)
-  );
+  const [draft, setDraft] = React.useState<string>(formatForInput(value));
   const [saving, setSaving] = React.useState(false);
 
   // Re-sync the draft whenever the persisted value changes (e.g. after
   // router.refresh() pulls a new server-confirmed number).
   React.useEffect(() => {
-    setDraft(value == null ? "" : String(value));
+    setDraft(formatForInput(value));
   }, [value]);
 
   // Read-only path — match the surrounding CopyTable visual (right-aligned
@@ -114,7 +133,7 @@ export function ManualUsageCell({
     if (!parsed.ok) {
       if (parsed.reason === "empty") {
         // Empty input: revert silently to the persisted value, no save fire.
-        setDraft(value == null ? "" : String(value));
+        setDraft(formatForInput(value));
         onError?.(lineItemId, null);
         return;
       }
@@ -147,7 +166,7 @@ export function ManualUsageCell({
           reason?: string;
         };
         // Revert local draft to the persisted value.
-        setDraft(value == null ? "" : String(value));
+        setDraft(formatForInput(value));
         onError?.(
           lineItemId,
           body.error ?? `Could not save (HTTP ${res.status}).`
@@ -159,7 +178,7 @@ export function ManualUsageCell({
       setSaving(false);
       router.refresh();
     } catch (err) {
-      setDraft(value == null ? "" : String(value));
+      setDraft(formatForInput(value));
       onError?.(
         lineItemId,
         err instanceof Error ? err.message : "Network error. Please retry."
@@ -188,7 +207,7 @@ export function ManualUsageCell({
           } else if (e.key === "Escape") {
             e.preventDefault();
             // Revert to the persisted value and unfocus.
-            setDraft(value == null ? "" : String(value));
+            setDraft(formatForInput(value));
             onError?.(lineItemId, null);
             (e.currentTarget as HTMLInputElement).blur();
           }
