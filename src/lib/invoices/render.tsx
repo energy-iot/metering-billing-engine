@@ -40,7 +40,7 @@ import {
   renderToBuffer,
 } from "@react-pdf/renderer";
 
-import { formatCurrency } from "@/components/format/currency";
+import { formatCurrency, formatRate } from "@/components/format/currency";
 import { formatKwh } from "@/components/format/kwh";
 import { formatLocalDate } from "@/components/format/local-date";
 import type {
@@ -810,13 +810,13 @@ function InvoiceDocument(props: RenderProps): React.ReactElement {
                     <View style={styles.detailHalf}>
                       <Text style={styles.label}>Previous Reading</Text>
                       <Text style={styles.value}>
-                        {formatKwh(startKwh, props.locale, { digits: 2 })} kWh
+                        {formatKwh(startKwh, props.locale, { digits: 3 })} kWh
                       </Text>
                     </View>
                     <View style={styles.detailHalf}>
                       <Text style={styles.label}>Current Reading</Text>
                       <Text style={styles.value}>
-                        {formatKwh(endKwh, props.locale, { digits: 2 })} kWh
+                        {formatKwh(endKwh, props.locale, { digits: 3 })} kWh
                       </Text>
                     </View>
                   </View>
@@ -824,7 +824,7 @@ function InvoiceDocument(props: RenderProps): React.ReactElement {
                     <View style={styles.detailHalf}>
                       <Text style={styles.label}>Total Consumption</Text>
                       <Text style={styles.value}>
-                        {formatKwh(usageKwh, props.locale, { digits: 2 })} kWh
+                        {formatKwh(usageKwh, props.locale, { digits: 3 })} kWh
                       </Text>
                     </View>
                     <View style={styles.detailHalf}>
@@ -894,14 +894,10 @@ function InvoiceDocument(props: RenderProps): React.ReactElement {
                         : row.label}
                     </Text>
                     <Text style={[styles.tdNum, { flex: 1 }]}>
-                      {formatKwh(row.kwh, props.locale, { digits: 2 })}
+                      {formatKwh(row.kwh, props.locale, { digits: 3 })}
                     </Text>
                     <Text style={[styles.tdNum, { flex: 1 }]}>
-                      {rate != null
-                        ? formatCurrency(rate, props.locale, props.currency, {
-                            bareNumber: true,
-                          })
-                        : "—"}
+                      {formatRate(rate, props.locale)}
                     </Text>
                     <Text style={[styles.tdNum, { flex: 1 }]}>
                       {formatCurrency(row.amount, props.locale, props.currency, {

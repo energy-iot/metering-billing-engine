@@ -13,9 +13,14 @@
 //     paste workflows where the cell value is digits only.
 //   - className is composable via cn() so callers can override sizing/tone.
 //
-// String helper:
+// String helpers:
 //   - `formatCurrency(value, locale, currency, opts?)` — pure function,
 //     no React context. Reuses the same getNF() cache. Returns "—" for null.
+//   - `formatRate(value, locale, opts?)` — pure function for unit-rate display
+//     (tariff rates in UGX/kWh, etc.). DIFFERENT semantics from formatCurrency:
+//     rates are unit-rate calculation factors decoupled from the currency's
+//     minor-unit convention. Defaults: minDigits=2, maxDigits=4. No currency
+//     parameter — the column header carries the unit. Returns "—" for null.
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
@@ -53,6 +58,30 @@ export function formatCurrency(
     if (opts.minFractionDigits !== undefined) nfOpts.minimumFractionDigits = opts.minFractionDigits;
   }
   return getNF(locale, nfOpts).format(value);
+}
+
+/**
+ * Pure string formatter for unit rates (e.g. UGX/kWh tariff rate).
+ *
+ * Unlike `formatCurrency`, rates are NOT subject to a currency's minor-unit
+ * convention — a tariff rate of 756.20 needs to display as "756.20" even
+ * when the currency (UGX) renders amounts as integers. Defaults
+ * (minDigits=2, maxDigits=4) preserve typical tariff precision while
+ * trimming runaway decimals in stored values.
+ */
+export function formatRate(
+  value: number | null,
+  locale: string,
+  opts: { minDigits?: number; maxDigits?: number } = {},
+): string {
+  if (value == null) return "—";
+  const minDigits = opts.minDigits ?? 2;
+  const maxDigits = opts.maxDigits ?? 4;
+  return getNF(locale, {
+    style: "decimal",
+    minimumFractionDigits: minDigits,
+    maximumFractionDigits: maxDigits,
+  }).format(value);
 }
 
 export interface CurrencyProps extends React.HTMLAttributes<HTMLSpanElement> {

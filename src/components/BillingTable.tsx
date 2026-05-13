@@ -453,7 +453,7 @@ export function BillingTable({
   // CopyTable columns built from tiers
   // Format helpers (plain string, for CopyTable column defs)
   const kwhFormat = (v: number | string | null) =>
-    formatKwh(v == null ? null : Number(v), locale, { bareNumber: true });
+    formatKwh(v == null ? null : Number(v), locale, { bareNumber: true, digits: 3 });
   const amountFormat = (v: number | string | null) =>
     formatCurrency(v == null ? null : Number(v), locale, localeCurrency, { bareNumber: true });
 
