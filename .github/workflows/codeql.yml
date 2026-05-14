@@ -1,0 +1,58 @@
+name: CodeQL
+
+# CodeQL static-analysis security scan.
+#
+# Required by the repository's "require-DCO" ruleset (status check name:
+# "CodeQL"). The job's name below MUST stay as "CodeQL" so the required-check
+# context resolves; do NOT add a matrix-suffix or rename. The build step runs
+# the standard JavaScript/TypeScript analysis — no project-specific config
+# beyond the language list.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan of main, Monday 04:00 UTC. Catches advisories that landed
+    # after the last PR-driven scan.
+    - cron: "0 4 * * 1"
+
+# Tighten default token permissions; explicitly grant only what's required.
+permissions:
+  contents: read
+
+jobs:
+  CodeQL:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      security-events: write   # required to upload results to the Security tab
+      packages: read           # required to read dependency metadata
+      actions: read            # required for private repos (cheap to grant)
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `security-extended` adds queries beyond the default security set
+          # (e.g. broken-authentication, sensitive-data-exposure). Worth the
+          # ~30-60s extra runtime for an app handling payments + auth.
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
