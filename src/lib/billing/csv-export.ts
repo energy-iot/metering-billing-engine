@@ -29,7 +29,7 @@
  * explicit so the helper is fully unit-testable.
  */
 
-import { roundAmount } from "./precision";
+import { roundKwh, roundAmount } from "./precision";
 
 /** Per-row input to {@link buildBillingPeriodCsv}. */
 export interface CsvExportRow {
@@ -194,7 +194,10 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
   const showTax =
     !!tax && tax.show_section !== false && (tax.rate_pct ?? 0) > 0;
   const taxRatePct = tax?.rate_pct ?? 0;
-  const serviceCharge = input.rateSchedule.service_charge ?? 0;
+  // Round service_charge once at initialization so all downstream sums
+  // (preTaxSubtotal, taxableSubtotal, etc.) propagate the cleaned value
+  // and stale dust in the rate schedule does not leak into cells.
+  const serviceCharge = roundAmount(input.rateSchedule.service_charge ?? 0);
 
   // ── Header ────────────────────────────────────────────────────────────────
   const header: string[] = [
@@ -202,7 +205,8 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
     "Issue Date",
     "Household",
     "Account Number",
-    "Meter ID",
+    "OpenEMS Meter ID",
+    "Meter Serial",
     "Meter Type",
     "Customer Type",
     "Address",
@@ -254,8 +258,12 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
         tierCells.push("");
         tierCells.push("");
       } else {
-        tierCells.push(csvCell(hit.kwh));
-        tierCells.push(csvCell(hit.amount));
+        // Mask float-dust on historical rows (#232). `roundKwh` /
+        // `roundAmount` are imported from precision.ts — same helpers
+        // used by write-time RPC rounding (#227) and ManualUsageCell's
+        // `formatForInput` display masking. Defense-in-depth.
+        tierCells.push(csvCell(roundKwh(hit.kwh)));
+        tierCells.push(csvCell(roundAmount(hit.amount)));
       }
     }
 
@@ -275,7 +283,10 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
       taxableSubtotal = net;
       vatCell = csvCell(vat);
     } else {
-      taxableSubtotal = preTaxSubtotal;
+      // VAT disabled — `preTaxSubtotal = energySubtotal + serviceCharge`
+      // accumulates raw `tb.amount` values, so it can carry float-dust
+      // from historical rows. Round once at the assignment site (#232).
+      taxableSubtotal = roundAmount(preTaxSubtotal);
       // VAT disabled — emit EMPTY (not zero) to distinguish "tax exempt"
       // from "tax = 0 on a tiny bill".
       vatCell = "";
@@ -290,18 +301,23 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
       csvCell(h.display_name),
       csvCell(h.account_number),
       csvCell(device?.openems_component_id ?? null),
+      csvCell(h.meter_serial),
       csvCell(h.meter_type),
       csvCell(titleCaseCustomerType(h.customer_type)),
       csvCell(composeAddress(h)),
       csvCell(h.primary_phone),
-      csvCell(li.start_kwh),
-      csvCell(li.end_kwh),
-      csvCell(li.usage_kwh),
+      // Null-safe rounding: `roundKwh(null)` returns `0` (because
+      // `Math.round(null * 1000) === 0`), which would silently convert
+      // NULL kWh cells (meaning "no reading taken") into "0". The
+      // ternary preserves the NULL → empty-cell contract.
+      csvCell(li.start_kwh == null ? null : roundKwh(li.start_kwh)),
+      csvCell(li.end_kwh == null ? null : roundKwh(li.end_kwh)),
+      csvCell(li.usage_kwh == null ? null : roundKwh(li.usage_kwh)),
       ...tierCells,
       csvCell(serviceCharge),
       csvCell(taxableSubtotal),
       vatCell,
-      csvCell(totalAmount),
+      csvCell(roundAmount(totalAmount)),
       csvCell(paymentLabel),
       csvCell(isoDate(li.paid_at)),
     ];

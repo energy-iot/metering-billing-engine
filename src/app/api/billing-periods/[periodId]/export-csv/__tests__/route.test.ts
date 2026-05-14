@@ -328,10 +328,42 @@ describe("GET /api/billing-periods/[periodId]/export-csv", () => {
     const lines = stripped.split("\r\n");
     if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
     expect(lines.length).toBe(1);
-    // Header still has tier columns (Tier 1 kWh + Tier 1 UGX), so 18 + 2 = 20.
-    expect(lines[0].split(",").length).toBe(18 + 2);
+    // #232: Header has 19 base columns + tier columns (Tier 1 kWh +
+    // Tier 1 UGX), so 19 + 2 = 21.
+    expect(lines[0].split(",").length).toBe(19 + 2);
     expect(lines[0]).toContain("Tier 1 kWh");
     expect(lines[0]).toContain("Tier 1 UGX");
+  });
+
+  it("200: header line is BYTE-EXACT for the default 1-tier fixture (#232 pin)", async () => {
+    const { GET } = await import("../route");
+    const res = await GET(makeReq(), {
+      params: Promise.resolve({ periodId: PERIOD_ID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const stripped = body.startsWith("﻿") ? body.slice(1) : body;
+    const lines = stripped.split("\r\n");
+    expect(lines[0]).toBe(
+      "Invoice Number,Issue Date,Household,Account Number,OpenEMS Meter ID,Meter Serial," +
+        "Meter Type,Customer Type,Address,Phone,Begin kWh,End kWh,Usage kWh," +
+        "Tier 1 kWh,Tier 1 UGX,Service Charge UGX,Taxable Subtotal UGX,VAT UGX,Total UGX," +
+        "Payment Status,Paid At",
+    );
+  });
+
+  it("200: meter_serial from the fixture (MS-1) flows to data-row index 5 (#232)", async () => {
+    const { GET } = await import("../route");
+    const res = await GET(makeReq(), {
+      params: Promise.resolve({ periodId: PERIOD_ID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const stripped = body.startsWith("﻿") ? body.slice(1) : body;
+    const lines = stripped.split("\r\n");
+    expect(lines[1]).toBeDefined();
+    const cols = lines[1].split(",");
+    expect(cols[5]).toBe("MS-1");
   });
 
   it("filename sanitization: microgrid name with special chars → lowered + dashed", async () => {

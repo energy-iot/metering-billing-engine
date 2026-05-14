@@ -1,9 +1,10 @@
 /**
- * csv-export.test.ts — pure-function tests for #229 CSV serializer.
+ * csv-export.test.ts — pure-function tests for #229 / #232 CSV serializer.
  *
  * The helper is fully data-driven; these tests cover the AC-spec'd
  * invariants:
- *   - 19-column header (+ 2 per tier).
+ *   - 19-column base header (+ 2 per tier) — `OpenEMS Meter ID`
+ *     (renamed) at index 4, `Meter Serial` (new) at index 5 (#232).
  *   - Per-row VAT/service/subtotal derivation from
  *     `community.invoice_config.tax.rate_pct` (NOT `rateSchedule.tax_rate`).
  *   - Tier column lookup by `label`, not index (re-ordered breakdowns
@@ -13,6 +14,8 @@
  *   - Sort stability (display_name asc, line-item id asc secondary).
  *   - Special characters (commas, quotes, newlines) are properly escaped.
  *   - Filename sanitization helper edge cases.
+ *   - Display-side rounding of float-dust via `roundKwh`/`roundAmount`
+ *     (#232), with NULL-passthrough preserved.
  */
 
 import { describe, it, expect } from "vitest";
@@ -112,27 +115,29 @@ function parseLines(csv: string): string[] {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("buildBillingPeriodCsv — header + structure", () => {
-  it("emits 18 fixed columns + 2 per tier (4-tier microgrid → 26 columns)", () => {
-    // AC bullet #13 is the per-tier block (counted as a single item in
-    // the spec's "19-column header" phrasing → 18 individual non-tier
-    // columns).
+  it("emits 19 fixed columns + 2 per tier (4-tier microgrid → 27 columns)", () => {
+    // #232: base columns shift from 18 → 19 (Meter Serial inserted at
+    // index 5, after the renamed `OpenEMS Meter ID` at index 4).
     const csv = buildBillingPeriodCsv(
       makeInput({ rateSchedule: { tiers: TIERS_4, service_charge: 0, tax_rate: 0 } }),
     );
     const lines = parseLines(csv);
     const headerCols = lines[0].split(",");
-    expect(headerCols.length).toBe(18 + 8);
+    expect(headerCols.length).toBe(19 + 8);
     expect(headerCols[0]).toBe("Invoice Number");
     expect(headerCols[1]).toBe("Issue Date");
     expect(headerCols[2]).toBe("Household");
-    expect(headerCols[5]).toBe("Meter Type");
-    expect(headerCols[7]).toBe("Address");
+    expect(headerCols[3]).toBe("Account Number");
+    expect(headerCols[4]).toBe("OpenEMS Meter ID");
+    expect(headerCols[5]).toBe("Meter Serial");
+    expect(headerCols[6]).toBe("Meter Type");
+    expect(headerCols[8]).toBe("Address");
   });
 
-  it("2-tier microgrid → 18 + 4 = 22 columns", () => {
+  it("2-tier microgrid → 19 + 4 = 23 columns", () => {
     const csv = buildBillingPeriodCsv(makeInput());
     const cols = parseLines(csv)[0].split(",");
-    expect(cols.length).toBe(18 + 4);
+    expect(cols.length).toBe(19 + 4);
   });
 
   it("currency token threads into Service / VAT / Total / tier headers", () => {
@@ -192,16 +197,17 @@ describe("buildBillingPeriodCsv — tier lookup", () => {
     );
     const lines = parseLines(csv);
     const dataCols = lines[1].split(",");
-    // Tier columns start at index 12. T1 kWh = 25, T1 UGX = 12500,
+    // Tier columns start at index 13 (#232: shifted +1 from 12 due to
+    // Meter Serial insertion at index 5). T1 kWh = 25, T1 UGX = 12500,
     // T2/T3/T4 kWh + UGX should be empty strings.
-    expect(dataCols[12]).toBe("25");
-    expect(dataCols[13]).toBe("12500");
-    expect(dataCols[14]).toBe("");
+    expect(dataCols[13]).toBe("25");
+    expect(dataCols[14]).toBe("12500");
     expect(dataCols[15]).toBe("");
     expect(dataCols[16]).toBe("");
     expect(dataCols[17]).toBe("");
     expect(dataCols[18]).toBe("");
     expect(dataCols[19]).toBe("");
+    expect(dataCols[20]).toBe("");
   });
 
   it("empty tier_breakdown ([]) — all tier cells are empty", () => {
@@ -219,7 +225,8 @@ describe("buildBillingPeriodCsv — tier lookup", () => {
       }),
     );
     const dataCols = parseLines(csv)[1].split(",");
-    for (let i = 12; i < 12 + 8; i++) {
+    // Tier block starts at index 13 in #232's layout.
+    for (let i = 13; i < 13 + 8; i++) {
       expect(dataCols[i]).toBe("");
     }
   });
@@ -237,11 +244,11 @@ describe("buildBillingPeriodCsv — tier lookup", () => {
     });
     const csv = buildBillingPeriodCsv(makeInput({ rows: [reorderedRow] }));
     const cols = parseLines(csv)[1].split(",");
-    // Column 12 = Tier 1 kWh, 13 = Tier 1 UGX, 14 = Tier 2 kWh, 15 = Tier 2 UGX
-    expect(cols[12]).toBe("50");
-    expect(cols[13]).toBe("25000");
-    expect(cols[14]).toBe("30");
-    expect(cols[15]).toBe("24000");
+    // #232: Column 13 = Tier 1 kWh, 14 = Tier 1 UGX, 15 = Tier 2 kWh, 16 = Tier 2 UGX
+    expect(cols[13]).toBe("50");
+    expect(cols[14]).toBe("25000");
+    expect(cols[15]).toBe("30");
+    expect(cols[16]).toBe("24000");
   });
 });
 
@@ -257,13 +264,13 @@ describe("buildBillingPeriodCsv — VAT/tax derivation", () => {
       }),
     );
     const cols = parseLines(csv)[1].split(",");
-    // Header order, after 4 tier cols: Service / Taxable / VAT / Total
-    // base cols 0-11 + 4 tier cols = first non-tier index is 16
-    // 16=Service Charge, 17=Taxable Subtotal, 18=VAT, 19=Total
-    expect(cols[16]).toBe("0"); // service charge
-    expect(cols[17]).toBe("41525"); // taxable subtotal
-    expect(cols[18]).toBe("7475"); // VAT
-    expect(cols[19]).toBe("49000"); // total
+    // #232: Header order, after 4 tier cols: Service / Taxable / VAT / Total
+    // base cols 0-12 + 4 tier cols = first non-tier index is 17
+    // 17=Service Charge, 18=Taxable Subtotal, 19=VAT, 20=Total
+    expect(cols[17]).toBe("0"); // service charge
+    expect(cols[18]).toBe("41525"); // taxable subtotal
+    expect(cols[19]).toBe("7475"); // VAT
+    expect(cols[20]).toBe("49000"); // total
   });
 
   it("VAT disabled (show_section=false) → VAT cell EMPTY, taxable = energy + service", () => {
@@ -276,9 +283,9 @@ describe("buildBillingPeriodCsv — VAT/tax derivation", () => {
     );
     const cols = parseLines(csv)[1].split(",");
     // energy = 25000 + 24000 = 49000, +service 5000 = 54000 taxable, VAT empty
-    expect(cols[16]).toBe("5000"); // service charge
-    expect(cols[17]).toBe("54000"); // taxable subtotal = energy + service
-    expect(cols[18]).toBe(""); // VAT empty (not zero)
+    expect(cols[17]).toBe("5000"); // service charge (#232: shifted +1)
+    expect(cols[18]).toBe("54000"); // taxable subtotal = energy + service
+    expect(cols[19]).toBe(""); // VAT empty (not zero)
   });
 
   it("VAT rate_pct=0 → VAT cell EMPTY (treated as disabled)", () => {
@@ -289,7 +296,7 @@ describe("buildBillingPeriodCsv — VAT/tax derivation", () => {
       }),
     );
     const cols = parseLines(csv)[1].split(",");
-    expect(cols[18]).toBe("");
+    expect(cols[19]).toBe("");
   });
 
   it("ANTI-TEST: VAT does NOT come from rateSchedule.tax_rate — only from invoiceConfig.tax.rate_pct", () => {
@@ -305,10 +312,10 @@ describe("buildBillingPeriodCsv — VAT/tax derivation", () => {
       }),
     );
     const cols = parseLines(csv)[1].split(",");
-    expect(cols[17]).toBe("44545"); // taxable @ 10% not 20%
-    expect(cols[18]).toBe("4455"); // VAT @ 10% not 20%
+    expect(cols[18]).toBe("44545"); // taxable @ 10% not 20% (#232: shifted +1)
+    expect(cols[19]).toBe("4455"); // VAT @ 10% not 20%
     // Sanity: NOT the value that would result from tax_rate=0.20
-    expect(cols[18]).not.toBe("8167");
+    expect(cols[19]).not.toBe("8167");
   });
 });
 
@@ -366,8 +373,9 @@ describe("buildBillingPeriodCsv — null fields", () => {
     const cols = parseLines(csv)[1].split(",");
     expect(cols[0]).toBe(""); // invoice number
     expect(cols[3]).toBe(""); // account number
-    expect(cols[4]).toBe(""); // meter ID
-    expect(cols[8]).toBe(""); // phone
+    expect(cols[4]).toBe(""); // OpenEMS Meter ID
+    expect(cols[5]).toBe(""); // Meter Serial (#232: new column, NULL → empty cell, NOT "null")
+    expect(cols[9]).toBe(""); // phone (#232: shifted +1 from index 8)
   });
 });
 
@@ -402,7 +410,7 @@ describe("buildBillingPeriodCsv — Address composition", () => {
     });
     const csv = buildBillingPeriodCsv(makeInput({ rows: [row] }));
     const cols = parseLines(csv)[1].split(",");
-    expect(cols[7]).toBe(""); // Address index
+    expect(cols[8]).toBe(""); // Address index (#232: shifted +1 from 7)
   });
 
   it("blank-only address fields (whitespace) are filtered out", () => {
@@ -515,5 +523,147 @@ describe("buildCsvFilename", () => {
         endDate: "2026-04-30",
       }),
     ).toBe("sezibwa-billing-period-2026-04-01-to-2026-04-30.csv");
+  });
+});
+
+// ── #232: column rename + Meter Serial + display-side rounding ───────────────
+
+describe("buildBillingPeriodCsv — #232 OpenEMS Meter ID rename + Meter Serial column", () => {
+  it("renames the meter-ID header from 'Meter ID' to 'OpenEMS Meter ID'", () => {
+    const csv = buildBillingPeriodCsv(makeInput());
+    const header = parseLines(csv)[0].split(",");
+    expect(header).toContain("OpenEMS Meter ID");
+    expect(header).not.toContain("Meter ID");
+  });
+
+  it("inserts 'Meter Serial' immediately after 'OpenEMS Meter ID'", () => {
+    const csv = buildBillingPeriodCsv(makeInput());
+    const header = parseLines(csv)[0].split(",");
+    const meterIdIdx = header.indexOf("OpenEMS Meter ID");
+    expect(meterIdIdx).toBe(4);
+    expect(header[meterIdIdx + 1]).toBe("Meter Serial");
+  });
+
+  it("non-null meter_serial flows to data-row column index 5", () => {
+    const row = makeRow({
+      household: { ...makeRow().household, meter_serial: "MS-001" },
+    });
+    const csv = buildBillingPeriodCsv(makeInput({ rows: [row] }));
+    const cols = parseLines(csv)[1].split(",");
+    expect(cols[5]).toBe("MS-001");
+  });
+
+  it("null meter_serial → empty cell at index 5 (NOT 'null')", () => {
+    const row = makeRow({
+      household: { ...makeRow().household, meter_serial: null },
+    });
+    const csv = buildBillingPeriodCsv(makeInput({ rows: [row] }));
+    const cols = parseLines(csv)[1].split(",");
+    expect(cols[5]).toBe("");
+    expect(csv).not.toMatch(/\bnull\b/);
+  });
+});
+
+describe("buildBillingPeriodCsv — #232 display-side rounding masks float-dust", () => {
+  it("dusty Tier 2 / Usage / Total stored values serialize clean (Arthur / Peter fixtures)", () => {
+    // Composite fixture mirroring the dust patterns from the issue.
+    const dustyRow = makeRow({
+      household: { ...makeRow().household, display_name: "Dusty Row" },
+      lineItem: {
+        ...makeRow().lineItem,
+        start_kwh: 83.57,
+        end_kwh: 261.92,
+        usage_kwh: 178.35000000000002,
+        tier_breakdown: [
+          { label: "Tier 1", kwh: 50, amount: 25000 },
+          // Arthur's dust: tiny non-zero kWh + sub-integer UGX
+          { label: "Tier 2", kwh: 0.11700000000000088, amount: 88.47540000000068 },
+        ],
+        total_amount: 10807.000972000002,
+      },
+    });
+    const csv = buildBillingPeriodCsv(makeInput({ rows: [dustyRow] }));
+    const cols = parseLines(csv)[1].split(",");
+
+    // Usage kWh @ index 12 (#232: shifted +1 from 11) — roundKwh emits
+    // raw `String(178.35)` with no trailing-zero pad.
+    expect(cols[12]).toBe("178.35");
+
+    // Tier 1 @ indices 13/14 (clean inputs — no padding).
+    expect(cols[13]).toBe("50");
+    expect(cols[14]).toBe("25000");
+
+    // Tier 2 @ indices 15/16 — dusty `0.117…088` rounds to `0.117`;
+    // dusty `88.4754…068` rounds to `88` (UGX is integer).
+    expect(cols[15]).toBe("0.117");
+    expect(cols[16]).toBe("88");
+
+    // Total @ index 20 (#232: shifted +1 from 19) — `10807.000972…`
+    // rounds to integer `10807`.
+    expect(cols[20]).toBe("10807");
+  });
+
+  it("ANTI-TEST (idempotency): already-clean inputs do NOT pick up toFixed-style trailing zeros", () => {
+    // `roundKwh(50) === 50` → `csvCell(50) === "50"` (NOT "50.000")
+    // `roundAmount(25000) === 25000` → `csvCell(25000) === "25000"`
+    const cleanRow = makeRow({
+      lineItem: {
+        ...makeRow().lineItem,
+        start_kwh: 100,
+        end_kwh: 200,
+        usage_kwh: 100,
+        tier_breakdown: [{ label: "Tier 1", kwh: 50, amount: 25000 }],
+        total_amount: 25000,
+      },
+    });
+    const csv = buildBillingPeriodCsv(makeInput({ rows: [cleanRow] }));
+    const cols = parseLines(csv)[1].split(",");
+    expect(cols[10]).toBe("100"); // Begin kWh — NOT "100.000"
+    expect(cols[11]).toBe("200"); // End kWh
+    expect(cols[12]).toBe("100"); // Usage kWh
+    expect(cols[13]).toBe("50"); // Tier 1 kWh — NOT "50.000"
+    expect(cols[14]).toBe("25000"); // Tier 1 UGX
+    expect(cols[18]).toBe("25000"); // Taxable Subtotal
+    expect(cols[20]).toBe("25000"); // Total
+  });
+
+  it("NULL passthrough: start_kwh=null serializes as empty cell, NOT '0'", () => {
+    // The dangerous path: `roundKwh(null) === Math.round(null * 1000) / 1000 === 0`.
+    // The serializer's null-guard ternary preserves the empty-cell
+    // contract (NULL means "no reading taken", not "zero kWh").
+    const nullKwhRow = makeRow({
+      lineItem: {
+        ...makeRow().lineItem,
+        start_kwh: null,
+        end_kwh: null,
+        usage_kwh: null,
+      },
+    });
+    const csv = buildBillingPeriodCsv(makeInput({ rows: [nullKwhRow] }));
+    const cols = parseLines(csv)[1].split(",");
+    // Begin/End/Usage at indices 10/11/12 (#232).
+    expect(cols[10]).toBe("");
+    expect(cols[11]).toBe("");
+    expect(cols[12]).toBe("");
+  });
+
+  it("service charge with float-dust rounds once at initialization", () => {
+    // `service_charge = 4999.999999` should serialize as `"5000"` and
+    // also propagate cleanly into the taxable subtotal.
+    const csv = buildBillingPeriodCsv(
+      makeInput({
+        invoiceConfig: { tax: { show_section: false, rate_pct: 0 } },
+        rateSchedule: {
+          tiers: TIERS_2,
+          service_charge: 4999.999999,
+          tax_rate: 0,
+        },
+        rows: [makeRow()],
+      }),
+    );
+    const cols = parseLines(csv)[1].split(",");
+    expect(cols[17]).toBe("5000"); // service charge — rounded
+    // energy = 25000 + 24000 = 49000, +service 5000 = 54000.
+    expect(cols[18]).toBe("54000");
   });
 });
