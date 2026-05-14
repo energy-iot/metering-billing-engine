@@ -117,6 +117,25 @@ export function BillingTable({
 
   const isDraft = period.status === "draft";
 
+  // #229 — CSV export download trigger. Colocated (not extracted to a
+  // shared util) because both call sites — the close-dialog button and
+  // the persistent "Export CSV" header button — live in this file. A
+  // 6-line helper module with one consumer would be over-extraction.
+  //
+  // Mirrors the PDF1b / #205 / #222 pattern: programmatic anchor click
+  // WITHOUT a `download` attribute. The route's
+  // `Content-Disposition: attachment; filename="…"` drives the
+  // filename; leaving `download` off lets the browser honor that
+  // server-provided name verbatim.
+  function triggerCsvDownload(periodId: string) {
+    const a = document.createElement("a");
+    a.href = `/api/billing-periods/${periodId}/export-csv`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   // Build householdId -> lineItem map
   const lineItemMap = new Map<string, BillingLineItem>();
   for (const item of lineItems) {
@@ -681,6 +700,7 @@ export function BillingTable({
         summaryRows={closePeriodSummaryRows}
         grandTotal={grandTotal}
         onConfirm={handleClose}
+        onExportCsv={() => triggerCsvDownload(period.id)}
         unfilledHouseholdNames={unfilledHouseholdNames}
       />
 
@@ -761,6 +781,33 @@ export function BillingTable({
             >
               View history
             </Link>
+            {/* #229 — persistent CSV export. Always rendered (draft +
+                closed); the close-success dialog retains its "Export
+                CSV for URA" button as a URA-filing-focused surface,
+                while this header button serves all use cases (preview
+                drafts, re-download, share with team). Disabled with a
+                tooltip when there is no data to export. */}
+            {(() => {
+              const exportDisabled =
+                households.length === 0 || lineItems.length === 0;
+              const exportTooltip =
+                households.length === 0
+                  ? "No households to export"
+                  : lineItems.length === 0
+                    ? "Generate readings before exporting"
+                    : undefined;
+              return (
+                <button
+                  type="button"
+                  onClick={() => triggerCsvDownload(period.id)}
+                  disabled={exportDisabled}
+                  title={exportTooltip}
+                  className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Export CSV
+                </button>
+              );
+            })()}
             {isDraft && (
               <>
                 <button

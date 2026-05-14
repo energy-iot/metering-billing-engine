@@ -563,6 +563,178 @@ describe("BillingTable", () => {
     expect(kebabs.length).toBe(3);
   });
 
+  // ── #229: Export CSV button + close-dialog wiring ────────────────────────
+  describe("Export CSV (#229)", () => {
+    function setupAnchorSpy() {
+      // Spy on document.createElement so we can intercept the
+      // programmatic <a> the helper builds + clicks.
+      const origCreateElement = document.createElement.bind(document);
+      const lastAnchor: { href?: string; clicked?: boolean } = {};
+      const spy = vi
+        .spyOn(document, "createElement")
+        .mockImplementation((tagName: string) => {
+          const el = origCreateElement(tagName as "a") as HTMLElement;
+          if (tagName === "a") {
+            const a = el as HTMLAnchorElement;
+            const origClick = a.click.bind(a);
+            a.click = () => {
+              lastAnchor.href = a.href;
+              lastAnchor.clicked = true;
+              // Don't actually navigate in jsdom.
+              try {
+                origClick();
+              } catch {
+                /* jsdom may throw on navigation */
+              }
+            };
+          }
+          return el;
+        });
+      return { lastAnchor, restore: () => spy.mockRestore() };
+    }
+
+    it("persistent header button renders on closed AND draft periods", () => {
+      const closedPeriod: BillingPeriod = {
+        ...period,
+        status: "closed",
+        closed_at: "2026-04-01T00:00:00Z",
+      };
+      const { rerender, container } = render(
+        <Wrapper>
+          <BillingTable {...baseProps} period={closedPeriod} />
+        </Wrapper>,
+      );
+      let btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Export CSV",
+      );
+      expect(btn).toBeDefined();
+
+      rerender(
+        <Wrapper>
+          <BillingTable {...baseProps} />
+        </Wrapper>,
+      );
+      btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Export CSV",
+      );
+      expect(btn).toBeDefined();
+    });
+
+    it("clicking the persistent button triggers /api/billing-periods/<id>/export-csv navigation", () => {
+      const { lastAnchor, restore } = setupAnchorSpy();
+      try {
+        const { container } = render(
+          <Wrapper>
+            <BillingTable {...baseProps} />
+          </Wrapper>,
+        );
+        const btn = Array.from(container.querySelectorAll("button")).find(
+          (b) => b.textContent?.trim() === "Export CSV",
+        )!;
+        expect(btn).toBeDefined();
+        fireEvent.click(btn);
+        expect(lastAnchor.clicked).toBe(true);
+        expect(lastAnchor.href).toContain(
+          `/api/billing-periods/${period.id}/export-csv`,
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("disabled with 'Generate readings before exporting' tooltip when lineItems.length === 0 (but households exist)", () => {
+      const { container } = render(
+        <Wrapper>
+          <BillingTable {...baseProps} lineItems={[]} />
+        </Wrapper>,
+      );
+      const btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Export CSV",
+      ) as HTMLButtonElement;
+      expect(btn).toBeDefined();
+      expect(btn.disabled).toBe(true);
+      expect(btn.title).toBe("Generate readings before exporting");
+    });
+
+    it("disabled with 'No households to export' tooltip when households.length === 0", () => {
+      const { container } = render(
+        <Wrapper>
+          <BillingTable {...baseProps} households={[]} lineItems={[]} />
+        </Wrapper>,
+      );
+      const btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Export CSV",
+      ) as HTMLButtonElement;
+      expect(btn).toBeDefined();
+      expect(btn.disabled).toBe(true);
+      expect(btn.title).toBe("No households to export");
+    });
+
+    it("close-dialog's 'Export CSV for URA' button invokes onExportCsv which triggers /api/.../export-csv navigation", async () => {
+      const { lastAnchor, restore } = setupAnchorSpy();
+      try {
+        // Render the dialog directly with the prop wired the same way
+        // BillingTable wires it. Avoids exercising the full close flow.
+        const { ClosePeriodDialog } = await import(
+          "../ui/close-period-dialog"
+        );
+        const onExportCsv = vi.fn(() => {
+          // Mirror BillingTable's triggerCsvDownload call.
+          const a = document.createElement("a");
+          a.href = `/api/billing-periods/${period.id}/export-csv`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+        render(
+          <ClosePeriodDialog
+            open
+            onOpenChange={() => {}}
+            periodLabel="March 2026"
+            summaryRows={[]}
+            grandTotal={0}
+            onConfirm={async () => {}}
+            onExportCsv={onExportCsv}
+          />,
+        );
+        // Radix portals into document.body; query against document, not container.
+        const queryButtonByText = (text: RegExp) =>
+          Array.from(document.querySelectorAll("button")).find((b) =>
+            text.test(b.textContent ?? ""),
+          );
+        // The dialog opens at phase=2; tick the checkbox + click "Close
+        // period" to advance to phase=3 where the export CSV button is
+        // shown.
+        const checkbox = document.querySelector(
+          "input[type='checkbox']",
+        ) as HTMLInputElement;
+        expect(checkbox).toBeTruthy();
+        fireEvent.click(checkbox);
+        const closeBtn = queryButtonByText(/^Close period$/) as
+          | HTMLButtonElement
+          | undefined;
+        expect(closeBtn).toBeTruthy();
+        await act(async () => {
+          closeBtn!.click();
+        });
+        await waitFor(() => {
+          expect(queryButtonByText(/^Export CSV for URA$/)).toBeTruthy();
+        });
+        const exportBtn = queryButtonByText(
+          /^Export CSV for URA$/,
+        ) as HTMLButtonElement;
+        fireEvent.click(exportBtn);
+        expect(onExportCsv).toHaveBeenCalledTimes(1);
+        expect(lastAnchor.clicked).toBe(true);
+        expect(lastAnchor.href).toContain(
+          `/api/billing-periods/${period.id}/export-csv`,
+        );
+      } finally {
+        restore();
+      }
+    });
+  });
+
   // ── #221 regression-guard ────────────────────────────────────────────────
   //
   // BillingTable.tsx:604-609 hand-builds the lineItem prop forwarded to
