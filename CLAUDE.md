@@ -160,6 +160,35 @@ Five rules every contributor must follow:
 
 6. **Picker / empty-state mutual exclusion:** When a list surface has both a switcher control (e.g. `<PeriodPicker>`) and an `<EmptyState>`, the switcher MUST NOT render when its underlying collection is empty. The empty-state owns the create CTA at zero; the switcher owns the create CTA at ≥1. Switchers must not include their own internal "no items" empty-state branch — that responsibility belongs to the parent surface, where the canonical first-run pedagogy copy lives. Additionally, when an inline create form is open, the parent's `<EmptyState>` must hide so the form is the sole CTA on screen; the form itself must include a `Cancel` action so the user has an escape hatch back to the empty-state.
 
+## Required Merge Controls
+
+`main` is protected by the `require-DCO` ruleset (visible at https://github.com/energy-iot/metering-billing-engine/rules; `bypass_actors: []`, `current_user_can_bypass: never` — even repo admins cannot use `gh pr merge --admin` to bypass). Every PR must pass ALL of the following before merge:
+
+1. **DCO** — every commit ends with `Signed-off-by: Your Name <email>`. Use `git commit -s`.
+2. **`required_signatures` (cryptographic)** — every commit must be GPG- or SSH-signed. DCO is a text trailer; `required_signatures` is a separate cryptographic guarantee. One-time per-machine setup:
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_signing -C "<your-email>"
+   git config --global gpg.format ssh
+   git config --global user.signingkey ~/.ssh/id_ed25519_signing.pub
+   git config --global commit.gpgsign true
+   git config --global tag.gpgsign true
+   ```
+   Then upload `~/.ssh/id_ed25519_signing.pub` at github.com → Settings → SSH and GPG keys → "New SSH key" with **Key type: Signing Key**. After setup, every `git commit` carries an "SSH" signature and GitHub shows the "Verified" badge.
+3. **`CodeQL` status check** — `.github/workflows/codeql.yml` runs `github/codeql-action` on every PR + push to main. The check name `CodeQL` MUST match the workflow job name; do NOT rename or add a matrix-suffix.
+4. **`Vercel` preview deploy** passes (build succeeds + preview URL provisioned).
+5. **`non_fast_forward` + `deletion` protection** — `main` cannot be force-pushed or deleted.
+
+**Bypass path** (genuine emergencies only — Aaron-blocking production hotfixes when the rules themselves are mis-configured):
+- Temporarily PATCH the ruleset to `enforcement: disabled`, merge, re-enable to `active`:
+  ```bash
+  gh api -X PUT repos/energy-iot/metering-billing-engine/rulesets/15518390 -f enforcement=disabled --silent
+  # ... merge ...
+  gh api -X PUT repos/energy-iot/metering-billing-engine/rulesets/15518390 -f enforcement=active --silent
+  ```
+- Use sparingly; log the bypass reason in the PR description.
+
+**For agents you delegate**: every implementer prompt MUST instruct the agent to `git commit -s` AND to commit with the user's existing signing config (no setup work — assume signing is already configured per the one-time setup above; the agent's commit inherits config from `~/.gitconfig`). If the agent's commit doesn't get a "Verified" badge, the user's signing setup needs attention — flag it before pushing.
+
 ## Local Dev Setup
 
 See `docs/setup.md` for three modes:
