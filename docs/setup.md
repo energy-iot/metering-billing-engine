@@ -177,6 +177,13 @@ The RLS test suite (`src/lib/supabase/__tests__/rls.test.ts`) verifies that Row 
 policies correctly constrain cross-tenant access. These tests **require a running local Supabase CLI
 instance** — they never run against cloud Supabase to prevent polluting shared data.
 
+### Prerequisites
+
+- **Local Supabase CLI** running (`supabase start`).
+- **`psql` on PATH** — required by `dek-bootstrap.test.ts`. Install with
+  `sudo apt install postgresql-client` (Debian/Ubuntu) or `brew install libpq` (macOS).
+  The suite skips cleanly if `psql` is missing.
+
 ### Running RLS tests
 
 ```bash

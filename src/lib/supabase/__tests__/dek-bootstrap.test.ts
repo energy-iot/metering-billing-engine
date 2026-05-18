@@ -37,6 +37,22 @@ function shouldSkip(): boolean {
   return process.env.SKIP_DEK_BOOTSTRAP_TEST === "1";
 }
 
+/**
+ * Probes whether `psql` is on PATH. The DEK bootstrap test shells out to
+ * `psql` directly to set/reset the `app.allow_dev_dek` GUC at the database
+ * level. On hosts without postgresql-client installed (e.g. some WSL2 dev
+ * machines), the spawn fails with ENOENT. CI is unaffected — Ubuntu runners
+ * have psql preinstalled. See #242.
+ */
+function hasPsql(): boolean {
+  try {
+    execFileSync("psql", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 /**
@@ -97,6 +113,20 @@ describe("DEK bootstrap hardening (#107, migration 00025)", () => {
     if (shouldSkip()) {
       console.log(
         "[dek-bootstrap] SKIP_DEK_BOOTSTRAP_TEST=1 — skipping suite."
+      );
+      skipped = true;
+      return;
+    }
+
+    // Preflight: psql must be on PATH. The two tests below shell out to
+    // `psql` to manage the `app.allow_dev_dek` GUC; without it we'd get a
+    // confusing ENOENT mid-test. Skip cleanly with an actionable hint.
+    if (!hasPsql()) {
+      console.log(
+        "[dek-bootstrap] psql not found on PATH — skipping suite.\n" +
+          "Install with: sudo apt install postgresql-client (Debian/Ubuntu)\n" +
+          "          or: brew install libpq (macOS)\n" +
+          "Or set SKIP_DEK_BOOTSTRAP_TEST=1 to bypass explicitly."
       );
       skipped = true;
       return;
