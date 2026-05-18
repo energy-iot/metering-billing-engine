@@ -69,6 +69,7 @@ RLS tests (`src/lib/supabase/__tests__/rls.test.ts`) require:
 3. **Seed loaded** — run `supabase db reset` once after `supabase start`
 
 Set `SKIP_RLS_TESTS=1` to bypass RLS tests when local Supabase is not available (e.g. CI without Docker).
+Set `SKIP_DEK_BOOTSTRAP_TEST=1` to additionally bypass the DEK bootstrap suite (`src/lib/supabase/__tests__/dek-bootstrap.test.ts`) — same "needs local Supabase" pattern but its own guard. Both flags are typically set together when running tests without a local Supabase.
 Missing env vars without `SKIP_RLS_TESTS=1` fail loudly — this is intentional.
 
 See `docs/setup.md § "RLS Tests"` for full instructions.
