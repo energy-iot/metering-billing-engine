@@ -242,7 +242,7 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
     expect(events?.[0]?.source).toBe("generate_link");
   });
 
-  it.skip("fn_apply_payment_event: ipn link_generated → paid succeeds and writes paid_at + audit row [SKIPPED — blocked on #243: fn_apply_payment_event violates audit-fields constraint on IPN paths with NULL actor]", async () => {
+  it("fn_apply_payment_event: ipn link_generated → paid succeeds and writes paid_at + audit row", async () => {
     const svc = await serviceClient();
 
     const { error } = await svc.rpc("fn_apply_payment_event", {
@@ -263,7 +263,7 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
     expect(row?.paid_at).toBeTruthy();
   });
 
-  it.skip("fn_apply_payment_event: idempotent re-delivery within 60s does NOT append a duplicate audit row [SKIPPED — blocked on #243]", async () => {
+  it("fn_apply_payment_event: idempotent re-delivery within 60s does NOT append a duplicate audit row", async () => {
     const svc = await serviceClient();
 
     const { count: countBefore } = await svc
@@ -293,7 +293,7 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
     expect(countAfter).toBe(countBefore);
   });
 
-  it.skip("fn_apply_payment_event: ipn rejects refunded → paid (invalid_transition) [SKIPPED — blocked on #243]", async () => {
+  it("fn_apply_payment_event: ipn rejects refunded → paid (invalid_transition)", async () => {
     const svc = await serviceClient();
 
     // First make lineItemB go through unpaid → link_generated → paid → refunded.
