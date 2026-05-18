@@ -176,8 +176,9 @@ Five rules every contributor must follow:
    ```
    Then upload `~/.ssh/id_ed25519_signing.pub` at github.com → Settings → SSH and GPG keys → "New SSH key" with **Key type: Signing Key**. After setup, every `git commit` carries an "SSH" signature and GitHub shows the "Verified" badge.
 3. **`CodeQL` status check** — `.github/workflows/codeql.yml` runs `github/codeql-action` on every PR + push to main. The check name `CodeQL` MUST match the workflow job name; do NOT rename or add a matrix-suffix.
-4. **`Vercel` preview deploy** passes (build succeeds + preview URL provisioned).
-5. **`non_fast_forward` + `deletion` protection** — `main` cannot be force-pushed or deleted.
+4. **`Test` status check** — `.github/workflows/test.yml` runs `npm ci` → `npx tsc --noEmit` → `npm run lint` → `npm test` (with `SKIP_RLS_TESTS=1` and `SKIP_DEK_BOOTSTRAP_TEST=1`) on every PR + push to main. The check name `Test` MUST match the workflow job name; do NOT rename or add a matrix-suffix. RLS / DEK bootstrap suites stay skipped here — running them requires `supabase start` (Docker) + seed + `SUPABASE_JWT_SECRET`; tracked as a follow-up to #236.
+5. **`Vercel` preview deploy** passes (build succeeds + preview URL provisioned).
+6. **`non_fast_forward` + `deletion` protection** — `main` cannot be force-pushed or deleted.
 
 **Bypass path** (genuine emergencies only — Aaron-blocking production hotfixes when the rules themselves are mis-configured):
 - Temporarily PATCH the ruleset to `enforcement: disabled`, merge, re-enable to `active`:
