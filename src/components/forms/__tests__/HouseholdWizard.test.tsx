@@ -853,9 +853,11 @@ describe("HouseholdWizard", () => {
       expect(
         screen.queryByRole("button", { name: /Create household/i })
       ).toBeNull();
-      // Next is enabled
-      const next = screen.getByRole("button", { name: /^Next$/ });
-      expect(next).toHaveProperty("disabled", false);
+      // Next is enabled (wrapped in waitFor — the enable transition is async after Save & select)
+      await waitFor(() => {
+        const next = screen.getByRole("button", { name: /^Next$/ });
+        expect(next).toHaveProperty("disabled", false);
+      });
     });
 
     it("empty discovery (no consumption meters after filter) renders the no-meters message", async () => {
@@ -1185,10 +1187,13 @@ describe("HouseholdWizard", () => {
 
       // Advance to step 4 — preserved values must show in the review.
       fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: /Create household/i })
-        ).toBeDefined()
+      // Use findByRole with an extended timeout: the step-4 render follows
+      // 4 step transitions + the fetch-mock dance, and the default 1s
+      // waitFor occasionally races on contended CI/local runs.
+      await screen.findByRole(
+        "button",
+        { name: /Create household/i },
+        { timeout: 5000 }
       );
       // Display name and phone preserved on the review panel.
       expect(screen.getByText("My Household")).toBeDefined();

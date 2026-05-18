@@ -1,0 +1,50 @@
+name: Test
+
+# Test gate. Runs on every PR + push to main. Required by the
+# repository's "require-DCO" ruleset (status check name: "Test"). The
+# job's name below MUST stay as "Test" so the required-check context
+# resolves; do NOT add a matrix-suffix or rename.
+#
+# Skip flags (SKIP_RLS_TESTS, SKIP_DEK_BOOTSTRAP_TEST) bypass the
+# Supabase-dependent suites — running them here would require
+# `supabase start` (Docker) + seed + JWT secret. Tracked as a follow-up
+# to issue #236.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Tighten default token permissions; explicitly grant only what's required.
+permissions:
+  contents: read
+
+jobs:
+  Test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - run: npm run lint
+
+      - run: npm test
+        env:
+          SKIP_RLS_TESTS: '1'
+          SKIP_DEK_BOOTSTRAP_TEST: '1'
