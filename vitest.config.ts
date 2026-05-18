@@ -15,6 +15,11 @@ export default defineConfig({
           name: "components",
           include: ["src/components/**/*.test.{ts,tsx}"],
           environment: "jsdom",
+          // Multi-step wizard tests walk through 3-4 steps via
+          // fireEvent + waitFor; the default 5s testTimeout occasionally
+          // races under CI/local contention. 15s headroom — a legitimately
+          // deadlocked test still fails fast.
+          testTimeout: 15_000,
         },
       },
       {
