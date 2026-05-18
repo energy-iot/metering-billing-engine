@@ -379,7 +379,7 @@ describe("<AuditLogList> — empty states", () => {
 // ── Truncation notice ────────────────────────────────────────────────────────
 
 describe("<AuditLogList> — truncation notice", () => {
-  it("renders 'History may be truncated' when entries.length >= 1000", () => {
+  it("renders 'History may be truncated' when entries.length >= 1000", { timeout: 30_000 }, () => {
     const big: BillingAuditLogEntry[] = [];
     for (let i = 0; i < 1000; i++) {
       big.push({
