@@ -46,6 +46,7 @@
     "jose": "^6.2.2",
     "jsdom": "^29.0.2",
     "pdf-parse": "^2.4.5",
+    "supabase": "^2.98.2",
     "tailwindcss": "^4",
     "typescript": "5.9.3",
     "vitest": "^4.0.18"
