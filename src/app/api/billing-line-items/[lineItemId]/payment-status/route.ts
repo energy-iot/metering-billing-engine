@@ -218,9 +218,13 @@ export async function PATCH(
     throw err;
   }
 
-  // 5. Session guard: paid / refunded require a non-null actor for the audit
-  //    invariant (the SQL CHECK constraint requires paid_by_user_id when
-  //    status is 'paid' / 'refunded'). Surface a 401 actionable message.
+  // 5. Session guard: paid / refunded via the manual-mark route require a
+  //    non-null actor. This is the route-level defense-in-depth gate; the SQL
+  //    CHECK constraint was relaxed in #243 (Pesapal IPN has no human actor),
+  //    so the DB no longer enforces "paid rows have paid_by_user_id". The
+  //    audit source-of-truth is now payment_events (source + actor_user_id
+  //    per event). For the manual-mark path we still require an authenticated
+  //    user — IPN goes through src/app/api/payments/ipn/route.ts instead.
   if (
     (parsed.status === "paid" || parsed.status === "refunded") &&
     !actorUserId
