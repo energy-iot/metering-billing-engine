@@ -28,8 +28,8 @@ export async function POST(request: NextRequest) {
   if (typeof rec.end_date !== "string" || !DATE_RE.test(rec.end_date)) {
     return NextResponse.json({ error: "end_date must be YYYY-MM-DD" }, { status: 400 });
   }
-  if (rec.start_date >= rec.end_date) {
-    return NextResponse.json({ error: "end_date must be after start_date" }, { status: 400 });
+  if (rec.start_date > rec.end_date) {
+    return NextResponse.json({ error: "end_date must be on or after start_date" }, { status: 400 });
   }
 
   const supabase = createServiceClient();
