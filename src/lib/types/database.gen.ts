@@ -36,6 +36,8 @@ export type Database = {
     Tables: {
       billing_audit_log: {
         Row: {
+          actor_kind: string
+          actor_ref: string | null
           actor_user_id: string | null
           billing_line_item_id: string | null
           billing_period_id: string
@@ -45,6 +47,8 @@ export type Database = {
           id: string
         }
         Insert: {
+          actor_kind?: string
+          actor_ref?: string | null
           actor_user_id?: string | null
           billing_line_item_id?: string | null
           billing_period_id: string
@@ -54,6 +58,8 @@ export type Database = {
           id?: string
         }
         Update: {
+          actor_kind?: string
+          actor_ref?: string | null
           actor_user_id?: string | null
           billing_line_item_id?: string | null
           billing_period_id?: string
@@ -737,6 +743,8 @@ export type Database = {
       }
       payment_events: {
         Row: {
+          actor_kind: string
+          actor_ref: string | null
           actor_user_id: string | null
           at: string
           from_status:
@@ -749,6 +757,8 @@ export type Database = {
           to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
         }
         Insert: {
+          actor_kind?: string
+          actor_ref?: string | null
           actor_user_id?: string | null
           at?: string
           from_status?:
@@ -761,6 +771,8 @@ export type Database = {
           to_status: Database["public"]["Enums"]["billing_line_item_payment_status"]
         }
         Update: {
+          actor_kind?: string
+          actor_ref?: string | null
           actor_user_id?: string | null
           at?: string
           from_status?:
@@ -970,6 +982,8 @@ export type Database = {
     Functions: {
       fn_apply_payment_event: {
         Args: {
+          _actor_kind?: string
+          _actor_ref?: string
           _actor_user_id: string
           _line_item_id: string
           _raw_payload: Json
@@ -1090,6 +1104,8 @@ export type Database = {
       }
       fn_record_line_item_with_audit: {
         Args: {
+          _actor_kind?: string
+          _actor_ref?: string
           _actor_user_id: string
           _audit_details: Json
           _billing_period_id: string
@@ -1158,6 +1174,10 @@ export type Database = {
         | "period_closed"
         | "line_item_generated"
         | "line_item_regenerated"
+        | "billing_period_created"
+        | "token_generated"
+        | "token_revoked"
+        | "token_regenerated"
       billing_line_item_payment_status:
         | "unpaid"
         | "paid"
@@ -1320,6 +1340,10 @@ export const Constants = {
         "period_closed",
         "line_item_generated",
         "line_item_regenerated",
+        "billing_period_created",
+        "token_generated",
+        "token_revoked",
+        "token_regenerated",
       ],
       billing_line_item_payment_status: [
         "unpaid",

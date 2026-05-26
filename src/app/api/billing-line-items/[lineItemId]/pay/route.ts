@@ -114,8 +114,15 @@ export async function GET(
   let result;
   try {
     result = await ensurePaymentLinkForLineItem(supabase, lineItemId, {
-      // Public endpoint — no session, no auth.uid().
+      // Public endpoint — no session, no auth.uid(). The audit row is
+      // recorded as system-attributed (#250 / migration 00041): the
+      // `actor_kind='system' + actor_ref='tenant_pay_redirect'` shape
+      // satisfies the new `payment_events_actor_consistency` CHECK and
+      // tells the audit reader "this transition originated from the
+      // consumer-facing /pay redirect, not an operator click."
       actorUserId: null,
+      actorKind: "system",
+      actorRef: "tenant_pay_redirect",
     });
   } catch (err) {
     return handleError(err, {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkInternalApiKey, CUSTOMERAPP_ACTOR_ID } from "@/lib/internal-auth";
+import { checkInternalApiKey } from "@/lib/internal-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { runGenerationFor, isRunGenerationFatal } from "@/lib/billing/generate";
 
@@ -67,12 +67,22 @@ export async function POST(request: NextRequest) {
 
   const supabase = createServiceClient();
 
+  // SIGNATURE NOTE: `fn_record_line_item_with_audit` was widened in #250
+  // (actor_kind, actor_ref) — see `src/lib/billing/generate.ts` for the
+  // full rationale + PostgREST overload-resolution caveat.
+  //
+  // PLACEHOLDER: actor_ref will become the per-org token name when #255
+  // lands (Wave B). Until then, we stamp `'pre-token-system'` so audit
+  // rows are still traceable to "this came from the customerapp internal
+  // route, before token-based auth was wired in".
   const out = await runGenerationFor({
     supabase,
     periodId: rec.billingPeriodId,
     manualReadings,
     mode: "write",
-    actorUserId: CUSTOMERAPP_ACTOR_ID,
+    actorUserId: null,
+    actorKind: "customerapp",
+    actorRef: "pre-token-system",
   });
 
   if (isRunGenerationFatal(out)) {

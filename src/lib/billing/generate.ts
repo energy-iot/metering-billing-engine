@@ -48,6 +48,14 @@ import "server-only";
  * period's microgrid is surfaced in `errors[]` with `code: 'unknown_household'`
  * and dropped before any RPC call. RLS would also reject the write, but
  * failing fast at the route is clearer + saves a round-trip.
+ *
+ * ── INVARIANT (added 2026-05 with #250) ────────────────────────────────────
+ *
+ * With service-role callers (via `/api/internal/*`), RLS does NOT backstop
+ * the cross-microgrid check above — it is the SOLE defense against
+ * cross-microgrid household submission. Do NOT delete on the assumption
+ * that RLS will catch it; RLS only fires for user-bound clients. See PR
+ * #246 review + #250 ticket body for the original reasoning.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -136,8 +144,22 @@ export type RunGenerationParams = {
   manualReadings?: ManualReadingInput[];
   mode: GenerationMode;
   /** Resolved `auth.uid()` from the route's session. Required when
-   *  mode='write' (passed to RPC as actor + entered_by_user_id for manual). */
+   *  mode='write' (passed to RPC as actor + entered_by_user_id for manual).
+   *
+   *  For non-human callers (customerapp via `/api/internal/*`, future
+   *  cron jobs, etc.) pass `null` and set `actorKind` + `actorRef`. The
+   *  DB CHECK on `billing_audit_log` enforces the (kind, user_id, ref)
+   *  shape (see migration 00041 / #250). */
   actorUserId: string | null;
+  /** Defaults to `'human'` for backwards compatibility with all existing
+   *  in-app callers (the dashboard routes). `'customerapp'` is set by
+   *  `/api/internal/*` routes; `'system'` by webhook ingestors.
+   *  See migration 00041 (#250). */
+  actorKind?: "human" | "customerapp" | "system";
+  /** Opaque caller-supplied identifier — token name for customerapp,
+   *  source key (e.g. `'pesapal_ipn'`) for system. Required by DB CHECK
+   *  whenever `actorKind != 'human'`. */
+  actorRef?: string | null;
 };
 
 export type RunGenerationFatal =
@@ -206,6 +228,8 @@ export async function runGenerationFor(
   params: RunGenerationParams
 ): Promise<RunGenerationOutput> {
   const { supabase, periodId, mode, actorUserId } = params;
+  const actorKind = params.actorKind ?? "human";
+  const actorRef = params.actorRef ?? null;
   const householdIdsParam = params.householdIds;
   const manualReadingsParam = params.manualReadings ?? [];
 
@@ -696,6 +720,11 @@ export async function runGenerationFor(
         : {}),
     };
 
+    // SIGNATURE NOTE: this RPC's signature was widened in #250 (actor_kind,
+    // actor_ref). PostgREST overload-resolution will reject DROP-less signature
+    // changes with PGRST203. Any future param addition requires
+    // `DROP FUNCTION IF EXISTS` in the migration BEFORE `CREATE OR REPLACE`.
+    // See PR #209 / #250 for prior lessons.
     const { data: rpcRow, error: rpcErr } = await supabase.rpc(
       "fn_record_line_item_with_audit",
       {
@@ -712,6 +741,8 @@ export async function runGenerationFor(
         _manual_reason: manualReason,
         _actor_user_id: actorUserId,
         _audit_details: auditDetails as unknown as Record<string, unknown>,
+        _actor_kind: actorKind,
+        _actor_ref: actorRef,
       }
     );
 
