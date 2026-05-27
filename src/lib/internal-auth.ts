@@ -111,13 +111,40 @@ export async function resolveOrgFromToken(
   request: NextRequest
 ): Promise<TokenAuthResult> {
   const headerValue = request.headers.get("x-api-key");
+
+  // SECURITY: never log header values. Only structured metadata (path, ip,
+  // ua, reason, presence-boolean). The token plaintext never enters this
+  // scope past the parsing step — header value is split into the
+  // non-secret `lookup` and the `secret` that's passed straight into
+  // argon2.verify; only those tokens exist after the parse step. This
+  // helper closes over `keyPresent` (boolean) and the request metadata —
+  // it does NOT close over the header value, the parsed secret, or the
+  // lookup key. See #252.
+  const reject = (
+    reason: TokenAuthFailReason,
+    status: 401 | 403 = 401
+  ): TokenAuthFail => {
+    console.warn(
+      JSON.stringify({
+        event: "internal_api_401",
+        path: request.nextUrl.pathname,
+        ip: request.headers.get("x-forwarded-for") ?? "unknown",
+        ua: request.headers.get("user-agent") ?? "unknown",
+        keyPresent: !!headerValue,
+        reason,
+        timestamp: new Date().toISOString(),
+      })
+    );
+    return { ok: false, status, reason };
+  };
+
   if (!headerValue) {
-    return { ok: false, status: 401, reason: "missing_header" };
+    return reject("missing_header");
   }
 
   const match = TOKEN_RE.exec(headerValue);
   if (!match) {
-    return { ok: false, status: 401, reason: "invalid_format" };
+    return reject("invalid_format");
   }
 
   // match[1] is env_prefix (captured for completeness, not used at lookup
@@ -135,7 +162,7 @@ export async function resolveOrgFromToken(
     .maybeSingle();
 
   if (error || !row) {
-    return { ok: false, status: 401, reason: "not_found" };
+    return reject("not_found");
   }
 
   let verifyOk = false;
@@ -148,7 +175,7 @@ export async function resolveOrgFromToken(
   }
 
   if (!verifyOk) {
-    return { ok: false, status: 401, reason: "not_found" };
+    return reject("not_found");
   }
 
   // Race-window check (#255 design): a regenerate could have flipped
@@ -156,7 +183,7 @@ export async function resolveOrgFromToken(
   // step 3 should have caught it, but re-check after the verify completes
   // since verify can take ~15 ms.
   if (row.revoked_at !== null) {
-    return { ok: false, status: 401, reason: "revoked" };
+    return reject("revoked");
   }
 
   // #251 — Acceptance gate. A valid token proves the credential layer;
@@ -171,12 +198,17 @@ export async function resolveOrgFromToken(
   //             org_api_tokens.org_id, but treat as not-enabled).
   // The RPC `error` branch is treated as not-enabled too — we'd rather
   // fail closed than open if the gate query itself errors.
+  //
+  // #252: routed through `reject(...)` so the structured 401 log fires
+  // for this 403 too; the log `event` stays `"internal_api_401"` for a
+  // single log-search predicate across all rejections, and the `status`
+  // field on the emitted reject result disambiguates 401 from 403.
   const { data: enabled, error: enabledErr } = await supabase.rpc(
     "customerapp_enabled_for_org",
     { _org_id: row.org_id }
   );
   if (enabledErr || enabled !== true) {
-    return { ok: false, status: 403, reason: "customerapp_not_enabled" };
+    return reject("customerapp_not_enabled", 403);
   }
 
   // Fire-and-forget last_used_at update. Failure is benign (we lose a
