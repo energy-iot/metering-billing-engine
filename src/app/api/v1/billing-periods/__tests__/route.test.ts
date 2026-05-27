@@ -51,6 +51,15 @@ let mockAuthResult: {
   token_id: "token-uuid-1",
   token_name: "customerapp-prod-2026",
 };
+// #254 — the route now also calls `resolveMicrogridOrgId` BEFORE the
+// insert. Default to "matching org" so the existing #253 / #255 tests
+// flow through unmodified; the #254 suite overrides per-case.
+let mockMicrogridOrgResult:
+  | { ok: true; org_id: string }
+  | { ok: false; status: 404 | 400; reason: string } = {
+  ok: true,
+  org_id: "org-uuid-1",
+};
 let insertsByTable: Record<string, Array<Record<string, unknown>>> = {};
 let mockInsertResult: { data: { id: string } | null; error: { message: string } | null } = {
   data: { id: "bp-id-1" },
@@ -59,6 +68,7 @@ let mockInsertResult: { data: { id: string } | null; error: { message: string } 
 
 vi.mock("@/lib/internal-auth", () => ({
   resolveOrgFromToken: () => Promise.resolve(mockAuthResult),
+  resolveMicrogridOrgId: () => Promise.resolve(mockMicrogridOrgResult),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -96,6 +106,7 @@ describe("POST /api/v1/billing-periods (#253 + #255)", () => {
       token_id: "token-uuid-1",
       token_name: "customerapp-prod-2026",
     };
+    mockMicrogridOrgResult = { ok: true, org_id: "org-uuid-1" };
     insertsByTable = {};
     mockInsertResult = { data: { id: "bp-id-1" }, error: null };
   });
@@ -290,5 +301,69 @@ describe("POST /api/v1/billing-periods (#253 + #255)", () => {
     expect(res2.status).toBe(201);
     const json2 = await res2.json();
     expect(json2.id).toBe("bp-id-second");
+  });
+
+  // ── #254 — Authorization cross-check (microgrid → token org) ──────────────
+  //
+  // The route now resolves the payload `microgrid_id` to its `org_id` via
+  // `resolveMicrogridOrgId` and rejects if the resolved org doesn't match
+  // the token's `auth.org_id`. Status-code ordering matters: non-existent
+  // microgrid surfaces as 404 BEFORE the org comparison runs (UUID-enum
+  // defense — never reveal "exists in some other org").
+
+  it("#254: rejects with 403 when payload microgrid belongs to another org", async () => {
+    mockMicrogridOrgResult = { ok: true, org_id: "org-uuid-OTHER" };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        microgrid_id: MICROGRID_ID,
+        start_date: "2026-06-01",
+        end_date: "2026-06-30",
+      })
+    );
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe("microgrid_outside_token_org");
+    // No DB writes when authz fails.
+    expect(insertsByTable["billing_periods"]).toBeUndefined();
+    expect(insertsByTable["billing_audit_log"]).toBeUndefined();
+  });
+
+  it("#254: rejects with 404 (NOT 403) when microgrid_id does not exist — UUID-enum defense", async () => {
+    mockMicrogridOrgResult = { ok: false, status: 404, reason: "microgrid_not_found" };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        microgrid_id: MICROGRID_ID,
+        start_date: "2026-06-01",
+        end_date: "2026-06-30",
+      })
+    );
+    // 404 distinguishes "not found" from "found but wrong org" (403). This
+    // prevents UUID enumeration: an attacker MUST NOT be able to tell from
+    // the response shape whether a UUID exists in some other org or doesn't
+    // exist at all.
+    expect(res.status).toBe(404);
+    const json = await res.json();
+    expect(json.error).toBe("microgrid_not_found");
+    expect(insertsByTable["billing_periods"]).toBeUndefined();
+  });
+
+  it("#254: accepts when payload microgrid belongs to the token's org", async () => {
+    mockMicrogridOrgResult = { ok: true, org_id: "org-uuid-1" };
+    const { POST } = await import("../route");
+    const res = await POST(
+      makePostRequest({
+        microgrid_id: MICROGRID_ID,
+        start_date: "2026-06-01",
+        end_date: "2026-06-30",
+      })
+    );
+    expect(res.status).toBe(201);
+    expect(insertsByTable["billing_periods"]?.[0]).toMatchObject({
+      microgrid_id: MICROGRID_ID,
+      start_date: "2026-06-01",
+      end_date: "2026-06-30",
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveOrgFromToken } from "@/lib/internal-auth";
+import { resolveOrgFromToken, resolveMicrogridOrgId } from "@/lib/internal-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -38,6 +38,23 @@ export async function POST(request: NextRequest) {
   }
 
   const supabase = createServiceClient();
+
+  // #254 — Authorization layer: cross-check the caller-asserted
+  // `microgrid_id` against the token's resolved org. Order matters: a
+  // non-existent UUID returns 404 BEFORE the org-mismatch comparison so
+  // we never reveal "exists in some other org" (UUID-enumeration defense).
+  // See `resolveMicrogridOrgId` in `@/lib/internal-auth` for the
+  // canonical `microgrids → communities → org_id` chain.
+  const mg = await resolveMicrogridOrgId(supabase, rec.microgrid_id);
+  if (!mg.ok) {
+    return NextResponse.json({ error: mg.reason }, { status: mg.status });
+  }
+  if (mg.org_id !== auth.org_id) {
+    return NextResponse.json(
+      { error: "microgrid_outside_token_org" },
+      { status: 403 },
+    );
+  }
 
   const { data, error } = await supabase
     .from("billing_periods")
