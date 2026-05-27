@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkInternalApiKey } from "@/lib/internal-auth";
+import { resolveOrgFromToken } from "@/lib/internal-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 import { runGenerationFor, isRunGenerationFatal } from "@/lib/billing/generate";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
-  if (!checkInternalApiKey(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // #255 — per-org token auth replaces the dead-code INTERNAL_API_KEY
+  // model from PR #246. On failure, return the structured reason as the
+  // error body.
+  const auth = await resolveOrgFromToken(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.reason }, { status: auth.status });
   }
 
   let raw: unknown;
@@ -71,10 +75,9 @@ export async function POST(request: NextRequest) {
   // (actor_kind, actor_ref) — see `src/lib/billing/generate.ts` for the
   // full rationale + PostgREST overload-resolution caveat.
   //
-  // PLACEHOLDER: actor_ref will become the per-org token name when #255
-  // lands (Wave B). Until then, we stamp `'pre-token-system'` so audit
-  // rows are still traceable to "this came from the customerapp internal
-  // route, before token-based auth was wired in".
+  // #255 — actor_ref is now the real per-org token name resolved by
+  // `resolveOrgFromToken`, replacing the `'pre-token-system'` placeholder
+  // from #250.
   const out = await runGenerationFor({
     supabase,
     periodId: rec.billingPeriodId,
@@ -82,14 +85,28 @@ export async function POST(request: NextRequest) {
     mode: "write",
     actorUserId: null,
     actorKind: "customerapp",
-    actorRef: "pre-token-system",
+    actorRef: auth.token_name,
   });
 
   if (isRunGenerationFatal(out)) {
     return NextResponse.json(out.body, { status: out.status });
   }
 
-  const lineItems = out.results.filter((r) => r.kind === "written").length;
+  // #255 — response shape returns per-line-item entity IDs so the
+  // customerapp can reference generated line items downstream (e.g. for
+  // payment-link generation). PR #246 returned `{ lineItems: <count> }`;
+  // the new shape per the AC ("POST /api/v1/billing/generate response
+  // includes per-line-item IDs (full entity-IDs commitment per #249)").
+  const lineItems = out.results
+    .filter((r): r is Extract<typeof r, { kind: "written" }> => r.kind === "written")
+    .map((r) => ({
+      id: r.lineItem.id,
+      householdId: r.householdId,
+      householdName: r.householdName,
+      totalAmount: r.lineItem.total_amount,
+      usageKwh: r.lineItem.usage_kwh,
+    }));
+
   const errors = out.results
     .filter((r) => r.kind === "error")
     .map((e) => ({
