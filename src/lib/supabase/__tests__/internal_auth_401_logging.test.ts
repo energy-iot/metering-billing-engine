@@ -51,6 +51,19 @@ let updatesByTable: Record<
 > = {};
 let updateError: { message: string; code?: string } | null = null;
 
+// #251 added a `supabase.rpc("customerapp_enabled_for_org", { _org_id })` gate
+// inside `resolveOrgFromToken`'s success path. The default mock returns
+// `{ data: true }` so the success-path tests in this suite still reach the
+// `last_used_at` update + return-ok branch without tripping the acceptance
+// gate. Individual tests that exercise the `customerapp_not_enabled` reject
+// branch can flip `rpcResult` in their setup. The RPC call is fire-and-NOT-
+// forget for this branch (await; failure → reject), so the resolved value
+// matters.
+let rpcResult: {
+  data: boolean | null;
+  error: { message: string; code?: string } | null;
+} = { data: true, error: null };
+
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: (table: string) => ({
@@ -76,6 +89,7 @@ vi.mock("@/lib/supabase/service", () => ({
         },
       }),
     }),
+    rpc: (_fn: string, _args: Record<string, unknown>) => Promise.resolve(rpcResult),
   }),
 }));
 
@@ -106,6 +120,7 @@ beforeEach(async () => {
   lookupResult = { data: null, error: null };
   updatesByTable = {};
   updateError = null;
+  rpcResult = { data: true, error: null };  // #251 default: customerapp_enabled = true
   if (!KNOWN_HASH) {
     KNOWN_SECRET = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
     KNOWN_HASH = await argon2.hash(KNOWN_SECRET, {
