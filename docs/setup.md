@@ -171,6 +171,26 @@ supabase stop           # Stop all local Supabase containers
 supabase start          # Restart containers
 ```
 
+## Per-org customerapp activation (`/api/v1/*`)
+
+The customerapp integration (`/api/v1/*` routes) is gated per-org by
+`organizations.customerapp_enabled` (#251). The column defaults to `FALSE`
+on every org — a valid per-org API token (#255) is necessary but not
+sufficient. An org must be explicitly opted in before any `/api/v1/*` call
+against it succeeds; otherwise the call returns `403 customerapp_not_enabled`.
+
+Flip the flag (super_admin only — enforced by RLS on `organizations`):
+
+```sql
+UPDATE organizations
+SET customerapp_enabled = TRUE
+WHERE id = '<org-uuid>';
+```
+
+To kill-switch a misbehaving org without revoking the token, flip it back
+to `FALSE`. See `docs/customerapp-activation.md` for the full activation
+runbook.
+
 ## RLS Tests (local Supabase only)
 
 The RLS test suite (`src/lib/supabase/__tests__/rls.test.ts`) verifies that Row Level Security

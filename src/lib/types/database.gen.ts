@@ -778,6 +778,7 @@ export type Database = {
           address_postal_code: string | null
           address_region: string | null
           created_at: string
+          customerapp_enabled: boolean
           id: string
           name: string
         }
@@ -789,6 +790,7 @@ export type Database = {
           address_postal_code?: string | null
           address_region?: string | null
           created_at?: string
+          customerapp_enabled?: boolean
           id?: string
           name: string
         }
@@ -800,6 +802,7 @@ export type Database = {
           address_postal_code?: string | null
           address_region?: string | null
           created_at?: string
+          customerapp_enabled?: boolean
           id?: string
           name?: string
         }
@@ -1044,6 +1047,10 @@ export type Database = {
       }
     }
     Functions: {
+      customerapp_enabled_for_org: {
+        Args: { _org_id: string }
+        Returns: boolean
+      }
       fn_apply_payment_event: {
         Args: {
           _actor_kind?: string

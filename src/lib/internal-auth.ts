@@ -43,10 +43,10 @@ import { createServiceClient } from "@/lib/supabase/service";
  *      revoked. In practice the WHERE revoked_at IS NULL in step 3 catches
  *      this, but the check inside the verify branch covers the racy
  *      hard-cutover-regenerate window.
- *   6. TODO (#251): check customerapp_enabled_for_org(row.org_id) — if
- *      false, 403 customerapp_not_enabled. The DB helper does not exist
- *      at #255's dispatch time; the check is plumbed-but-no-op here and
- *      activates in a follow-up commit once #251 lands.
+ *   6. (#251) Acceptance gate — call customerapp_enabled_for_org(row.org_id);
+ *      if not TRUE, return 403 customerapp_not_enabled. A valid token alone
+ *      is not enough — the org has to have opted in. Single enforcement site
+ *      so a new route can't accidentally bypass.
  *   7. Update last_used_at = now() — fire-and-forget; do not await. Tiny
  *      per-request cost; UPDATE failure is benign (we lose a tick).
  *   8. Return { ok: true, org_id, token_id, token_name }.
@@ -159,19 +159,25 @@ export async function resolveOrgFromToken(
     return { ok: false, status: 401, reason: "revoked" };
   }
 
-  // TODO (#251): once `customerapp_enabled_for_org(_org_id UUID)` lands
-  // as a DB helper, gate auth here:
+  // #251 — Acceptance gate. A valid token proves the credential layer;
+  // the org also has to be opted into the customerapp integration before
+  // any `/api/v1/*` call lands. Enforcement lives here (single site) so
+  // a new route can't accidentally skip it.
   //
-  //   const { data: enabled } = await supabase.rpc(
-  //     "customerapp_enabled_for_org",
-  //     { _org_id: row.org_id }
-  //   );
-  //   if (!enabled) {
-  //     return { ok: false, status: 403, reason: "customerapp_not_enabled" };
-  //   }
-  //
-  // #251 was not on main at #255 dispatch time; the gate activates in a
-  // follow-up commit when #251 ships.
+  // `customerapp_enabled_for_org(_org_id)` returns:
+  //   * TRUE  → org has opted in; proceed.
+  //   * FALSE → org has not opted in; 403 customerapp_not_enabled.
+  //   * NULL  → org row missing (shouldn't happen given the FK on
+  //             org_api_tokens.org_id, but treat as not-enabled).
+  // The RPC `error` branch is treated as not-enabled too — we'd rather
+  // fail closed than open if the gate query itself errors.
+  const { data: enabled, error: enabledErr } = await supabase.rpc(
+    "customerapp_enabled_for_org",
+    { _org_id: row.org_id }
+  );
+  if (enabledErr || enabled !== true) {
+    return { ok: false, status: 403, reason: "customerapp_not_enabled" };
+  }
 
   // Fire-and-forget last_used_at update. Failure is benign (we lose a
   // tick); never block the request critical path on this.
