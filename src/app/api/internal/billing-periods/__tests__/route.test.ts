@@ -21,9 +21,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
 // ── Mock controls ──────────────────────────────────────────────────────────
+//
+// The route writes to TWO tables now (#250 added the `billing_audit_log` audit
+// write after the existing `billing_periods` insert). The mock therefore has
+// to track inserts per-table; a single `lastInsertPayload` would silently
+// capture only the LAST insert (the audit row) and the billing_periods
+// assertions would fail. See PR #259 review notes for the cross-PR interaction.
+//
+// The audit-log path uses a bare `await supabase.from('billing_audit_log').insert(...)`
+// (no `.select().single()` chain), so the awaited value is just the mock-returned
+// object — without an `error` property, the route's `const { error: auditErr } = …`
+// destructure yields `undefined`, the `if (auditErr)` warn-branch is skipped, and
+// the test passes. The audit-row capture in `insertsByTable['billing_audit_log']`
+// is for tests that want to assert against the attribution shape.
 
 let mockAuthOk = true;
-let lastInsertPayload: Record<string, unknown> | null = null;
+let insertsByTable: Record<string, Array<Record<string, unknown>>> = {};
 let mockInsertResult: { data: { id: string } | null; error: { message: string } | null } = {
   data: { id: "bp-id-1" },
   error: null,
@@ -35,9 +48,10 @@ vi.mock("@/lib/internal-auth", () => ({
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
-    from: (_table: string) => ({
+    from: (table: string) => ({
       insert: (payload: Record<string, unknown>) => {
-        lastInsertPayload = payload;
+        if (!insertsByTable[table]) insertsByTable[table] = [];
+        insertsByTable[table].push(payload);
         return {
           select: () => ({
             single: () => Promise.resolve(mockInsertResult),
@@ -62,7 +76,7 @@ describe("POST /api/internal/billing-periods (#253)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuthOk = true;
-    lastInsertPayload = null;
+    insertsByTable = {};
     mockInsertResult = { data: { id: "bp-id-1" }, error: null };
   });
 
@@ -91,12 +105,14 @@ describe("POST /api/internal/billing-periods (#253)", () => {
     expect(res.status).toBe(201);
     const json = await res.json();
     expect(json.id).toBe("bp-id-1");
-    expect(lastInsertPayload).toEqual({
-      microgrid_id: MICROGRID_ID,
-      start_date: "2026-05-26",
-      end_date: "2026-05-26",
-      status: "draft",
-    });
+    expect(insertsByTable["billing_periods"]).toEqual([
+      {
+        microgrid_id: MICROGRID_ID,
+        start_date: "2026-05-26",
+        end_date: "2026-05-26",
+        status: "draft",
+      },
+    ]);
   });
 
   it("rejects with 400 when start_date > end_date", async () => {
@@ -111,7 +127,8 @@ describe("POST /api/internal/billing-periods (#253)", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toMatch(/end_date/);
-    expect(lastInsertPayload).toBeNull();
+    expect(insertsByTable["billing_periods"]).toBeUndefined();
+    expect(insertsByTable["billing_audit_log"]).toBeUndefined();
   });
 
   it("accepts normal multi-day period (start_date < end_date)", async () => {
@@ -124,11 +141,21 @@ describe("POST /api/internal/billing-periods (#253)", () => {
       })
     );
     expect(res.status).toBe(201);
-    expect(lastInsertPayload).toMatchObject({
+    expect(insertsByTable["billing_periods"]?.[0]).toMatchObject({
       microgrid_id: MICROGRID_ID,
       start_date: "2026-01-01",
       end_date: "2026-01-31",
       status: "draft",
+    });
+    // #250 audit-write was added in this PR; verify it stamps the expected
+    // attribution shape (customerapp + pre-token-system placeholder per
+    // implementer notes — will become real token name when #255 lands).
+    expect(insertsByTable["billing_audit_log"]?.[0]).toMatchObject({
+      event_type: "billing_period_created",
+      actor_kind: "customerapp",
+      actor_ref: "pre-token-system",
+      actor_user_id: null,
+      billing_period_id: "bp-id-1",
     });
   });
 
