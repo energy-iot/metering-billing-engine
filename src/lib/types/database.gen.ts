@@ -705,6 +705,60 @@ export type Database = {
           },
         ]
       }
+      org_api_tokens: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          env_prefix: string
+          id: string
+          last_used_at: string | null
+          name: string
+          org_id: string
+          revoked_at: string | null
+          token_hash: string
+          token_lookup: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          env_prefix: string
+          id?: string
+          last_used_at?: string | null
+          name: string
+          org_id: string
+          revoked_at?: string | null
+          token_hash: string
+          token_lookup: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          env_prefix?: string
+          id?: string
+          last_used_at?: string | null
+          name?: string
+          org_id?: string
+          revoked_at?: string | null
+          token_hash?: string
+          token_lookup?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_api_tokens_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_directory"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "org_api_tokens_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organizations: {
         Row: {
           address_city: string | null

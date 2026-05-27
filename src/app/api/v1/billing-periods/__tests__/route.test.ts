@@ -1,5 +1,5 @@
 /**
- * POST /api/internal/billing-periods — route tests (#253).
+ * POST /api/v1/billing-periods — route tests (#253 + #255).
  *
  * Coverage (failure-mode AC from the ticket body):
  *   - Same-day period (start_date === end_date): accepted, creates draft row (201).
@@ -11,8 +11,11 @@
  *   - Missing required fields: rejected with 400.
  *   - Duplicate (microgrid_id, start_date, end_date): accepted (per Alejandro
  *     2026-05-26 — no 409-on-duplicate; matches UI behavior).
+ *   - #255: auth now via `resolveOrgFromToken`; on success the resolved
+ *     `token_name` flows into the audit row as `actor_ref` (replacing the
+ *     `'pre-token-system'` placeholder from #250).
  *
- * The route mocks the supabase service client + `checkInternalApiKey` at the
+ * The route mocks the supabase service client + `resolveOrgFromToken` at the
  * module boundary. Live-DB constraint behavior (unique indexes, RLS) is not
  * exercised here — covered by the integration suites tracked in #251 / #254.
  */
@@ -35,7 +38,19 @@ import { NextRequest } from "next/server";
 // the test passes. The audit-row capture in `insertsByTable['billing_audit_log']`
 // is for tests that want to assert against the attribution shape.
 
-let mockAuthOk = true;
+let mockAuthResult: {
+  ok: boolean;
+  org_id?: string;
+  token_id?: string;
+  token_name?: string;
+  status?: number;
+  reason?: string;
+} = {
+  ok: true,
+  org_id: "org-uuid-1",
+  token_id: "token-uuid-1",
+  token_name: "customerapp-prod-2026",
+};
 let insertsByTable: Record<string, Array<Record<string, unknown>>> = {};
 let mockInsertResult: { data: { id: string } | null; error: { message: string } | null } = {
   data: { id: "bp-id-1" },
@@ -43,7 +58,7 @@ let mockInsertResult: { data: { id: string } | null; error: { message: string } 
 };
 
 vi.mock("@/lib/internal-auth", () => ({
-  checkInternalApiKey: () => mockAuthOk,
+  resolveOrgFromToken: () => Promise.resolve(mockAuthResult),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -65,23 +80,28 @@ vi.mock("@/lib/supabase/service", () => ({
 const MICROGRID_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 function makePostRequest(body: unknown): NextRequest {
-  return new NextRequest("http://localhost/api/internal/billing-periods", {
+  return new NextRequest("http://localhost/api/v1/billing-periods", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": "stub" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
 
-describe("POST /api/internal/billing-periods (#253)", () => {
+describe("POST /api/v1/billing-periods (#253 + #255)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockAuthOk = true;
+    mockAuthResult = {
+      ok: true,
+      org_id: "org-uuid-1",
+      token_id: "token-uuid-1",
+      token_name: "customerapp-prod-2026",
+    };
     insertsByTable = {};
     mockInsertResult = { data: { id: "bp-id-1" }, error: null };
   });
 
   it("401 when auth fails", async () => {
-    mockAuthOk = false;
+    mockAuthResult = { ok: false, status: 401, reason: "missing_header" };
     const { POST } = await import("../route");
     const res = await POST(
       makePostRequest({
@@ -91,6 +111,8 @@ describe("POST /api/internal/billing-periods (#253)", () => {
       })
     );
     expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.error).toBe("missing_header");
   });
 
   it("accepts same-day period (start_date === end_date) — #253 regression fix", async () => {
@@ -147,13 +169,12 @@ describe("POST /api/internal/billing-periods (#253)", () => {
       end_date: "2026-01-31",
       status: "draft",
     });
-    // #250 audit-write was added in this PR; verify it stamps the expected
-    // attribution shape (customerapp + pre-token-system placeholder per
-    // implementer notes — will become real token name when #255 lands).
+    // #255 — audit-write attribution now carries the real per-org token
+    // name (replacing the `'pre-token-system'` placeholder from #250).
     expect(insertsByTable["billing_audit_log"]?.[0]).toMatchObject({
       event_type: "billing_period_created",
       actor_kind: "customerapp",
-      actor_ref: "pre-token-system",
+      actor_ref: "customerapp-prod-2026",
       actor_user_id: null,
       billing_period_id: "bp-id-1",
     });

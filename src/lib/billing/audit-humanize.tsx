@@ -223,7 +223,7 @@ export function humanizeAuditEvent(
     // ── #250: new event types added in migration 00041 ─────────────────────
 
     case "billing_period_created":
-      // Written by `/api/internal/billing-periods` POST. Distinguished from
+      // Written by `/api/v1/billing-periods` POST. Distinguished from
       // the legacy `period_created` event (which has no defined writer yet)
       // so the UI can render the internal-route origin once the audit feed
       // surfaces actor_kind.

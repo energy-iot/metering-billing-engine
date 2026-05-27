@@ -51,7 +51,7 @@ import "server-only";
  *
  * ── INVARIANT (added 2026-05 with #250) ────────────────────────────────────
  *
- * With service-role callers (via `/api/internal/*`), RLS does NOT backstop
+ * With service-role callers (via `/api/v1/*`), RLS does NOT backstop
  * the cross-microgrid check above — it is the SOLE defense against
  * cross-microgrid household submission. Do NOT delete on the assumption
  * that RLS will catch it; RLS only fires for user-bound clients. See PR
@@ -146,14 +146,14 @@ export type RunGenerationParams = {
   /** Resolved `auth.uid()` from the route's session. Required when
    *  mode='write' (passed to RPC as actor + entered_by_user_id for manual).
    *
-   *  For non-human callers (customerapp via `/api/internal/*`, future
+   *  For non-human callers (customerapp via `/api/v1/*`, future
    *  cron jobs, etc.) pass `null` and set `actorKind` + `actorRef`. The
    *  DB CHECK on `billing_audit_log` enforces the (kind, user_id, ref)
    *  shape (see migration 00041 / #250). */
   actorUserId: string | null;
   /** Defaults to `'human'` for backwards compatibility with all existing
    *  in-app callers (the dashboard routes). `'customerapp'` is set by
-   *  `/api/internal/*` routes; `'system'` by webhook ingestors.
+   *  `/api/v1/*` routes; `'system'` by webhook ingestors.
    *  See migration 00041 (#250). */
   actorKind?: "human" | "customerapp" | "system";
   /** Opaque caller-supplied identifier — token name for customerapp,

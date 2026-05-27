@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkInternalApiKey } from "@/lib/internal-auth";
+import { resolveOrgFromToken } from "@/lib/internal-auth";
 import { createServiceClient } from "@/lib/supabase/service";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function POST(request: NextRequest) {
-  if (!checkInternalApiKey(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // #255 — per-org token auth replaces the dead-code INTERNAL_API_KEY
+  // model from PR #246. On failure, return the structured reason as the
+  // error body so failure-mode tests can pin which leg of the auth flow
+  // rejected the call.
+  const auth = await resolveOrgFromToken(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.reason }, { status: auth.status });
   }
 
   let raw: unknown;
@@ -50,13 +55,9 @@ export async function POST(request: NextRequest) {
   }
 
   // Audit: record that a billing period was created via the customerapp
-  // internal route. Pre-existing gap (PR #246 inherited it); #250 closes
-  // it with the new `billing_period_created` event type added in migration
-  // 00041.
-  //
-  // PLACEHOLDER: actor_ref will become the per-org token name when #255
-  // lands (Wave B). Stamping `'pre-token-system'` keeps the audit trail
-  // attributable to "customerapp internal route, pre-token auth".
+  // internal route. #250 added the audit-write; #255 replaces the
+  // `'pre-token-system'` placeholder actor_ref with the real per-org
+  // token name resolved by `resolveOrgFromToken`.
   //
   // Warn-but-still-return on audit failure: a missed audit row must not
   // mask a successfully created billing period from the caller.
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
     event_type: "billing_period_created",
     actor_user_id: null,
     actor_kind: "customerapp",
-    actor_ref: "pre-token-system",
+    actor_ref: auth.token_name,
     details: {
       billing_period_id: data.id,
       microgrid_id: rec.microgrid_id,

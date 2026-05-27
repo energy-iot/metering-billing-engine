@@ -14,11 +14,11 @@
  *        non-human   → actor_user_id NULL,     actor_ref NOT NULL
  *
  *   3. End-to-end: `fn_record_line_item_with_audit` invoked with the
- *      widened-signature args from `/api/internal/billing/generate`
+ *      widened-signature args from `/api/v1/billing/generate`
  *      (`_actor_user_id=NULL, _actor_kind='customerapp', _actor_ref=...`)
  *      successfully inserts a billing_line_items row AND a billing_audit_log
  *      row — no FK violation. This is the PM AC "First call to
- *      `POST /api/internal/billing/generate` succeeds end-to-end".
+ *      `POST /api/v1/billing/generate` succeeds end-to-end".
  *
  *   4. Human-actor calls (the existing call-path: actor_kind defaults to
  *      `'human'`, actor_user_id non-null, actor_ref omitted) continue to
