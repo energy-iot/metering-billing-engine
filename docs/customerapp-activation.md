@@ -138,4 +138,4 @@ That returns `401 not_found` on next use — separate from the
   gate; either all of an org's microgrids accept customerapp pushes or
   none of them do.
 - **Default is `FALSE`.** Every new org added to the system is opted out
-  by default. The 00043 migration sets the default at the schema level.
+  by default. The 00044 migration sets the default at the schema level.

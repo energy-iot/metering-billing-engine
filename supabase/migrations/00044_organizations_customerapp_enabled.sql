@@ -1,4 +1,4 @@
--- 00043_organizations_customerapp_enabled.sql
+-- 00044_organizations_customerapp_enabled.sql
 -- #251 — Per-org acceptance gate for customerapp (`/api/v1/*`) calls.
 --
 -- ── Why ───────────────────────────────────────────────────────────────────
