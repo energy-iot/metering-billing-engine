@@ -40,33 +40,36 @@ export type Database = {
           actor_ref: string | null
           actor_user_id: string | null
           billing_line_item_id: string | null
-          billing_period_id: string
+          billing_period_id: string | null
           created_at: string
           details: Json
           event_type: Database["public"]["Enums"]["billing_audit_event_type"]
           id: string
+          org_id: string | null
         }
         Insert: {
           actor_kind?: string
           actor_ref?: string | null
           actor_user_id?: string | null
           billing_line_item_id?: string | null
-          billing_period_id: string
+          billing_period_id?: string | null
           created_at?: string
           details?: Json
           event_type: Database["public"]["Enums"]["billing_audit_event_type"]
           id?: string
+          org_id?: string | null
         }
         Update: {
           actor_kind?: string
           actor_ref?: string | null
           actor_user_id?: string | null
           billing_line_item_id?: string | null
-          billing_period_id?: string
+          billing_period_id?: string | null
           created_at?: string
           details?: Json
           event_type?: Database["public"]["Enums"]["billing_audit_event_type"]
           id?: string
+          org_id?: string | null
         }
         Relationships: [
           {
@@ -88,6 +91,13 @@ export type Database = {
             columns: ["billing_period_id"]
             isOneToOne: false
             referencedRelation: "billing_periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_audit_log_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]

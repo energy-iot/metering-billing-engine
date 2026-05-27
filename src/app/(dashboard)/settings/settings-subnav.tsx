@@ -27,6 +27,7 @@ type SubTab = { label: string; segment: string };
 const TABS: SubTab[] = [
   { label: "Profile", segment: "profile" },
   { label: "Users", segment: "users" },
+  { label: "API tokens", segment: "api-tokens" },
 ];
 
 export function SettingsSubNav() {
