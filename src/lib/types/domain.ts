@@ -39,6 +39,8 @@ export type BillingLineItem = Omit<
 > & { tier_breakdown: TierBreakdown[] };
 export type UserRoleRecord = Database["public"]["Tables"]["user_roles"]["Row"];
 export type UserProfile = Database["public"]["Tables"]["user_profiles"]["Row"];
+export type OrgApiToken =
+  Database["public"]["Tables"]["org_api_tokens"]["Row"];
 
 /**
  * user_directory row — the joined VIEW over auth.users × user_profiles ×
