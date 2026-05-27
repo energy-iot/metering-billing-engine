@@ -60,6 +60,15 @@ let updatesByTable: Record<
   Array<{ payload: Record<string, unknown>; eqArgs?: [string, unknown] }>
 > = {};
 let updateError: { message: string; code?: string } | null = null;
+// #251 — Acceptance-gate RPC stub. Tests set this to control whether the
+// per-org opt-in check (`customerapp_enabled_for_org`) returns TRUE / FALSE
+// or an error. Default TRUE so the existing #255 tests still exercise the
+// success path; #251-specific tests in customerapp_enabled.test.ts flip it
+// to FALSE / error to cover the gate rejection branch.
+let customerappEnabledResult: {
+  data: boolean | null;
+  error: { message: string } | null;
+} = { data: true, error: null };
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
@@ -90,6 +99,11 @@ vi.mock("@/lib/supabase/service", () => ({
         },
       }),
     }),
+    // #251 — RPC stub for customerapp_enabled_for_org. Defaults to TRUE
+    // so the existing #255 tests still exercise the success path; the
+    // dedicated customerapp_enabled.test.ts flips it to cover the gate.
+    rpc: (_fn: string, _args: Record<string, unknown>) =>
+      Promise.resolve(customerappEnabledResult),
   }),
 }));
 
@@ -111,6 +125,8 @@ beforeEach(async () => {
   lookupResult = { data: null, error: null };
   updatesByTable = {};
   updateError = null;
+  // #251 — default to opted-in so the #255 success-path tests still pass.
+  customerappEnabledResult = { data: true, error: null };
   if (!KNOWN_HASH) {
     // 43-char base64url string — matches the secret format from generateToken.
     KNOWN_SECRET = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
