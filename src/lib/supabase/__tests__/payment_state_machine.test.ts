@@ -214,12 +214,18 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
 
     const merchantRef = `INV-PHASE-B-TEST-${randomUUID()}`;
 
+    // #250: passing _actor_user_id=null requires non-human actor_kind +
+    // a non-null actor_ref (the payment_events_actor_consistency CHECK
+    // added in migration 00041). 'tenant_pay_redirect' is what the public
+    // /pay route stamps for this code path.
     const { error } = await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemA,
       _to_status: "link_generated",
       _source: "generate_link",
       _actor_user_id: null,
       _raw_payload: { pesapal_order_id: merchantRef },
+      _actor_kind: "system",
+      _actor_ref: "tenant_pay_redirect",
     });
     expect(error).toBeNull();
 
@@ -245,12 +251,15 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
   it("fn_apply_payment_event: ipn link_generated → paid succeeds and writes paid_at + audit row", async () => {
     const svc = await serviceClient();
 
+    // #250: IPN-attributed events use actor_kind='system', actor_ref='pesapal_ipn'.
     const { error } = await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemA,
       _to_status: "paid",
       _source: "ipn",
       _actor_user_id: null,
       _raw_payload: { order_tracking_id: "OT-test-123" },
+      _actor_kind: "system",
+      _actor_ref: "pesapal_ipn",
     });
     expect(error).toBeNull();
 
@@ -274,12 +283,15 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
       .eq("to_status", "paid");
 
     // Re-deliver — already in 'paid'. Should be a no-op.
+    // #250: same actor_kind/actor_ref shape as the IPN test above.
     const { error } = await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemA,
       _to_status: "paid",
       _source: "ipn",
       _actor_user_id: null,
       _raw_payload: { order_tracking_id: "OT-test-123" },
+      _actor_kind: "system",
+      _actor_ref: "pesapal_ipn",
     });
     expect(error).toBeNull();
 
@@ -297,12 +309,17 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
     const svc = await serviceClient();
 
     // First make lineItemB go through unpaid → link_generated → paid → refunded.
+    // #250: all of these pass _actor_user_id=null so they MUST stamp
+    // actor_kind='system' + a non-null actor_ref to satisfy the new
+    // payment_events_actor_consistency CHECK.
     await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemB,
       _to_status: "link_generated",
       _source: "generate_link",
       _actor_user_id: null,
       _raw_payload: { pesapal_order_id: `INV-B-${randomUUID()}` },
+      _actor_kind: "system",
+      _actor_ref: "tenant_pay_redirect",
     });
     await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemB,
@@ -310,6 +327,8 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
       _source: "ipn",
       _actor_user_id: null,
       _raw_payload: {},
+      _actor_kind: "system",
+      _actor_ref: "pesapal_ipn",
     });
     await svc.rpc("fn_apply_payment_event", {
       _line_item_id: FIXTURE.lineItemB,
@@ -317,6 +336,8 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
       _source: "ipn",
       _actor_user_id: null,
       _raw_payload: {},
+      _actor_kind: "system",
+      _actor_ref: "pesapal_ipn",
     });
 
     // refunded → paid via ipn must reject.
@@ -326,6 +347,8 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
       _source: "ipn",
       _actor_user_id: null,
       _raw_payload: {},
+      _actor_kind: "system",
+      _actor_ref: "pesapal_ipn",
     });
     expect(error).toBeTruthy();
     expect(String(error?.message)).toContain("invalid_transition");
@@ -339,6 +362,8 @@ desc("00027_payment_state_machine_enum.sql + 00028_payment_state_machine.sql (#1
       _source: "weird_source",
       _actor_user_id: null,
       _raw_payload: null,
+      _actor_kind: "system",
+      _actor_ref: "test_unknown_source",
     });
     expect(error).toBeTruthy();
     expect(String(error?.message)).toContain("invalid_source");

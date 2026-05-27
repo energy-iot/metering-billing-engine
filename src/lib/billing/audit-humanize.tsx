@@ -220,6 +220,43 @@ export function humanizeAuditEvent(
       };
     }
 
+    // ── #250: new event types added in migration 00041 ─────────────────────
+
+    case "billing_period_created":
+      // Written by `/api/internal/billing-periods` POST. Distinguished from
+      // the legacy `period_created` event (which has no defined writer yet)
+      // so the UI can render the internal-route origin once the audit feed
+      // surfaces actor_kind.
+      return { label: "Billing period created", postCloseRevision: post };
+
+    case "token_generated": {
+      // Written by the #256 token-management UI; consumed later. The
+      // details payload carries `{ org_api_token_id, name }`.
+      const name = getString(entry.details?.["name"]);
+      return {
+        label: name ? `API token created: ${name}` : "API token created",
+        postCloseRevision: post,
+      };
+    }
+
+    case "token_revoked": {
+      const name = getString(entry.details?.["name"]);
+      return {
+        label: name ? `API token revoked: ${name}` : "API token revoked",
+        postCloseRevision: post,
+      };
+    }
+
+    case "token_regenerated": {
+      const name = getString(entry.details?.["name"]);
+      return {
+        label: name
+          ? `API token regenerated: ${name}`
+          : "API token regenerated",
+        postCloseRevision: post,
+      };
+    }
+
     default: {
       // Defensive fallback for an unknown future event type. We keep the
       // raw eventType string so super_admin debugging still has a foothold.

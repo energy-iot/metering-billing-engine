@@ -218,17 +218,19 @@ export async function PATCH(
     throw err;
   }
 
-  // 5. Session guard: paid / refunded via the manual-mark route require a
-  //    non-null actor. This is the route-level defense-in-depth gate; the SQL
-  //    CHECK constraint was relaxed in #243 (Pesapal IPN has no human actor),
-  //    so the DB no longer enforces "paid rows have paid_by_user_id". The
-  //    audit source-of-truth is now payment_events (source + actor_user_id
-  //    per event). For the manual-mark path we still require an authenticated
-  //    user — IPN goes through src/app/api/payments/ipn/route.ts instead.
-  if (
-    (parsed.status === "paid" || parsed.status === "refunded") &&
-    !actorUserId
-  ) {
+  // 5. Session guard: the manual-mark route is operator-only and the audit
+  //    row MUST attribute to a human user. Required for ALL transitions
+  //    (not just paid/refunded) because #250's
+  //    `payment_events_actor_consistency` CHECK rejects `actor_kind='human'
+  //    + actor_user_id IS NULL`, and this route always writes the human
+  //    actor_kind (IPN goes through src/app/api/payments/ipn/route.ts which
+  //    writes actor_kind='system').
+  //
+  //    In practice currentUserCanAccessMicrogrid() above (line 172) already
+  //    requires a session, so actorUserId should be non-null here — this is
+  //    a belt-and-suspenders re-check that surfaces the right error to the
+  //    UI rather than a 500 on the DB CHECK violation.
+  if (!actorUserId) {
     return NextResponse.json(
       { error: "Session expired. Please reload and try again.", reason: "session_expired" },
       { status: 401 },

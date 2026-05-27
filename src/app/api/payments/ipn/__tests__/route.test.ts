@@ -189,6 +189,12 @@ describe("POST /api/payments/ipn (Phase B)", () => {
     expect(args._to_status).toBe("paid");
     expect(args._source).toBe("ipn");
     expect(args._actor_user_id).toBeNull();
+    // #250: IPN-originated payment events MUST attribute to actor_kind='system'
+    // + actor_ref='pesapal_ipn' so the new payment_events_actor_consistency
+    // CHECK (migration 00041) is satisfied (the human arm requires
+    // actor_user_id NOT NULL).
+    expect(args._actor_kind).toBe("system");
+    expect(args._actor_ref).toBe("pesapal_ipn");
     expect(args._raw_payload.order_tracking_id).toBe(ORDER_TRACKING_ID);
     expect(args._raw_payload.merchant_reference).toBe(MERCHANT_REF);
   });

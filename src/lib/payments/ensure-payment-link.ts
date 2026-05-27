@@ -93,6 +93,17 @@ export interface EnsurePaymentLinkResult {
 export interface EnsurePaymentLinkOptions {
   /** Caller's auth.uid() if known (session routes); null for /pay. */
   actorUserId?: string | null;
+  /**
+   * Defaults to `'human'` for session-auth'd routes. The public `/pay`
+   * (consumer-initiated redirect) and other no-session callers MUST set
+   * `'system'` AND `actorRef` — the DB CHECK on `payment_events` rejects
+   * `actor_kind='human'` rows with `actor_user_id IS NULL`. See migration
+   * 00041 / #250.
+   */
+  actorKind?: "human" | "customerapp" | "system";
+  /** Opaque caller-supplied identifier; required by DB CHECK whenever
+   *  `actorKind != 'human'`. */
+  actorRef?: string | null;
   /** Override the callback URL; defaults to NEXT_PUBLIC_PAYMENT_CALLBACK_URL. */
   callbackUrl?: string;
   /**
@@ -332,6 +343,12 @@ async function mintAndPersist(
   if (force || (updated && updated.length > 0)) {
     // Winner. Fire the audit write (warn-loudly-but-still-return on failure).
     try {
+      // SIGNATURE NOTE: this RPC's signature was widened in #250
+      // (actor_kind, actor_ref). PostgREST overload-resolution will reject
+      // DROP-less signature changes with PGRST203. Any future param
+      // addition requires `DROP FUNCTION IF EXISTS` in the migration
+      // BEFORE `CREATE OR REPLACE`. See PR #209 / #250 for prior lessons.
+      const actorKind = opts.actorKind ?? "human";
       const { error: rpcErr } = await supabase.rpc("fn_apply_payment_event", {
         _line_item_id: lineItemId,
         _to_status: "link_generated",
@@ -342,6 +359,8 @@ async function mintAndPersist(
           provider_order_tracking_id: result.providerOrderId,
           // redirect_url intentionally NOT logged — contains a session token.
         },
+        _actor_kind: actorKind,
+        _actor_ref: opts.actorRef ?? null,
       });
       if (rpcErr) {
         console.warn(

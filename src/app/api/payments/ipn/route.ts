@@ -302,12 +302,19 @@ async function handleWebhook(
     confirmation_code: verifyResponse.confirmation_code,
   };
 
+  // SIGNATURE NOTE: this RPC's signature was widened in #250 (actor_kind,
+  // actor_ref). PostgREST overload-resolution will reject DROP-less
+  // signature changes with PGRST203. Any future param addition requires
+  // `DROP FUNCTION IF EXISTS` in the migration BEFORE `CREATE OR REPLACE`.
+  // See PR #209 / #250 for prior lessons.
   const { error: rpcErr } = await supabase.rpc("fn_apply_payment_event", {
     _line_item_id: scoped.id,
     _to_status: toStatus,
     _source: "ipn",
     _actor_user_id: null,
     _raw_payload: rawPayload,
+    _actor_kind: "system",
+    _actor_ref: "pesapal_ipn",
   });
 
   if (rpcErr) {

@@ -1,11 +1,13 @@
 import "server-only";
 import type { NextRequest } from "next/server";
 
-/**
- * UUID recorded in billing_audit_log when an action is triggered by the
- * customerapp automation system rather than a human operator.
- */
-export const CUSTOMERAPP_ACTOR_ID = "00000000-0000-4000-8000-000000000001";
+// NOTE (#250): the pre-#250 `CUSTOMERAPP_ACTOR_ID` constant was REMOVED.
+// It was a synthetic UUID written into `billing_audit_log.actor_user_id`
+// that did NOT exist in `auth.users`, which would trip the FK on the first
+// real `POST /api/internal/billing/generate` call. The new pattern
+// (migration 00041) writes `actor_user_id=NULL, actor_kind='customerapp',
+// actor_ref=<token name>` instead — see `/api/internal/**` routes and
+// `src/lib/billing/generate.ts` for call sites.
 
 /**
  * Returns true if the request carries a valid x-api-key header matching
