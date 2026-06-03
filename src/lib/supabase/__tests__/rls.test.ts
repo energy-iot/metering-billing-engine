@@ -1988,16 +1988,18 @@ describe("RLS: Community payment provider (#115)", () => {
       }
     });
 
-    it("anon (no Authorization header) gets NULL — DB-level defense-in-depth (#196)", async () => {
+    it("anon (no Authorization header) is denied at the grant layer (#196 + #270)", async () => {
       if (skipIfRequested()) return;
       await setupPaymentConfig();
       try {
-        // Anon client: anon key only, no user JWT. PostgREST evaluates
-        // auth.uid() = NULL and auth.role() = 'anon'; the function's
-        // permission gate (service_role OR user_can_access_org) returns
-        // false, so the function returns NULL. This guards the route as
-        // defense-in-depth even though src/middleware.ts:57-64 already
-        // 401s anon /api/* requests upstream.
+        // Anon client: anon key only, no user JWT. As of migration 00047
+        // (#270 B2), anon has EXECUTE revoked on fn_get_community_payment_secret
+        // — the call fails at the GRANT layer with SQLSTATE 42501 BEFORE
+        // the function body runs. This is a stronger guarantee than the
+        // body-side NULL-return defense-in-depth (#196) that the function
+        // also retains. Either outcome (NULL with no error, OR 42501 error)
+        // means anon got nothing back, which is the load-bearing property.
+        // src/middleware.ts:57-64 also 401s anon /api/* requests upstream.
         const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
         if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
         const anonClient = createClient(LOCAL_SUPABASE_URL, anonKey, {
@@ -2007,8 +2009,17 @@ describe("RLS: Community payment provider (#115)", () => {
           "fn_get_community_payment_secret",
           { _community_id: FIXTURE.communityA }
         );
-        expect(error).toBeNull();
-        expect(data).toBeNull();
+        // Post-#270: grant-layer denial (42501). Pre-#270 contract (NULL
+        // with no error) is preserved as an accepted alternative for any
+        // future revert / partial rollback scenario.
+        const deniedAtGrant =
+          error?.code === "42501" ||
+          (error?.message?.toLowerCase().includes("permission denied") ?? false);
+        const deniedAtBody = error === null && data === null;
+        expect(
+          deniedAtGrant || deniedAtBody,
+          `Expected anon to be denied (grant-layer 42501 or body-layer NULL). Got error=${JSON.stringify(error)} data=${JSON.stringify(data)}`
+        ).toBe(true);
       } finally {
         await clearPaymentConfig();
       }
@@ -2090,5 +2101,263 @@ describe("B1 #268 — anon REVOKE on SECURITY DEFINER mutators", () => {
       p_scope_id: "00000000-0000-4000-8000-000000000004",
     });
     expectAnonDenied(error);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// B2 (#270): Root-cause REVOKE on 10 SECURITY DEFINER fns + 00016 narrowing
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Migration 00047 narrows the 00016 ALTER DEFAULT PRIVILEGES grant for ROUTINES
+// (removing future auto-grant of EXECUTE to anon/authenticated) AND explicitly
+// REVOKEs EXECUTE FROM PUBLIC, anon on the remaining 10 SECURITY DEFINER fns:
+//
+//   Secret-handling (4):  fn_ems_encrypt_secret, fn_ems_decrypt_secret,
+//                         fn_get_ems_secret, fn_get_community_payment_secret
+//   RLS helpers (5):      is_super_admin, user_can_access_{org,community,
+//                         microgrid}, user_can_see_user_profile
+//   Customerapp flag (1): customerapp_enabled_for_org
+//   Trigger fn (1):       fn_create_profile_on_auth_user
+//
+// For each fn: anon-RPC must be denied at the grant layer (42501); authenticated
+// callers must NOT regress (RLS helpers in particular are called on every
+// authenticated query via RLS policy USING clauses — a regression here would
+// cascade into permission errors across every gated table).
+//
+// fn_create_profile_on_auth_user is a TRIGGER fn — both anon and authenticated
+// RPC paths are denied; the trigger continues to fire because triggers run
+// with the function-owner's privileges (postgres) regardless of EXECUTE grants.
+// The load-bearing happy-path for that fn is exercised by
+// src/lib/__tests__/invite-user-rpc.test.ts (auth.users INSERT → trigger →
+// user_profiles row) — if that suite stays green, the trigger still fires.
+
+describe("B2 #270 — SECURITY DEFINER anon REVOKE", () => {
+  function expectAnonDenied(error: { code?: string; message?: string } | null): void {
+    expect(error).not.toBeNull();
+    expect(
+      error?.code === "42501" || error?.message?.toLowerCase().includes("permission denied"),
+      `Expected SQLSTATE 42501 or "permission denied" in error; got code=${error?.code} message=${error?.message}`
+    ).toBe(true);
+  }
+
+  function buildAnonClient(): SupabaseClient {
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+    return createClient(LOCAL_SUPABASE_URL, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+
+  // ── 2a. Secret-handling fns ─────────────────────────────────────────────
+
+  it("anon RPC to fn_ems_encrypt_secret is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_ems_encrypt_secret", {
+      p_plaintext: "anon-probe",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("anon RPC to fn_ems_decrypt_secret is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    // Bytea throwaway value — REVOKE fires before body / argument validation.
+    const { error } = await anonClient.rpc("fn_ems_decrypt_secret", {
+      p_ciphertext: "\\x00",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("anon RPC to fn_get_ems_secret is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_get_ems_secret", {
+      _microgrid_id: "00000000-0000-4000-8000-000000000010",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("anon RPC to fn_get_community_payment_secret is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_get_community_payment_secret", {
+      _community_id: "00000000-0000-4000-8000-000000000011",
+    });
+    expectAnonDenied(error);
+  });
+
+  // ── 2b. RLS helper fns ──────────────────────────────────────────────────
+  // Two assertions per fn:
+  //   1. anon-RPC denied (42501) — the REVOKE bit
+  //   2. authenticated-RPC works — load-bearing check that we did NOT regress
+  //      the GRANT to authenticated. RLS evaluation runs as `authenticated`
+  //      for normal logged-in users; any 42501 here would cascade into
+  //      "permission denied for function user_can_access_org" on every
+  //      gated SELECT/INSERT downstream.
+
+  it("anon RPC to is_super_admin is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("is_super_admin");
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to is_super_admin succeeds (super_admin → true)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userD.client.rpc("is_super_admin");
+    expect(error).toBeNull();
+    expect(data).toBe(true);
+  });
+
+  it("authenticated RPC to is_super_admin succeeds (org_manager → false)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("is_super_admin");
+    expect(error).toBeNull();
+    expect(data).toBe(false);
+  });
+
+  it("anon RPC to user_can_access_org is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("user_can_access_org", {
+      _org_id: FIXTURE.orgA,
+    });
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to user_can_access_org succeeds (own org → true)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("user_can_access_org", {
+      _org_id: FIXTURE.orgA,
+    });
+    expect(error).toBeNull();
+    expect(data).toBe(true);
+  });
+
+  it("authenticated RPC to user_can_access_org succeeds (other org → false)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("user_can_access_org", {
+      _org_id: FIXTURE.orgB,
+    });
+    expect(error).toBeNull();
+    expect(data).toBe(false);
+  });
+
+  it("anon RPC to user_can_access_community is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("user_can_access_community", {
+      _community_id: FIXTURE.communityA,
+    });
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to user_can_access_community succeeds (own community → true)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("user_can_access_community", {
+      _community_id: FIXTURE.communityA,
+    });
+    expect(error).toBeNull();
+    expect(data).toBe(true);
+  });
+
+  it("anon RPC to user_can_access_microgrid is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("user_can_access_microgrid", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to user_can_access_microgrid succeeds (own microgrid → true)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("user_can_access_microgrid", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    expect(error).toBeNull();
+    expect(data).toBe(true);
+  });
+
+  it("anon RPC to user_can_see_user_profile is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("user_can_see_user_profile", {
+      _target_user_id: "00000000-0000-4000-8000-000000000012",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to user_can_see_user_profile succeeds (self → true)", async () => {
+    if (skipIfRequested()) return;
+    // Callers can always see their own profile; this exercises the GRANT
+    // to authenticated without depending on cross-user fixture state.
+    const { data, error } = await userA.client.rpc("user_can_see_user_profile", {
+      _target_user_id: userA.userId,
+    });
+    expect(error).toBeNull();
+    expect(data).toBe(true);
+  });
+
+  // ── 2c. customerapp_enabled_for_org ─────────────────────────────────────
+
+  it("anon RPC to customerapp_enabled_for_org is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("customerapp_enabled_for_org", {
+      _org_id: FIXTURE.orgA,
+    });
+    expectAnonDenied(error);
+  });
+
+  it("authenticated RPC to customerapp_enabled_for_org succeeds (returns boolean)", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await userA.client.rpc("customerapp_enabled_for_org", {
+      _org_id: FIXTURE.orgA,
+    });
+    expect(error).toBeNull();
+    // Default for fixture orgs is FALSE (column default in 00044); the
+    // load-bearing assertion is "no 42501" + "boolean returned" — confirms
+    // authenticated retains EXECUTE.
+    expect(typeof data).toBe("boolean");
+  });
+
+  // ── 2d. Trigger function ────────────────────────────────────────────────
+  //
+  // fn_create_profile_on_auth_user is a TRIGGER fn — both anon AND authenticated
+  // RPC paths are denied. The trigger continues to fire (because triggers run
+  // as function-owner regardless of EXECUTE grants), verified end-to-end by
+  // src/lib/__tests__/invite-user-rpc.test.ts which creates an auth user and
+  // asserts a user_profiles row materializes.
+  //
+  // PostgREST denial mode nuance: when EXECUTE is revoked from BOTH anon AND
+  // authenticated AND from PUBLIC, PostgREST's schema cache excludes the fn
+  // entirely from its RPC routing — the caller sees PGRST202 ("function not
+  // found") rather than 42501. Both outcomes mean the same thing
+  // (RPC path unreachable for non-service-role callers); accept either.
+
+  function expectRpcUnreachable(error: { code?: string; message?: string } | null): void {
+    expect(error).not.toBeNull();
+    expect(
+      error?.code === "42501" ||
+        error?.code === "PGRST202" ||
+        error?.message?.toLowerCase().includes("permission denied") ||
+        (error?.message?.toLowerCase().includes("could not find the function") ?? false),
+      `Expected SQLSTATE 42501, PGRST202, "permission denied" or "could not find the function"; got code=${error?.code} message=${error?.message}`
+    ).toBe(true);
+  }
+
+  it("anon RPC to fn_create_profile_on_auth_user is denied (42501 or PGRST202)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_create_profile_on_auth_user");
+    expectRpcUnreachable(error);
+  });
+
+  it("authenticated RPC to fn_create_profile_on_auth_user is denied (42501 or PGRST202)", async () => {
+    if (skipIfRequested()) return;
+    const { error } = await userA.client.rpc("fn_create_profile_on_auth_user");
+    expectRpcUnreachable(error);
   });
 });
