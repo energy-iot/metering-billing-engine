@@ -21,10 +21,10 @@ import {
 } from "@/components/users/InviteUserDialog";
 import { EditUserDialog } from "@/components/users/EditUserDialog";
 import { SUPER_ADMIN, ORG_MANAGER, SCOPE_ORG } from "@/lib/roles";
-import type { UserDirectoryRow, UserRole } from "@/lib/types/domain";
+import type { UserVisibleRow, UserRole } from "@/lib/types/domain";
 
 export interface UsersPageClientProps {
-  rows: UserDirectoryRow[];
+  rows: UserVisibleRow[];
   orgs: OrgOption[];
   callerRole: "super_admin" | "org_manager";
   callerOrgIds: string[];
@@ -44,7 +44,7 @@ type PageFeedback =
 export function UsersPageClient(props: UsersPageClientProps) {
   const router = useRouter();
   const [inviteOpen, setInviteOpen] = React.useState(false);
-  const [editTarget, setEditTarget] = React.useState<UserDirectoryRow | null>(
+  const [editTarget, setEditTarget] = React.useState<UserVisibleRow | null>(
     null
   );
   const [feedback, setFeedback] = React.useState<PageFeedback | null>(null);
@@ -64,7 +64,7 @@ export function UsersPageClient(props: UsersPageClientProps) {
   // super_admin can change any role. org_manager cannot change roles.
   const canChangeRoleAny = props.callerRole === SUPER_ADMIN;
 
-  function canRevokeFor(row: UserDirectoryRow): boolean {
+  function canRevokeFor(row: UserVisibleRow): boolean {
     if (row.user_id === props.currentUserId) return false;
     if (props.callerRole === SUPER_ADMIN) return true;
     // org_manager can revoke rows scoped to an org they manage.
@@ -88,7 +88,7 @@ export function UsersPageClient(props: UsersPageClientProps) {
    * Hidden (not disabled) on Active rows so the action surface only
    * shows up where it is meaningful.
    */
-  function canResendFor(row: UserDirectoryRow): boolean {
+  function canResendFor(row: UserVisibleRow): boolean {
     if (!row.user_id) return false;
     if (row.email_confirmed_at != null) return false; // Active
     if (props.callerRole === SUPER_ADMIN) return true;
@@ -109,17 +109,17 @@ export function UsersPageClient(props: UsersPageClientProps) {
     return "—";
   }
 
-  function scopeLabel(row: UserDirectoryRow): string {
+  function scopeLabel(row: UserVisibleRow): string {
     if (row.role === "super_admin") return "All orgs";
     if (row.scope_id) return orgNameById.get(row.scope_id) ?? row.scope_id;
     return "—";
   }
 
-  function statusLabel(row: UserDirectoryRow): string {
+  function statusLabel(row: UserVisibleRow): string {
     return row.email_confirmed_at == null ? "Invited" : "Active";
   }
 
-  async function handleResendRow(row: UserDirectoryRow) {
+  async function handleResendRow(row: UserVisibleRow) {
     if (!row.user_id) return;
     const userId = row.user_id;
     const email = row.email ?? "";

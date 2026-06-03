@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { UsersPageClient } from "../users-page-client";
-import type { UserDirectoryRow } from "@/lib/types/domain";
+import type { UserVisibleRow } from "@/lib/types/domain";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
@@ -28,7 +28,7 @@ const ORG_A = "aaaaaaaa-aaaa-4000-8000-000000000001";
 const ORG_B = "bbbbbbbb-bbbb-4000-8000-000000000002";
 const CALLER = "11111111-1111-4000-8000-000000000001";
 
-function makeRow(overrides: Partial<UserDirectoryRow>): UserDirectoryRow {
+function makeRow(overrides: Partial<UserVisibleRow>): UserVisibleRow {
   return {
     user_id: "22222222-2222-4000-8000-000000000002",
     email: "row@example.com",
@@ -41,10 +41,10 @@ function makeRow(overrides: Partial<UserDirectoryRow>): UserDirectoryRow {
     scope_type: "org",
     scope_id: ORG_A,
     ...overrides,
-  } as UserDirectoryRow;
+  } as UserVisibleRow;
 }
 
-function rowOf(row: UserDirectoryRow) {
+function rowOf(row: UserVisibleRow) {
   // Locate the <tr> that contains this row's email — robust against
   // table-cell ordering changes.
   const cell = screen.getByText(row.email!);
