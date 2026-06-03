@@ -43,19 +43,6 @@ export default async function BillingPeriodDetailPage({
     }>;
   };
 
-  // BC2 (#174) — line-items query type with the user_directory join
-  // for the entered-by caption. The `user_directory` view exposes
-  // first_name / last_name / email (no `display_name` column); we
-  // compose the display string client-side via `pickDisplayName`,
-  // mirroring `src/lib/billing/audit-log-fetch.ts:75-82`.
-  type LineItemWithActor = BillingLineItem & {
-    user_directory: {
-      first_name: string | null;
-      last_name: string | null;
-      email: string | null;
-    } | null;
-  };
-
   const [
     { data: period, error: periodError },
     { data: lineItems, error: lineItemsError },
@@ -72,13 +59,19 @@ export default async function BillingPeriodDetailPage({
       .eq("microgrid_id", id)
       .single()
       .then((res) => ({ ...res, data: res.data as BillingPeriod | null })),
+    // BC2 (#174) — line items without the actor join. The
+    // `user_directory!entered_by_user_id(...)` PostgREST shorthand was
+    // dropped when the underlying view was replaced by the
+    // `fn_list_visible_users` RPC in #269 (no FK metadata on a function).
+    // We resolve the actor display name in a second step below using
+    // the same RPC, batched on the collected entered_by_user_id set.
     supabase
       .from("billing_line_items")
       .select(
-        "*, payment_status, paid_at, paid_by_user_id, payment_notes, user_directory!entered_by_user_id(first_name, last_name, email)",
+        "*, payment_status, paid_at, paid_by_user_id, payment_notes",
       )
       .eq("billing_period_id", periodId)
-      .returns<LineItemWithActor[]>(),
+      .returns<BillingLineItem[]>(),
     supabase
       .from("households")
       .select("*")
@@ -192,29 +185,53 @@ export default async function BillingPeriodDetailPage({
       edge.openems_edge_id != null;
   }
 
-  // BC2 (#174) — flatten the user_directory join into a per-line-item
-  // actor display-name map, then strip the join from the line items so
-  // the BillingTable's BillingLineItem typing stays clean.
-  const lineItemsWithActors = (lineItems ?? []) as LineItemWithActor[];
+  // BC2 (#174) — resolve the actor display name per line item via a
+  // second call to the `fn_list_visible_users` RPC (#269 replaced the
+  // user_directory view). Collect the entered_by_user_id set, ask the
+  // RPC for those rows in one batch, then index by user id and build
+  // the actor map. RLS-hidden actors (e.g. super_admin invisible to an
+  // org_manager caller) simply don't appear in the response → null
+  // entry, matching the previous LEFT-JOIN-miss semantics.
+  const cleanLineItems = (lineItems ?? []) as BillingLineItem[];
+  const enteredByIds = Array.from(
+    new Set(
+      cleanLineItems
+        .map((li) => li.entered_by_user_id)
+        .filter((v): v is string => typeof v === "string" && v.length > 0),
+    ),
+  );
+
+  const actorById = new Map<
+    string,
+    { first_name: string | null; last_name: string | null; email: string | null }
+  >();
+  if (enteredByIds.length > 0) {
+    const { data: actorRows } = await supabase.rpc("fn_list_visible_users", {
+      _target_user_ids: enteredByIds,
+    });
+    for (const r of actorRows ?? []) {
+      if (!r.user_id) continue;
+      actorById.set(r.user_id, {
+        first_name: r.first_name,
+        last_name: r.last_name,
+        email: r.email,
+      });
+    }
+  }
+
   const actorByLineItemId: Record<string, string | null> = {};
-  for (const li of lineItemsWithActors) {
-    // PostgREST may return the joined row as an object or null.
+  for (const li of cleanLineItems) {
     // Mirror `pickDisplayName` from src/lib/billing/audit-log-fetch.ts:75-82:
     // first_name + last_name (joined with a space), fallback to email,
     // fallback to null.
-    const join = li.user_directory;
-    const parts = [join?.first_name, join?.last_name].filter(
+    const enteredBy = li.entered_by_user_id;
+    const row = enteredBy ? actorById.get(enteredBy) ?? null : null;
+    const parts = [row?.first_name, row?.last_name].filter(
       (s): s is string => typeof s === "string" && s.length > 0,
     );
     actorByLineItemId[li.id] =
-      parts.length > 0 ? parts.join(" ") : (join?.email ?? null);
+      parts.length > 0 ? parts.join(" ") : (row?.email ?? null);
   }
-  const cleanLineItems: BillingLineItem[] = lineItemsWithActors.map((li) => {
-    // Strip the join field so the prop type stays narrow.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_directory, ...rest } = li;
-    return rest as BillingLineItem;
-  });
 
   return (
     <>

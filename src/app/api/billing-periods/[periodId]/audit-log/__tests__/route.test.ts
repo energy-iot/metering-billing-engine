@@ -9,7 +9,7 @@
  *   - actorDisplayName derived from first_name + last_name (NOT a
  *     non-existent display_name column); falls back to email.
  *   - actorDisplayName is null when the actor is a super_admin hidden by
- *     user_can_see_user_profile (the user_directory `IN` query simply
+ *     user_can_see_user_profile (the fn_list_visible_users RPC simply
  *     returns no row for that actor_user_id).
  *   - payment_events row with source='ipn' maps to eventType =
  *     'payment_status_changed' (NOT a non-existent enum entry).
@@ -102,14 +102,15 @@ function buildSupabaseStub() {
           }),
         };
       }
-      if (table === "user_directory") {
-        return {
-          select: () => ({
-            in: async () => ({ data: mockDirectoryRows, error: null }),
-          }),
-        };
-      }
       throw new Error(`Unexpected table: ${table}`);
+    },
+    // #269: actor lookup migrated from .from("user_directory").select(...)
+    // .in(...) to .rpc("fn_list_visible_users", { _target_user_ids: [...] }).
+    rpc: async (name: string) => {
+      if (name === "fn_list_visible_users") {
+        return { data: mockDirectoryRows, error: null };
+      }
+      throw new Error(`Unexpected rpc: ${name}`);
     },
   };
 }
