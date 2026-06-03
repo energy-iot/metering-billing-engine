@@ -30,7 +30,7 @@ export default defineConfig({
           include: ["src/lib/**/*.test.{ts,tsx}"],
           exclude: [
             "src/lib/supabase/__tests__/rls.test.ts",
-            "src/lib/supabase/__tests__/user_directory_view.test.ts",
+            "src/lib/supabase/__tests__/fn_list_visible_users.test.ts",
             "src/lib/supabase/__tests__/user_profiles_rls.test.ts",
             "src/lib/supabase/__tests__/dek-bootstrap.test.ts",
             "src/lib/supabase/__tests__/payment_state_machine.test.ts",
@@ -52,7 +52,7 @@ export default defineConfig({
           // fileParallelism: false ensures tests within this project run sequentially.
           include: [
             "src/lib/supabase/__tests__/rls.test.ts",
-            "src/lib/supabase/__tests__/user_directory_view.test.ts",
+            "src/lib/supabase/__tests__/fn_list_visible_users.test.ts",
             "src/lib/supabase/__tests__/user_profiles_rls.test.ts",
             "src/lib/supabase/__tests__/dek-bootstrap.test.ts",
             "src/lib/supabase/__tests__/payment_state_machine.test.ts",

@@ -435,21 +435,26 @@ export async function GET(
   }
 
   // 8. Resolve "entered by" display name (BC1 — manual readings).
+  //
+  // #269: the prior `user_directory` view was replaced by the
+  // `fn_list_visible_users` RPC. The old select asked for a
+  // `display_name` column that never existed on the view (returned
+  // null silently); we drop it from the projection here. The RPC's
+  // visibility predicate is identical to the view's WHERE clause, so
+  // an RLS-hidden actor still surfaces as an empty row set → null name.
   let enteredByUserName: string | null = null;
   const enteredById = scoped.entered_by_user_id as string | null;
   if (enteredById && scoped.reading_source === "manual") {
-    const { data: dirRow } = await supabase
-      .from("user_directory")
-      .select("display_name, first_name, last_name, email")
-      .eq("user_id", enteredById)
-      .maybeSingle();
+    const { data: dirRows } = await supabase.rpc("fn_list_visible_users", {
+      _target_user_ids: [enteredById],
+    });
+    const dirRow = dirRows?.[0];
     if (dirRow) {
       const composed = [dirRow.first_name, dirRow.last_name]
         .filter((s): s is string => Boolean(s && s.trim()))
         .join(" ")
         .trim();
       enteredByUserName =
-        (dirRow.display_name as string | null) ??
         (composed.length > 0 ? composed : null) ??
         (dirRow.email as string | null) ??
         null;

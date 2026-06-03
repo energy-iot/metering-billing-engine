@@ -1,8 +1,15 @@
 /**
- * user_directory_view.test.ts
+ * fn_list_visible_users.test.ts
  *
- * RLS-level visibility tests for the user_directory VIEW + user_profiles
- * policies introduced in UX5 (#79).
+ * RLS-level visibility tests for the `fn_list_visible_users` RPC + the
+ * `user_profiles` UPDATE policy. Migration 00046 (#269) replaced the
+ * prior `user_directory` VIEW with this RPC to clear two CRITICAL
+ * Supabase linter ERRORs (`auth_users_exposed` + `security_definer_view`).
+ *
+ * Meaningful security upgrade over the dropped view: anon was previously
+ * granted SELECT on the view (rows-filtered by the WHERE clause → 0
+ * rows in practice). The new RPC denies anon at the grant layer
+ * (REVOKE EXECUTE FROM PUBLIC, anon) → 42501 / "permission denied".
  *
  * Fixture: four users.
  *   A — super_admin
@@ -10,24 +17,30 @@
  *   C — org_manager @ NFE
  *   D — org_manager @ OtherOrg
  *
- * Assertions:
- *   - A sees A, B, C, D.
- *   - B sees self + C. B does NOT see A (super_admins invisible to
- *     org_managers). B does NOT see D (different org).
- *   - D does NOT see B, C.
- *   - user_profiles UPDATE policy: B's attempt to update C's profile
- *     affects 0 rows (filtered by auth.uid() = user_id OR is_super_admin()).
+ * Coverage (per the architect appendix on #269):
+ *   - Anon `.rpc("fn_list_visible_users")` → permission-denied error
+ *     (NEW security shape vs. the old "0 rows" behaviour).
+ *   - Super_admin sees all visible users (including super_admins).
+ *   - Org_manager sees own-org users only (super_admins + cross-org hidden).
+ *   - Single-target lookup: `_target_user_ids: [<otherOrgUserId>]` returns
+ *     empty for org_manager; returns the row for super_admin.
+ *   - Batch lookup: `_target_user_ids: [a,b,c]` returns ≤3 rows depending
+ *     on per-id visibility (preserves the audit-log-fetch use case).
+ *   - user_profiles UPDATE policy: org_manager B's attempt to update C's
+ *     profile affects 0 rows (unchanged from the prior suite).
  *
  * Opt-out: SKIP_RLS_TESTS=1.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createClient } from "@supabase/supabase-js";
 import {
   assertEnvironmentReady,
   shouldSkip,
   serviceClient,
   createTestUser,
   cleanupTestData,
+  LOCAL_SUPABASE_URL,
   type TestUser,
 } from "./rls.helpers";
 
@@ -106,21 +119,48 @@ afterAll(async () => {
 
 function skipIfRequested(): boolean {
   if (shouldSkip()) {
-    console.log("[user_directory_view] SKIP_RLS_TESTS=1 — skipping suite.");
+    console.log("[fn_list_visible_users] SKIP_RLS_TESTS=1 — skipping suite.");
     return true;
   }
   return false;
 }
 
-describe("user_directory — visibility", () => {
-  it("A (super_admin) sees A, B, C, D", async () => {
+type VisibleRow = {
+  user_id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+};
+
+describe("fn_list_visible_users — visibility", () => {
+  it("anon cannot call the RPC (permission denied at the grant layer)", async () => {
     if (skipIfRequested()) return;
-    const { data, error } = await A.client
-      .from("user_directory")
-      .select("user_id")
-      .in("user_id", [A.userId, B.userId, C.userId, D.userId]);
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+    // Anon client: no Authorization bearer, only the apikey. RPC must
+    // 42501 / "permission denied" — this is the MEANINGFUL security
+    // upgrade over the dropped view (which returned 0 rows via filter).
+    const anon = createClient(LOCAL_SUPABASE_URL, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await anon.rpc("fn_list_visible_users");
+    expect(data).toBeNull();
+    expect(error).not.toBeNull();
+    // PostgREST surfaces Postgres SQLSTATE 42501 as code "42501" and the
+    // message includes "permission denied". Be lenient on exact spelling
+    // (PostgREST wraps the SQLSTATE in a JSON payload).
+    const codeOrMessage = `${error?.code ?? ""} ${error?.message ?? ""}`.toLowerCase();
+    expect(
+      codeOrMessage.includes("42501") ||
+        codeOrMessage.includes("permission denied")
+    ).toBe(true);
+  });
+
+  it("A (super_admin) sees A, B, C, D when listing all", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await A.client.rpc("fn_list_visible_users");
     expect(error).toBeNull();
-    const ids = new Set((data ?? []).map((r) => r.user_id));
+    const ids = new Set(((data ?? []) as VisibleRow[]).map((r) => r.user_id));
     expect(ids.has(A.userId)).toBe(true);
     expect(ids.has(B.userId)).toBe(true);
     expect(ids.has(C.userId)).toBe(true);
@@ -129,12 +169,11 @@ describe("user_directory — visibility", () => {
 
   it("B (org_manager @ NFE) sees self + C; does NOT see A or D", async () => {
     if (skipIfRequested()) return;
-    const { data, error } = await B.client
-      .from("user_directory")
-      .select("user_id")
-      .in("user_id", [A.userId, B.userId, C.userId, D.userId]);
+    const { data, error } = await B.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [A.userId, B.userId, C.userId, D.userId],
+    });
     expect(error).toBeNull();
-    const ids = new Set((data ?? []).map((r) => r.user_id));
+    const ids = new Set(((data ?? []) as VisibleRow[]).map((r) => r.user_id));
     expect(ids.has(B.userId)).toBe(true);
     expect(ids.has(C.userId)).toBe(true);
     expect(ids.has(A.userId)).toBe(false); // super_admin hidden
@@ -143,16 +182,50 @@ describe("user_directory — visibility", () => {
 
   it("D (org_manager @ OtherOrg) does NOT see B, C", async () => {
     if (skipIfRequested()) return;
-    const { data, error } = await D.client
-      .from("user_directory")
-      .select("user_id")
-      .in("user_id", [A.userId, B.userId, C.userId, D.userId]);
+    const { data, error } = await D.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [A.userId, B.userId, C.userId, D.userId],
+    });
     expect(error).toBeNull();
-    const ids = new Set((data ?? []).map((r) => r.user_id));
+    const ids = new Set(((data ?? []) as VisibleRow[]).map((r) => r.user_id));
     expect(ids.has(D.userId)).toBe(true); // self
     expect(ids.has(B.userId)).toBe(false);
     expect(ids.has(C.userId)).toBe(false);
     expect(ids.has(A.userId)).toBe(false);
+  });
+
+  it("single-target lookup: org_manager B → D's id returns empty", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await B.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [D.userId],
+    });
+    expect(error).toBeNull();
+    expect(((data ?? []) as VisibleRow[]).length).toBe(0);
+  });
+
+  it("single-target lookup: super_admin A → D's id returns one row", async () => {
+    if (skipIfRequested()) return;
+    const { data, error } = await A.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [D.userId],
+    });
+    expect(error).toBeNull();
+    const rows = (data ?? []) as VisibleRow[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].user_id).toBe(D.userId);
+  });
+
+  it("batch lookup: B's [A, C, D] → only C surfaces (≤3 per visibility)", async () => {
+    // Preserves the audit-log-fetch.ts use case: send a set of actor ids,
+    // get back the subset the caller can see — RLS-hidden actors silently
+    // drop out (callers render null for those).
+    if (skipIfRequested()) return;
+    const { data, error } = await B.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [A.userId, C.userId, D.userId],
+    });
+    expect(error).toBeNull();
+    const ids = new Set(((data ?? []) as VisibleRow[]).map((r) => r.user_id));
+    expect(ids.has(C.userId)).toBe(true);
+    expect(ids.has(A.userId)).toBe(false);
+    expect(ids.has(D.userId)).toBe(false);
   });
 });
 
