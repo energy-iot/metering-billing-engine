@@ -4,14 +4,18 @@ import {
   currentUserIsSuperAdmin,
 } from "@/lib/auth/access";
 import { SUPER_ADMIN, ORG_MANAGER } from "@/lib/roles";
-import type { UserDirectoryRow, UserRoleRecord } from "@/lib/types/domain";
+import type { UserVisibleRow, UserRoleRecord } from "@/lib/types/domain";
 import { UsersPageClient } from "./users-page-client";
 
 /**
  * /settings/users — admin view of all users visible to the caller.
  *
- * Server component: reads the user_directory VIEW (security_invoker;
- * RLS on user_profiles filters rows via user_can_see_user_profile).
+ * Server component: calls the `fn_list_visible_users` RPC (migration
+ * 00046) which enforces the `user_can_see_user_profile(user_id)`
+ * visibility predicate body-side. The RPC supersedes the old
+ * `user_directory` view (dropped in #269 to clear two CRITICAL
+ * Supabase linter ERRORs: auth_users_exposed + security_definer_view).
+ *
  * Also fetches the org list (for the Invite dialog) scoped to the
  * caller's role:
  *   - super_admin → all orgs (limited by organizations RLS, which
@@ -37,11 +41,9 @@ export default async function SettingsUsersPage() {
     )
   );
 
-  // Fetch rows.
-  const { data: rowsData } = await supabase
-    .from("user_directory")
-    .select("*");
-  const rows: UserDirectoryRow[] = (rowsData ?? []).filter(
+  // Fetch rows. No args → list all visible users (per the RPC contract).
+  const { data: rowsData } = await supabase.rpc("fn_list_visible_users");
+  const rows: UserVisibleRow[] = ((rowsData ?? []) as UserVisibleRow[]).filter(
     (r) => r.user_id != null
   );
 

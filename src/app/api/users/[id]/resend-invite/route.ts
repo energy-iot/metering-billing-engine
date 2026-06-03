@@ -26,14 +26,15 @@ import type { UserRole, RoleScopeType } from "@/lib/types/domain";
  *   Step A — caller authentication.
  *           userClient.auth.getUser() → 401 if no session.
  *
- *   Step B — resolve target's CURRENT role row via the user_directory
- *           VIEW (user-bound client). The view's WHERE clause calls
- *           `user_can_see_user_profile(user_id)` so RLS-equivalent
- *           visibility is enforced uniformly: invisible row → uniform
- *           403, never "not found". Reading directly from `user_roles`
- *           would NOT work for org_manager → org_manager-in-same-org
- *           because no `user_roles` SELECT policy grants cross-user
- *           reads (only "own row" + super_admin FOR ALL).
+ *   Step B — resolve target's CURRENT role row via the
+ *           `fn_list_visible_users` RPC (user-bound client). The RPC's
+ *           body filter calls `user_can_see_user_profile(user_id)` so
+ *           RLS-equivalent visibility is enforced uniformly: invisible
+ *           row → uniform 403, never "not found". Reading directly from
+ *           `user_roles` would NOT work for org_manager →
+ *           org_manager-in-same-org because no `user_roles` SELECT
+ *           policy grants cross-user reads (only "own row" +
+ *           super_admin FOR ALL).
  *
  *           Orphans surface as a row whose `role` column is NULL (LEFT
  *           JOIN miss). The visibility helper still gates them: an
@@ -100,29 +101,39 @@ export async function POST(
     );
   }
 
-  // ── Step B: resolve target's CURRENT role row via user_directory ───
+  // ── Step B: resolve target's CURRENT role row via fn_list_visible_users
   //
-  // user_directory is a VIEW (00014_user_directory_view.sql) that
-  // joins auth.users LEFT user_profiles LEFT user_roles, gated by
-  // `WHERE user_can_see_user_profile(au.id)`. The helper is
-  // SECURITY DEFINER and reads `auth.uid()` from the caller's JWT —
-  // it returns true iff the caller is the target, is a super_admin,
-  // OR shares an org-scoped manager role with the target. So a row
-  // returned here is guaranteed visible to the caller; a NULL row
-  // means "doesn't exist OR you can't see it" — uniform 403 (the
-  // enumeration-defense rule the route docstring describes).
+  // fn_list_visible_users is an RPC (00046_replace_user_directory_with_rpc.sql)
+  // that returns rows joining auth.users LEFT user_profiles LEFT user_roles,
+  // gated body-side by `WHERE user_can_see_user_profile(au.id)`. The helper
+  // is SECURITY DEFINER and reads `auth.uid()` from the caller's JWT — it
+  // returns true iff the caller is the target, is a super_admin, OR shares
+  // an org-scoped manager role with the target. So a row returned here is
+  // guaranteed visible to the caller; an empty result means "doesn't exist
+  // OR you can't see it" — uniform 403 (the enumeration-defense rule the
+  // route docstring describes).
   //
-  // We deliberately do NOT read `user_roles` directly: that table's
-  // SELECT policies only grant "own row" + super_admin FOR ALL, so
-  // an org_manager B trying to resend an org_manager C in the SAME
-  // org would get a NULL row and be 403'd — even though both the
-  // RLS helper and the rest of the app correctly consider C visible
-  // to B. The view is the single source of truth for "can A see B".
-  const { data: targetRoleRow } = await userClient
-    .from("user_directory")
-    .select("role, scope_type, scope_id")
-    .eq("user_id", targetId)
-    .maybeSingle<CurrentRoleRow>();
+  // We deliberately do NOT read `user_roles` directly: that table's SELECT
+  // policies only grant "own row" + super_admin FOR ALL, so an org_manager
+  // B trying to resend an org_manager C in the SAME org would get a NULL
+  // row and be 403'd — even though both the RLS helper and the rest of the
+  // app correctly consider C visible to B. The RPC is the single source of
+  // truth for "can A see B".
+  //
+  // The RPC replaces the prior `user_directory` view (#269) which leaked
+  // auth.users to anon via PostgREST and ran with SECURITY DEFINER on the
+  // view itself; the new RPC denies anon at the grant layer (REVOKE EXECUTE
+  // FROM anon) and applies the visibility predicate body-side.
+  const { data: visibleRows } = await userClient.rpc("fn_list_visible_users", {
+    _target_user_ids: [targetId],
+  });
+  const targetRoleRow: CurrentRoleRow | null = visibleRows?.[0]
+    ? {
+        role: visibleRows[0].role,
+        scope_type: visibleRows[0].scope_type,
+        scope_id: visibleRows[0].scope_id,
+      }
+    : null;
 
   // ── Step C: caller permission against TARGET's role ────────────────
   const callerIsSuper = await currentUserIsSuperAdmin(userClient);

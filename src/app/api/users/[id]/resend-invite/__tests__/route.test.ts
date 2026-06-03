@@ -30,11 +30,12 @@ import { NextRequest } from "next/server";
 // Caller user (auth.getUser result).
 let mockCaller: { id: string; email?: string } | null = null;
 
-// Mock for the user-bound client `.from("user_directory").select(...).eq(...).maybeSingle()`
+// Mock for the user-bound client `.rpc("fn_list_visible_users", {...})`
+// (#269 replaced the prior `.from("user_directory").…maybeSingle()` call).
 // Returns the target's CURRENT row (or null when invisible/absent). The
-// route was migrated from `user_roles` → `user_directory` because the
-// former's RLS policies block org_manager → org_manager-in-same-org reads;
-// the view's WHERE filter (`user_can_see_user_profile(user_id)`) is the
+// route was migrated from `user_roles` → `user_directory` → `fn_list_visible_users`
+// because `user_roles` RLS blocks org_manager → org_manager-in-same-org reads;
+// the RPC's body filter (`user_can_see_user_profile(user_id)`) is the
 // canonical visibility gate. A visible orphan surfaces as a row with
 // NULL role/scope columns (LEFT JOIN miss on user_roles).
 let mockTargetRoleRow: {
@@ -92,19 +93,6 @@ function userClientFromImpl(table: string) {
       }),
     };
   }
-  if (table === "user_directory") {
-    // Target lookup. `eq("user_id", targetId).maybeSingle()`.
-    return {
-      select: () => ({
-        eq: () => ({
-          maybeSingle: vi.fn(async () => ({
-            data: mockTargetRoleRow,
-            error: null,
-          })),
-        }),
-      }),
-    };
-  }
   if (table === "user_roles") {
     // After the route migration, only access.ts's `getCurrentUserRoles`
     // (caller-roles fetch) reads user_roles via the user-bound client.
@@ -124,6 +112,34 @@ function userClientFromImpl(table: string) {
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     from: vi.fn(userClientFromImpl),
+    // `.rpc("fn_list_visible_users", { _target_user_ids: [targetId] })`
+    // (#269: target lookup replaced .from("user_directory")…maybeSingle()).
+    // The mock returns an array shaped like the RPC return type; the route
+    // takes `data?.[0]`. A null `mockTargetRoleRow` → empty array → no row.
+    rpc: vi.fn(async (name: string) => {
+      if (name === "fn_list_visible_users") {
+        return {
+          data: mockTargetRoleRow
+            ? [
+                {
+                  user_id: TARGET_UUID,
+                  email: null,
+                  email_confirmed_at: null,
+                  last_sign_in_at: null,
+                  first_name: null,
+                  last_name: null,
+                  phone: null,
+                  role: mockTargetRoleRow.role,
+                  scope_type: mockTargetRoleRow.scope_type,
+                  scope_id: mockTargetRoleRow.scope_id,
+                },
+              ]
+            : [],
+          error: null,
+        };
+      }
+      throw new Error(`Unexpected rpc: ${name}`);
+    }),
     auth: {
       getUser: vi.fn(async () => ({
         data: { user: mockCaller },

@@ -16,8 +16,9 @@
  * Behavior preserved (any change here will break the BC1 contract):
  *   - LIMIT 500 per side (memory-safety guard, NOT pagination).
  *   - `payment_events.at` aliased into the entry's `createdAt`.
- *   - `user_directory` join surfaces actor display names; missing rows
- *     (RLS-hidden super_admin per `user_can_see_user_profile`) → null.
+ *   - `fn_list_visible_users` RPC (replaced the `user_directory` view in
+ *     #269) surfaces actor display names; missing rows (RLS-hidden
+ *     super_admin per `user_can_see_user_profile`) → null.
  *   - `actorDisplayName` = first+last, fallback email, fallback null.
  *   - Audit IDs prefixed `audit:<uuid>`; payment-event IDs prefixed
  *     `payment_event:<uuid>` for stable React keys across the union.
@@ -203,7 +204,10 @@ export async function fetchAuditLogEntries(
     }
   }
 
-  // ── 4. Resolve actor display names via user_directory (RLS-aware). ───────
+  // ── 4. Resolve actor display names via fn_list_visible_users (RLS-aware). ─
+  // #269 replaced the user_directory view with this RPC; the visibility
+  // predicate (`user_can_see_user_profile`) is preserved body-side, so a
+  // hidden super_admin actor still surfaces as a missing row → null name.
   const actorIds = Array.from(
     new Set(
       [
@@ -214,10 +218,9 @@ export async function fetchAuditLogEntries(
   );
   const directoryMap = new Map<string, DirectoryRow>();
   if (actorIds.length > 0) {
-    const { data: dirRows } = await supabase
-      .from("user_directory")
-      .select("user_id, email, first_name, last_name")
-      .in("user_id", actorIds);
+    const { data: dirRows } = await supabase.rpc("fn_list_visible_users", {
+      _target_user_ids: actorIds,
+    });
     for (const r of (dirRows ?? []) as DirectoryRow[]) {
       directoryMap.set(r.user_id, r);
     }

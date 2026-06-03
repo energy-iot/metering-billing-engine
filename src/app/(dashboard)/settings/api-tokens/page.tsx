@@ -82,16 +82,17 @@ export default async function SettingsApiTokensPage() {
 
   const tokens: RawToken[] = (tokensData ?? []) as RawToken[];
 
-  // Resolve created_by display names via user_directory.
+  // Resolve created_by display names via fn_list_visible_users (RPC).
+  // #269 replaced the user_directory view with this RPC; visibility
+  // semantics are preserved (RLS-hidden actors → no row → fallback).
   const creatorIds = Array.from(
     new Set(tokens.map((t) => t.created_by).filter((id): id is string => !!id))
   );
   const creatorNames: Record<string, string> = {};
   if (creatorIds.length > 0) {
-    const { data: dirRows } = await supabase
-      .from("user_directory")
-      .select("user_id, email, first_name, last_name")
-      .in("user_id", creatorIds);
+    const { data: dirRows } = await supabase.rpc("fn_list_visible_users", {
+      _target_user_ids: creatorIds,
+    });
     for (const r of dirRows ?? []) {
       if (!r.user_id) continue;
       const first = (r.first_name ?? "").trim();
