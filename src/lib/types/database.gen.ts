@@ -73,13 +73,6 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "billing_audit_log_actor_user_id_fkey"
-            columns: ["actor_user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
-          },
-          {
             foreignKeyName: "billing_audit_log_billing_line_item_id_fkey"
             columns: ["billing_line_item_id"]
             isOneToOne: false
@@ -204,25 +197,11 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "billing_line_items_entered_by_user_id_fkey"
-            columns: ["entered_by_user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
-          },
-          {
             foreignKeyName: "billing_line_items_household_id_fkey"
             columns: ["household_id"]
             isOneToOne: false
             referencedRelation: "households"
             referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "billing_line_items_paid_by_user_id_fkey"
-            columns: ["paid_by_user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -483,13 +462,6 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "households"
             referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "household_users_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -754,13 +726,6 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "org_api_tokens_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
-          },
-          {
             foreignKeyName: "org_api_tokens_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
@@ -853,13 +818,6 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "payment_events_actor_user_id_fkey"
-            columns: ["actor_user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
-          },
-          {
             foreignKeyName: "payment_events_line_item_id_fkey"
             columns: ["line_item_id"]
             isOneToOne: false
@@ -931,15 +889,7 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "user_profiles_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: true
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
-          },
-        ]
+        Relationships: []
       }
       user_roles: {
         Row: {
@@ -973,13 +923,6 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "user_roles_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "user_directory"
-            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -1018,29 +961,6 @@ export type Database = {
             columns: ["microgrid_id"]
             isOneToOne: false
             referencedRelation: "microgrids"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      user_directory: {
-        Row: {
-          email: string | null
-          email_confirmed_at: string | null
-          first_name: string | null
-          last_name: string | null
-          last_sign_in_at: string | null
-          phone: string | null
-          role: Database["public"]["Enums"]["user_role"] | null
-          scope_id: string | null
-          scope_type: Database["public"]["Enums"]["role_scope_type"] | null
-          user_id: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "user_roles_scope_org_fkey"
-            columns: ["scope_id"]
-            isOneToOne: false
-            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]
@@ -1169,6 +1089,21 @@ export type Database = {
         Returns: string
       }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
+      fn_list_visible_users: {
+        Args: { _target_user_ids?: string[] }
+        Returns: {
+          email: string
+          email_confirmed_at: string
+          first_name: string
+          last_name: string
+          last_sign_in_at: string
+          phone: string
+          role: Database["public"]["Enums"]["user_role"]
+          scope_id: string
+          scope_type: Database["public"]["Enums"]["role_scope_type"]
+          user_id: string
+        }[]
+      }
       fn_next_invoice_number: {
         Args: { p_community_id: string; p_year: number }
         Returns: number

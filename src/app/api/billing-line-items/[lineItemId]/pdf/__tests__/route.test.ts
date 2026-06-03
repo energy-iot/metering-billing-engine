@@ -76,14 +76,17 @@ type FromState = {
   lineItem: { data: unknown; error: unknown };
   household_devices: { data: unknown; error: unknown };
   rate_schedules: { data: unknown; error: unknown };
-  user_directory: { data: unknown; error: unknown };
+  // #269: actor lookup was `.from("user_directory").…maybeSingle()`; it
+  // is now `.rpc("fn_list_visible_users", { _target_user_ids: [...] })`.
+  // The mock returns an array of rows (or empty) per the RPC contract.
+  fnListVisibleUsers: { data: unknown; error: unknown };
 };
 
 const fromState: FromState = {
   lineItem: { data: null, error: null },
   household_devices: { data: null, error: null },
   rate_schedules: { data: null, error: null },
-  user_directory: { data: null, error: null },
+  fnListVisibleUsers: { data: [], error: null },
 };
 
 // Captured updates to billing_line_items so tests can assert the persist.
@@ -146,15 +149,6 @@ function makeFromImpl(table: string) {
       }),
     };
   }
-  if (table === "user_directory") {
-    return {
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () => Promise.resolve(fromState.user_directory),
-        }),
-      }),
-    };
-  }
   // Re-fetch path: SELECT(invoice_number).eq(id).maybeSingle()
   throw new Error(`Unexpected table: ${table}`);
 }
@@ -169,6 +163,10 @@ vi.mock("@/lib/supabase/server", () => ({
       rpcCalls.push({ fn, args });
       if (fn === "fn_next_invoice_number") {
         return { data: rpcCounter++, error: null };
+      }
+      if (fn === "fn_list_visible_users") {
+        // #269: actor lookup. Returns whatever the test sets up (default []).
+        return fromState.fnListVisibleUsers;
       }
       return { data: null, error: null };
     }),
@@ -283,7 +281,7 @@ beforeEach(() => {
   fromState.lineItem = { data: lineItemRow(), error: null };
   fromState.household_devices = { data: [], error: null };
   fromState.rate_schedules = { data: RATE_SCHEDULE_ROW, error: null };
-  fromState.user_directory = { data: null, error: null };
+  fromState.fnListVisibleUsers = { data: [], error: null };
   ensurePaymentLinkMock.mockResolvedValue({
     redirectUrl: "https://pay.pesapal.com/x",
     orderTrackingId: "OT-1",

@@ -43,13 +43,37 @@ export type OrgApiToken =
   Database["public"]["Tables"]["org_api_tokens"]["Row"];
 
 /**
- * user_directory row — the joined VIEW over auth.users × user_profiles ×
- * user_roles. Defined in migration 00013 with security_invoker = true.
- * Column nullability mirrors the LEFT JOINs: a user with no profile or
- * no role row surfaces with NULL columns.
+ * A row from the `fn_list_visible_users` RPC — the joined return shape over
+ * auth.users × user_profiles × user_roles. Defined in migration 00046
+ * (replaces the prior `user_directory` VIEW for #269 to clear two CRITICAL
+ * Supabase linter ERRORs: `auth_users_exposed` + `security_definer_view`).
+ *
+ * The RPC is SECURITY DEFINER and enforces visibility via the
+ * `user_can_see_user_profile(user_id)` helper (same predicate the old view
+ * used in its WHERE clause).
+ *
+ * We explicitly NULL-widen every column here. The Supabase codegen does not
+ * carry column nullability through function return-types (the underlying
+ * pg_type metadata only marks columns NOT NULL when the function declares
+ * STRICT or the column has a default — neither applies to TABLE-returning
+ * SECURITY DEFINER functions). At runtime every column EXCEPT `user_id`
+ * may be NULL because the joins are LEFT JOINs onto user_profiles and
+ * user_roles: a user with no profile or no role row surfaces with NULL
+ * columns, identical to the prior view's Row shape.
+ *
+ * `UserDirectoryRow` is kept as a deprecated alias so existing import sites
+ * still compile during the codebase rollover. New code should import
+ * `UserVisibleRow` directly.
  */
-export type UserDirectoryRow =
-  Database["public"]["Views"]["user_directory"]["Row"];
+type RawFnListVisibleUsersRow =
+  Database["public"]["Functions"]["fn_list_visible_users"]["Returns"][number];
+
+export type UserVisibleRow = {
+  [K in keyof RawFnListVisibleUsersRow]: RawFnListVisibleUsersRow[K] | null;
+};
+
+/** @deprecated Use `UserVisibleRow` — kept for one PR cycle of backwards compat. */
+export type UserDirectoryRow = UserVisibleRow;
 
 // ── Views ─────────────────────────────────────────────────────────────────────
 
