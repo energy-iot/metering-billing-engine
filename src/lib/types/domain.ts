@@ -60,10 +60,6 @@ export type OrgApiToken =
  * may be NULL because the joins are LEFT JOINs onto user_profiles and
  * user_roles: a user with no profile or no role row surfaces with NULL
  * columns, identical to the prior view's Row shape.
- *
- * `UserDirectoryRow` is kept as a deprecated alias so existing import sites
- * still compile during the codebase rollover. New code should import
- * `UserVisibleRow` directly.
  */
 type RawFnListVisibleUsersRow =
   Database["public"]["Functions"]["fn_list_visible_users"]["Returns"][number];
@@ -71,9 +67,6 @@ type RawFnListVisibleUsersRow =
 export type UserVisibleRow = {
   [K in keyof RawFnListVisibleUsersRow]: RawFnListVisibleUsersRow[K] | null;
 };
-
-/** @deprecated Use `UserVisibleRow` — kept for one PR cycle of backwards compat. */
-export type UserDirectoryRow = UserVisibleRow;
 
 // ── Views ─────────────────────────────────────────────────────────────────────
 
