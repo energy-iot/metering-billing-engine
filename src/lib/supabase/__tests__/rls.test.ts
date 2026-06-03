@@ -2015,3 +2015,80 @@ describe("RLS: Community payment provider (#115)", () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// B1 (#268): REVOKE EXECUTE on anon-reachable SECURITY DEFINER mutators
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Migration 00045 REVOKEs EXECUTE FROM PUBLIC, anon on three SECURITY DEFINER
+// functions and re-GRANTs to authenticated + service_role. The tests below
+// assert the REVOKE fires at the grant layer (PostgreSQL returns SQLSTATE
+// 42501) BEFORE the function body runs. This is structurally different from
+// the body-side defense pattern used by `fn_get_community_payment_secret`
+// (which returns NULL with no error) — these REVOKEs surface as an error.
+//
+// Authenticated happy-paths are exercised by existing tests
+// (payment_state_machine.test.ts for fn_apply_payment_event;
+// invite-user-rpc.test.ts for fn_finalize_user_invitation /
+// fn_change_user_role). If those continue to pass, the GRANT to
+// authenticated/service_role is intact.
+
+describe("B1 #268 — anon REVOKE on SECURITY DEFINER mutators", () => {
+  function expectAnonDenied(error: { code?: string; message?: string } | null): void {
+    expect(error).not.toBeNull();
+    expect(
+      error?.code === "42501" || error?.message?.toLowerCase().includes("permission denied"),
+      `Expected SQLSTATE 42501 or "permission denied" in error; got code=${error?.code} message=${error?.message}`
+    ).toBe(true);
+  }
+
+  function buildAnonClient(): SupabaseClient {
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+    return createClient(LOCAL_SUPABASE_URL, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+
+  it("anon RPC to fn_apply_payment_event is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_apply_payment_event", {
+      _line_item_id: FIXTURE.lineItemA,
+      _to_status: "paid",
+      _source: "manual",
+      _actor_user_id: null,
+      _raw_payload: {},
+      _actor_kind: "user",
+      _actor_ref: "anon-probe",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("anon RPC to fn_change_user_role is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    // Throwaway UUIDs — REVOKE fires before any body logic / argument
+    // validation runs, so values don't need to reference real fixtures.
+    const { error } = await anonClient.rpc("fn_change_user_role", {
+      p_user_id: "00000000-0000-4000-8000-000000000001",
+      p_role: "org_manager",
+      p_scope_id: "00000000-0000-4000-8000-000000000002",
+    });
+    expectAnonDenied(error);
+  });
+
+  it("anon RPC to fn_finalize_user_invitation is denied (42501)", async () => {
+    if (skipIfRequested()) return;
+    const anonClient = buildAnonClient();
+    const { error } = await anonClient.rpc("fn_finalize_user_invitation", {
+      p_user_id: "00000000-0000-4000-8000-000000000003",
+      p_first_name: "Anon",
+      p_last_name: "Probe",
+      p_phone: "+10000000000",
+      p_role: "org_manager",
+      p_scope_id: "00000000-0000-4000-8000-000000000004",
+    });
+    expectAnonDenied(error);
+  });
+});
