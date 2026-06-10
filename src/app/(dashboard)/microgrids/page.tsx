@@ -300,7 +300,7 @@ export default async function MicrogridsPage({
             <a
               key={mg.id}
               href={`/microgrids/${mg.id}`}
-              className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="block rounded-lg border border-border bg-card p-6 transition-colors hover:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <h2 className="font-medium text-foreground">{mg.name}</h2>
               {locationLabel && (

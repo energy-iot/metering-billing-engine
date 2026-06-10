@@ -97,7 +97,7 @@ export async function OrgCard({ org }: { org: Organization }) {
             <a
               key={mg.id}
               href={`/microgrids/${mg.id}`}
-              className="block rounded-md border border-border bg-muted p-4 transition-colors hover:bg-card hover:border-border focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="block rounded-md border border-border bg-muted p-4 transition-colors hover:bg-card hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <h3 className="font-medium text-foreground">{mg.name}</h3>
               {locationLabel(mg) && (
