@@ -52,7 +52,7 @@ export default async function DashboardPage() {
   );
 }
 
-async function OrgCard({ org }: { org: Organization }) {
+export async function OrgCard({ org }: { org: Organization }) {
   const supabase = await createClient();
 
   // Fetch microgrids for this org (via communities join)
@@ -94,9 +94,10 @@ async function OrgCard({ org }: { org: Organization }) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {microgridsWithCounts.map((mg) => (
-            <div
+            <a
               key={mg.id}
-              className="rounded-md border border-border bg-muted p-4"
+              href={`/microgrids/${mg.id}`}
+              className="block rounded-md border border-border bg-muted p-4 transition-colors hover:bg-card hover:border-border focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               <h3 className="font-medium text-foreground">{mg.name}</h3>
               {locationLabel(mg) && (
@@ -110,7 +111,7 @@ async function OrgCard({ org }: { org: Organization }) {
                 </span>
                 <span className="text-muted-foreground">{mg.currency}</span>
               </div>
-            </div>
+            </a>
           ))}
         </div>
       )}
