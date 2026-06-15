@@ -8,7 +8,10 @@
  *   - Detection priority: fragment with valid token wins over query.
  *   - Empty / malformed / missing-token edge cases.
  *   - Type mismatch (wrong type literal vs expectedType).
- *   - getUser failure modes after each primitive.
+ *   - no-user-returned failure modes from each primitive.
+ *   - #287 regression: helper takes the user from setSession/verifyOtp's
+ *     own server-validated return and does NOT make a redundant getUser()
+ *     call, so a failing getUser cannot break an already-installed session.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { installSessionFromUrl } from "../install-session-from-url";
@@ -18,6 +21,18 @@ type Loc = { hash: string; search: string };
 function mkLoc(over: Partial<Loc> = {}): Loc {
   return { hash: "", search: "", ...over };
 }
+
+// The user that setSession/verifyOtp return on success. The helper takes
+// the user from the primitive's own server-validated return (#287) — not
+// from a separate getUser() call.
+const FAKE_USER = { id: "u1", email: "u@example.com" };
+const FAKE_SESSION = {
+  access_token: "AT_VALID",
+  refresh_token: "RT_VALID",
+  expires_in: 3600,
+  token_type: "bearer",
+  user: FAKE_USER,
+};
 
 const FRAGMENT_INVITE = (over: Record<string, string> = {}) =>
   "#" +
@@ -82,10 +97,9 @@ beforeEach(() => {
 });
 
 describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
-  it("invite: setSession + getUser succeed → ok", async () => {
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u1", email: "u@example.com" } },
+  it("invite: setSession succeeds → ok (user from setSession return, no getUser)", async () => {
+    setSessionSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -93,21 +107,18 @@ describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
       expectedType: "invite",
       location: mkLoc({ hash: FRAGMENT_INVITE() }),
     });
-    expect(result).toEqual({
-      kind: "ok",
-      user: { id: "u1", email: "u@example.com" },
-    });
+    expect(result).toEqual({ kind: "ok", user: FAKE_USER });
     expect(setSessionSpy).toHaveBeenCalledWith({
       access_token: "AT_VALID",
       refresh_token: "RT_VALID",
     });
     expect(verifyOtpSpy).not.toHaveBeenCalled();
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
-  it("recovery: setSession + getUser succeed → ok", async () => {
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u2", email: "r@example.com" } },
+  it("recovery: setSession succeeds → ok (no redundant getUser)", async () => {
+    setSessionSpy.mockResolvedValue({
+      data: { user: { id: "u2", email: "r@example.com" }, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -117,6 +128,7 @@ describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
     });
     expect(result.kind).toBe("ok");
     expect(setSessionSpy).toHaveBeenCalledOnce();
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
   it("type mismatch (recovery fragment, expecting invite) → type_mismatch", async () => {
@@ -157,15 +169,36 @@ describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
     expect(getUserSpy).not.toHaveBeenCalled();
   });
 
-  it("setSession ok but getUser returns no user → verify_error", async () => {
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+  it("setSession ok but returns no user → verify_error", async () => {
+    setSessionSpy.mockResolvedValue({ data: { user: null }, error: null });
     const result = await installSessionFromUrl({
       supabase: makeSupabase(),
       expectedType: "invite",
       location: mkLoc({ hash: FRAGMENT_INVITE() }),
     });
     expect(result.kind).toBe("verify_error");
+    expect(getUserSpy).not.toHaveBeenCalled();
+  });
+
+  it("#287 regression: setSession returns a user → ok even if getUser would error", async () => {
+    // Proves the helper no longer depends on a separate getUser() call.
+    // setSession already installed the session AND server-validated the
+    // user; a transient getUser failure must NOT surface as verify_error.
+    setSessionSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
+      error: null,
+    });
+    getUserSpy.mockResolvedValue({
+      data: { user: null },
+      error: { message: "network" },
+    });
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "recovery",
+      location: mkLoc({ hash: FRAGMENT_RECOVERY() }),
+    });
+    expect(result).toEqual({ kind: "ok", user: FAKE_USER });
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
   it("fragment present but missing access_token → falls through to query (missing if no query)", async () => {
@@ -193,9 +226,8 @@ describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
   });
 
   it("fragment without auth tokens but with query token → falls through to OTP path", async () => {
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u1", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -215,10 +247,9 @@ describe("installSessionFromUrl — implicit flow (URL fragment)", () => {
 });
 
 describe("installSessionFromUrl — OTP flow (query string)", () => {
-  it("invite: verifyOtp + getUser succeed → ok", async () => {
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u1" } },
+  it("invite: verifyOtp succeeds → ok (user from verifyOtp return, no getUser)", async () => {
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -226,17 +257,17 @@ describe("installSessionFromUrl — OTP flow (query string)", () => {
       expectedType: "invite",
       location: mkLoc({ search: QUERY_INVITE() }),
     });
-    expect(result.kind).toBe("ok");
+    expect(result).toEqual({ kind: "ok", user: FAKE_USER });
     expect(verifyOtpSpy).toHaveBeenCalledWith({
       token_hash: "TH_VALID",
       type: "invite",
     });
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
-  it("recovery: verifyOtp + getUser succeed → ok", async () => {
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u2" } },
+  it("recovery: verifyOtp succeeds → ok (no redundant getUser)", async () => {
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "u2" }, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -245,6 +276,7 @@ describe("installSessionFromUrl — OTP flow (query string)", () => {
       location: mkLoc({ search: QUERY_RECOVERY() }),
     });
     expect(result.kind).toBe("ok");
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
   it("type mismatch (invite query, expecting recovery) → type_mismatch", async () => {
@@ -288,15 +320,33 @@ describe("installSessionFromUrl — OTP flow (query string)", () => {
     expect(verifyOtpSpy).not.toHaveBeenCalled();
   });
 
-  it("verifyOtp ok but getUser returns no user → verify_error", async () => {
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+  it("verifyOtp ok but returns no user → verify_error", async () => {
+    verifyOtpSpy.mockResolvedValue({ data: { user: null }, error: null });
     const result = await installSessionFromUrl({
       supabase: makeSupabase(),
       expectedType: "invite",
       location: mkLoc({ search: QUERY_INVITE() }),
     });
     expect(result.kind).toBe("verify_error");
+    expect(getUserSpy).not.toHaveBeenCalled();
+  });
+
+  it("#287 regression: verifyOtp returns a user → ok even if getUser would error", async () => {
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
+      error: null,
+    });
+    getUserSpy.mockResolvedValue({
+      data: { user: null },
+      error: { message: "network" },
+    });
+    const result = await installSessionFromUrl({
+      supabase: makeSupabase(),
+      expectedType: "invite",
+      location: mkLoc({ search: QUERY_INVITE() }),
+    });
+    expect(result).toEqual({ kind: "ok", user: FAKE_USER });
+    expect(getUserSpy).not.toHaveBeenCalled();
   });
 
   it("missing token_hash → missing", async () => {
@@ -340,9 +390,8 @@ describe("installSessionFromUrl — empty / edge cases", () => {
   });
 
   it("both fragment + query — fragment wins", async () => {
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u1" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
       error: null,
     });
     const result = await installSessionFromUrl({
@@ -459,9 +508,8 @@ describe("installSessionFromUrl — spent-token detection (#194)", () => {
     // Defensive coverage for AC1 precedence: if a malformed URL has
     // both auth tokens AND error params in the fragment, the implicit
     // happy path takes precedence (matches SDK behavior).
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "u1", email: "u@example.com" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: FAKE_USER, session: FAKE_SESSION },
       error: null,
     });
     const hash =

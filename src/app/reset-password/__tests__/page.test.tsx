@@ -152,9 +152,8 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 
   it("calls verifyOtp with token_hash + type:'recovery' and renders the password form on success", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=recovery` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
 
@@ -190,10 +189,9 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
     });
   });
 
-  it("renders error state when verifyOtp succeeds but getUser returns no user", async () => {
+  it("renders error state when verifyOtp succeeds but returns no user", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=recovery` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+    verifyOtpSpy.mockResolvedValue({ data: { user: null }, error: null });
 
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
@@ -207,9 +205,8 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 
   it("calls updateUser with the new password and redirects to / on submit success", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=recovery` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({ data: {}, error: null });
@@ -240,9 +237,8 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 
   it("renders a destructive Banner when updateUser fails", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=recovery` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({
@@ -277,9 +273,8 @@ describe("ResetPasswordPage — OTP token-hash flow (query string)", () => {
 describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
   it("calls setSession with access+refresh tokens and renders form on success", async () => {
     setUrl({ hash: fragmentFor("recovery") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
 
@@ -327,10 +322,9 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
     });
   });
 
-  it("renders error state when setSession ok but getUser returns no user", async () => {
+  it("renders error state when setSession ok but returns no user", async () => {
     setUrl({ hash: fragmentFor("recovery") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+    setSessionSpy.mockResolvedValue({ data: { user: null }, error: null });
 
     const { default: ResetPasswordPage } = await import("../page");
     render(<ResetPasswordPage />);
@@ -346,9 +340,8 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
       hash: "#diagnostic=foo",
       search: `?token_hash=${TOKEN_HASH}&type=recovery`,
     });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc" }, session: {} },
       error: null,
     });
 
@@ -365,9 +358,8 @@ describe("ResetPasswordPage — implicit flow (URL fragment)", () => {
 
   it("submits the new password successfully via implicit-flow session", async () => {
     setUrl({ hash: fragmentFor("recovery") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({ data: {}, error: null });

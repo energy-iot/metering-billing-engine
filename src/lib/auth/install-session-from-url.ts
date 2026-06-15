@@ -93,9 +93,10 @@ export interface InstallSessionFromUrlParams {
 }
 
 /**
- * Inspect the URL for invite/recovery confirmation params, install a
- * session via the appropriate Supabase primitive, and confirm the user
- * is reachable via `getUser()`.
+ * Inspect the URL for invite/recovery confirmation params and install a
+ * session via the appropriate Supabase primitive. The installed user is
+ * taken from `setSession`/`verifyOtp`'s own server-validated return — no
+ * redundant `getUser()` round-trip (#287).
  *
  * Returns a discriminated result — callers switch on `kind`:
  *  - `ok` — session installed, `user` populated.
@@ -135,20 +136,21 @@ export async function installSessionFromUrl(
       }
       // access_token wins over fragment-level `error` params per
       // detection priority (matches SDK's implicit-flow happy path).
-      const { error: setError } = await supabase.auth.setSession({
+      const { data: setData, error: setError } = await supabase.auth.setSession({
         access_token: fragment.access_token,
         refresh_token: fragment.refresh_token,
       });
       if (setError) {
         return mapErrorToResult(setError);
       }
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData?.user) {
-        return mapErrorToResult(
-          userError ?? { message: "Session install produced no user" }
-        );
+      if (!setData?.user) {
+        // setSession resolved without error but produced no user (rare
+        // expired-refresh edge in _setSession). Treat as verify_error —
+        // but do NOT make a second network call that can fail independently
+        // after the session is already installed (#287 root cause).
+        return mapErrorToResult({ message: "Session install produced no user" });
       }
-      return { kind: "ok", user: userData.user };
+      return { kind: "ok", user: setData.user };
     }
 
     // Fragment present but missing access_token/refresh_token. Check
@@ -191,20 +193,20 @@ export async function installSessionFromUrl(
     return { kind: "type_mismatch" };
   }
 
-  const { error: verifyError } = await supabase.auth.verifyOtp({
+  const { data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
     token_hash: tokenHash,
     type: expectedType,
   });
   if (verifyError) {
     return mapErrorToResult(verifyError);
   }
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData?.user) {
-    return mapErrorToResult(
-      userError ?? { message: "verifyOtp produced no user" }
-    );
+  if (!verifyData?.user) {
+    // verifyOtp resolved without error but produced no user. Treat as
+    // verify_error — do NOT make a redundant getUser() that can fail
+    // independently after the session is already installed (#287).
+    return mapErrorToResult({ message: "verifyOtp produced no user" });
   }
-  return { kind: "ok", user: userData.user };
+  return { kind: "ok", user: verifyData.user };
 }
 
 // ── Internals ──────────────────────────────────────────────────────
