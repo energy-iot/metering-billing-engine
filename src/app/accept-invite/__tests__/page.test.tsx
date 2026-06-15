@@ -153,9 +153,8 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
 
   it("calls verifyOtp with token_hash + type:'invite' and renders the password form on success", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=invite` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
 
@@ -193,10 +192,9 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
     });
   });
 
-  it("renders error state when verifyOtp succeeds but getUser returns no user", async () => {
+  it("renders error state when verifyOtp succeeds but returns no user", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=invite` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+    verifyOtpSpy.mockResolvedValue({ data: { user: null }, error: null });
 
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
@@ -210,9 +208,8 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
 
   it("calls updateUser with the new password and redirects to / on submit success", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=invite` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({ data: {}, error: null });
@@ -245,9 +242,8 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
 
   it("renders a destructive Banner when updateUser fails", async () => {
     setUrl({ search: `?token_hash=${TOKEN_HASH}&type=invite` });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({
@@ -284,9 +280,8 @@ describe("AcceptInvitePage — OTP token-hash flow (query string)", () => {
 describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
   it("calls setSession with access+refresh tokens and renders form on success", async () => {
     setUrl({ hash: fragmentFor("invite") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
 
@@ -336,10 +331,9 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
     });
   });
 
-  it("renders error state when setSession ok but getUser returns no user", async () => {
+  it("renders error state when setSession ok but returns no user", async () => {
     setUrl({ hash: fragmentFor("invite") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({ data: { user: null }, error: null });
+    setSessionSpy.mockResolvedValue({ data: { user: null }, error: null });
 
     const { default: AcceptInvitePage } = await import("../page");
     render(<AcceptInvitePage />);
@@ -355,9 +349,8 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
       hash: "#diagnostic=foo",
       search: `?token_hash=${TOKEN_HASH}&type=invite`,
     });
-    verifyOtpSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc" } },
+    verifyOtpSpy.mockResolvedValue({
+      data: { user: { id: "abc" }, session: {} },
       error: null,
     });
 
@@ -374,9 +367,8 @@ describe("AcceptInvitePage — implicit flow (URL fragment)", () => {
 
   it("submits the new password successfully via implicit-flow session", async () => {
     setUrl({ hash: fragmentFor("invite") });
-    setSessionSpy.mockResolvedValue({ data: {}, error: null });
-    getUserSpy.mockResolvedValue({
-      data: { user: { id: "abc", email: "u@example.com" } },
+    setSessionSpy.mockResolvedValue({
+      data: { user: { id: "abc", email: "u@example.com" }, session: {} },
       error: null,
     });
     updateUserSpy.mockResolvedValue({ data: {}, error: null });
