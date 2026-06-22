@@ -324,7 +324,10 @@ async function mintAndPersist(
         .select("id, pesapal_redirect_url")
     : supabase
         .from("billing_line_items")
-        .update({ pesapal_redirect_url: result.redirectUrl })
+        .update({
+          pesapal_redirect_url: result.redirectUrl,
+          pesapal_order_id: result.providerReference,
+        })
         .eq("id", lineItemId)
         .is("pesapal_redirect_url", null)
         .select("id, pesapal_redirect_url");
