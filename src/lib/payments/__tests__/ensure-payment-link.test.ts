@@ -104,6 +104,7 @@ function makeMockClient(opts: {
 } {
   const state = {
     persistedUrl: opts.initialRow?.pesapal_redirect_url ?? null,
+    persistedOrderId: null as string | null,
     paymentStatus: opts.initialRow?.payment_status ?? "unpaid",
     auditCalls: [] as unknown[][],
   };
@@ -169,6 +170,7 @@ function makeMockClient(opts: {
                     return { data: [], error: null };
                   }
                   state.persistedUrl = patch.pesapal_redirect_url;
+                  state.persistedOrderId = patch.pesapal_order_id ?? null;
                   return {
                     data: [
                       {
@@ -185,6 +187,7 @@ function makeMockClient(opts: {
           // force=true path: unconditional UPDATE — no .is() guard.
           select: (_cols: string) => {
             state.persistedUrl = patch.pesapal_redirect_url;
+            state.persistedOrderId = patch.pesapal_order_id ?? null;
             return Promise.resolve({
               data: [
                 {
@@ -205,6 +208,9 @@ function makeMockClient(opts: {
     state: {
       get persistedUrl() {
         return state.persistedUrl;
+      },
+      get persistedOrderId() {
+        return state.persistedOrderId;
       },
       auditCalls: state.auditCalls,
     },
@@ -521,6 +527,27 @@ describe("ensurePaymentLinkForLineItem", () => {
       .find((s) => s.includes("audit_write_failed"));
     expect(matched).toBeTruthy();
     warnSpy.mockRestore();
+  });
+
+  // ── fix/pesapal-callback regression — pesapal_order_id written on first mint ──
+  it("persists pesapal_order_id on the force=false (first-mint) path so IPN lookup can find the row", async () => {
+    // Before the fix, the force=false UPDATE only wrote pesapal_redirect_url.
+    // The IPN handler queries billing_line_items by pesapal_order_id, so any
+    // order minted without force=true would silently return unknown_order and
+    // never auto-mark as paid.
+    const { client, state } = makeMockClient({
+      initialRow: { pesapal_redirect_url: null, payment_status: "unpaid" },
+    });
+    const { ensurePaymentLinkForLineItem } = await import(
+      "../ensure-payment-link"
+    );
+
+    const r = await ensurePaymentLinkForLineItem(client as never, LINE_ITEM_ID);
+
+    expect(r.wasMinted).toBe(true);
+    // The persisted order id must match the providerReference the IPN will send
+    // back as OrderMerchantReference.
+    expect(state.persistedOrderId).toBe(GOOD_RESULT.providerReference);
   });
 
   // ── service-role client path ─────────────────────────────────────────────
