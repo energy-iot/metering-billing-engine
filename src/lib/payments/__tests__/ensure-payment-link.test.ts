@@ -99,6 +99,7 @@ function makeMockClient(opts: {
   };
   state: {
     persistedUrl: string | null;
+    persistedOrderId: string | null;
     auditCalls: unknown[][];
   };
 } {
