@@ -27,6 +27,19 @@ import { NextResponse, type NextRequest } from "next/server";
 // distinct from this middleware's "Authentication required" string.
 // Trailing slash is intentional (same reason as `/p/`).
 // Discovered 2026-05-27 during Wave A-D activation smoke test.
+//
+// `/api/payments/ipn` is Pesapal's IPN (Instant Payment Notification)
+// webhook — an unauthenticated server-to-server POST/GET from Pesapal
+// with no MBE session cookie, so `supabase.auth.getUser()` here always
+// returns null and the middleware would 401 every IPN before the route
+// handler runs (payments never auto-mark). Same class as the `/api/v1/`
+// entry above (#267). The route handler verifies the callback itself
+// (order-tracking-id lookup against Pesapal) — that is the auth boundary.
+// Scoped to the exact `/api/payments/ipn` path (no trailing slash, no
+// broad `/api/payments/` prefix) so sibling payment routes (e.g.
+// auth-gated payment-status mutations) stay non-public. `startsWith`
+// still matches `/api/payments/ipn` and any subpath. Discovered 2026-07
+// (#294).
 const PUBLIC_PATHS = [
   "/login",
   "/accept-invite",
@@ -34,6 +47,7 @@ const PUBLIC_PATHS = [
   "/reset-password",
   "/p/",
   "/api/v1/",
+  "/api/payments/ipn",
 ];
 
 export async function middleware(request: NextRequest) {
