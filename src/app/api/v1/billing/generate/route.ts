@@ -37,13 +37,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "microgrid_id must be a UUID" }, { status: 400 });
   }
 
-  if (!Array.isArray(rec.manualReadings) || rec.manualReadings.length === 0) {
-    return NextResponse.json(
-      { error: "manualReadings must be a non-empty array" },
-      { status: 400 }
-    );
-  }
-
+  // manualReadings is OPTIONAL. When omitted (or an empty array), every
+  // household's usage is pulled from OpenEMS over the billing period — the
+  // automated-billing path: a scheduled caller POSTs with no manualReadings and
+  // the engine resolves each household's consumption from the OpenEMS B2B API.
+  // When present, each entry overrides that household's reading; all other
+  // households still resolve from OpenEMS. householdIds is left undefined so the
+  // engine bills the period microgrid's full household set.
   const manualReadings: Array<{
     householdId: string;
     startKwh: number;
@@ -51,32 +51,40 @@ export async function POST(request: NextRequest) {
     reason?: string;
   }> = [];
 
-  for (let i = 0; i < rec.manualReadings.length; i++) {
-    const m = rec.manualReadings[i] as Record<string, unknown>;
-    if (typeof m.householdId !== "string" || !UUID_RE.test(m.householdId)) {
+  if (rec.manualReadings !== undefined) {
+    if (!Array.isArray(rec.manualReadings)) {
       return NextResponse.json(
-        { error: `manualReadings[${i}].householdId must be a UUID` },
+        { error: "manualReadings must be an array" },
         { status: 400 }
       );
     }
-    if (typeof m.startKwh !== "number" || !Number.isFinite(m.startKwh) || m.startKwh < 0) {
-      return NextResponse.json(
-        { error: `manualReadings[${i}].startKwh must be a non-negative finite number` },
-        { status: 400 }
-      );
+    for (let i = 0; i < rec.manualReadings.length; i++) {
+      const m = rec.manualReadings[i] as Record<string, unknown>;
+      if (typeof m.householdId !== "string" || !UUID_RE.test(m.householdId)) {
+        return NextResponse.json(
+          { error: `manualReadings[${i}].householdId must be a UUID` },
+          { status: 400 }
+        );
+      }
+      if (typeof m.startKwh !== "number" || !Number.isFinite(m.startKwh) || m.startKwh < 0) {
+        return NextResponse.json(
+          { error: `manualReadings[${i}].startKwh must be a non-negative finite number` },
+          { status: 400 }
+        );
+      }
+      if (typeof m.endKwh !== "number" || !Number.isFinite(m.endKwh) || m.endKwh < m.startKwh) {
+        return NextResponse.json(
+          { error: `manualReadings[${i}].endKwh must be a finite number >= startKwh` },
+          { status: 400 }
+        );
+      }
+      manualReadings.push({
+        householdId: m.householdId,
+        startKwh: m.startKwh,
+        endKwh: m.endKwh,
+        ...(typeof m.reason === "string" ? { reason: m.reason } : {}),
+      });
     }
-    if (typeof m.endKwh !== "number" || !Number.isFinite(m.endKwh) || m.endKwh < m.startKwh) {
-      return NextResponse.json(
-        { error: `manualReadings[${i}].endKwh must be a finite number >= startKwh` },
-        { status: 400 }
-      );
-    }
-    manualReadings.push({
-      householdId: m.householdId,
-      startKwh: m.startKwh,
-      endKwh: m.endKwh,
-      ...(typeof m.reason === "string" ? { reason: m.reason } : {}),
-    });
   }
 
   const supabase = createServiceClient();

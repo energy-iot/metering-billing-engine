@@ -311,4 +311,29 @@ describe("POST /api/v1/billing/generate (#254)", () => {
       actorRef: "customerapp-prod-2026",
     });
   });
+
+  it("200 + OpenEMS-pull mode: no manualReadings delegates with manualReadings:[] and householdIds undefined (every household resolved from OpenEMS)", async () => {
+    const { POST } = await import("../route");
+    const body = validBody();
+    delete (body as Record<string, unknown>).manualReadings;
+    const res = await POST(makePostRequest(body));
+    expect(res.status).toBe(200);
+    expect(runGenerationCalls).toHaveLength(1);
+    expect(runGenerationCalls[0]).toMatchObject({
+      periodId: PERIOD_ID,
+      manualReadings: [],
+      mode: "write",
+    });
+    expect(
+      (runGenerationCalls[0] as Record<string, unknown>).householdIds
+    ).toBeUndefined();
+  });
+
+  it("400 when manualReadings is present but not an array", async () => {
+    const { POST } = await import("../route");
+    const res = await POST(makePostRequest(validBody({ manualReadings: "nope" })));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("manualReadings must be an array");
+    expect(runGenerationCalls).toHaveLength(0);
+  });
 });
