@@ -123,4 +123,36 @@ describe("middleware PUBLIC_PATHS", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.status).toBe(200);
   });
+
+  // #294: /api/payments/ipn is Pesapal's IPN webhook — an unauthenticated
+  // server-to-server callback with no MBE session. The middleware MUST
+  // pass it through, otherwise it 401s ("Authentication required") before
+  // the route handler runs and payments never auto-mark. Same class as the
+  // /api/v1/ hotfix (#267).
+  it("allows unauthenticated request on /api/payments/ipn (Pesapal IPN webhook — #294)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+    const middleware = await loadMiddleware();
+
+    const res = await middleware(makeRequest("/api/payments/ipn"));
+
+    // Pass-through (NextResponse.next), NOT the 401 JSON that API routes get
+    // when unauthenticated and non-public.
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  // Path scoping: only the exact /api/payments/ipn path is public. Sibling
+  // payment routes (auth-gated payment-status mutations) must still 401 an
+  // unauthenticated API request. Guards against a broad /api/payments/
+  // prefix silently exposing them.
+  it("still 401s unauthenticated request on a sibling /api/payments/* route (#294 scoping)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null }, error: null });
+    const middleware = await loadMiddleware();
+
+    const res = await middleware(makeRequest("/api/payments/status"));
+
+    // API routes return 401 JSON (not a redirect) when non-public.
+    expect(res.status).toBe(401);
+    expect(res.headers.get("location")).toBeNull();
+  });
 });
