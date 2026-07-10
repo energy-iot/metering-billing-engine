@@ -73,9 +73,33 @@ export default async function HouseholdDetailPage({
     )
     .eq("id", householdId)
     .eq("microgrid_id", microgridId)
-    .single<HouseholdRow>();
+    .maybeSingle<HouseholdRow>();
 
-  if (householdError || !household) {
+  if (householdError) {
+    // #300: previously a query/embed error (RLS on the devices/edges embed, or a
+    // relationship-resolution failure) was masked as a 404 by folding it into
+    // notFound(). Surface it — log structured + throw — so the real PostgREST
+    // error is visible (dev overlay / prod 500 + logs) instead of a misleading
+    // "not found." A genuinely-missing household still 404s via the !household
+    // branch below (maybeSingle returns null, not an error, for 0 rows).
+    console.error(
+      JSON.stringify({
+        event: "household_detail.query_error",
+        householdId,
+        microgridId,
+        code: householdError.code,
+        message: householdError.message,
+        details: householdError.details,
+        hint: householdError.hint,
+        at: new Date().toISOString(),
+      }),
+    );
+    throw new Error(
+      `Failed to load household ${householdId}: ${householdError.message}`,
+    );
+  }
+
+  if (!household) {
     notFound();
   }
 

@@ -4,7 +4,8 @@
 //   - Mock @/lib/supabase/server so all three queries return fixture rows.
 //   - Call HouseholdDetailPage() directly (async server component) and serialize
 //     the returned JSX to HTML.
-//   - Cover 4 scenarios: populated, empty devices, empty billing, RLS-404.
+//   - Cover scenarios: populated, empty devices, empty billing, query-error
+//     surfaced (#300 throws, not 404), genuine-missing 404.
 //   - Assert chip-highlight assertion for primary_consumption_meter row.
 //
 // Environment: node (same pattern as D2 page tests).
@@ -86,13 +87,14 @@ const BILLING_PERIOD = {
 
 /**
  * Builds a mock Supabase query chain for the households table.
- * Supports `.select().eq().eq().single()` pattern.
+ * Supports `.select().eq().eq().maybeSingle()` pattern (#300: switched from
+ * .single() so 0 rows -> { data: null, error: null } instead of a PGRST116 error).
  */
 function buildHouseholdQuery(data: unknown, error: unknown = null) {
   const chain = {
     select: () => chain,
     eq: () => chain,
-    single: () => Promise.resolve({ data, error }),
+    maybeSingle: () => Promise.resolve({ data, error }),
   };
   return chain;
 }
@@ -275,14 +277,49 @@ describe("HouseholdDetailPage", () => {
     expect(html).toContain("Chint Meter 01");
   });
 
-  // (d) RLS-404: non-NFE user gets notFound()
-  it("calls notFound() when household query returns an error (RLS deny / not found)", async () => {
+  // (d) #300: a real query/embed error is SURFACED (thrown), not masked as 404.
+  // Under the pre-#300 code this fixture (data:null + PGRST error) hit notFound();
+  // now .maybeSingle() means a truthy error is a genuine failure → throw + log.
+  it("throws (surfacing the error) when the household query returns a PostgREST error", async () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
     mockFrom.mockImplementation((table: string) => {
       if (table === "households") {
         return buildHouseholdQuery(null, {
-          message: "Row not found",
-          code: "PGRST116",
+          message: "permission denied for table devices",
+          code: "42501",
+          details: "RLS on the embedded devices/edges relationship",
+          hint: null,
         });
+      }
+      return buildFlexQuery([]);
+    });
+
+    await expect(
+      HouseholdDetailPage({
+        params: Promise.resolve({ id: "mg-1", householdId: "hh-1" }),
+      }),
+    ).rejects.toThrow(/Failed to load household hh-1/);
+
+    // The real error was surfaced, NOT swallowed into a 404.
+    expect(notFoundMock).not.toHaveBeenCalled();
+    // Structured diagnostic was logged.
+    expect(consoleErrorSpy).toHaveBeenCalledOnce();
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain(
+      "household_detail.query_error",
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  // (e) #300: a genuinely-missing household (0 rows) still 404s. maybeSingle
+  // returns { data: null, error: null } for no match → the !household branch.
+  it("calls notFound() when the household genuinely does not exist (0 rows, no error)", async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "households") {
+        return buildHouseholdQuery(null, null);
       }
       return buildFlexQuery([]);
     });
