@@ -38,7 +38,6 @@ type HouseholdRow = {
   address_line1: string | null;
   address_line2: string | null;
   unit_label: string | null;
-  status: string;
   household_devices: HouseholdDeviceRow[];
 };
 
@@ -68,7 +67,7 @@ export default async function HouseholdDetailPage({
     .from("households")
     .select(
       `id, display_name, primary_phone, primary_email,
-       address_line1, address_line2, unit_label, status,
+       address_line1, address_line2, unit_label,
        household_devices(role, devices(id, name, device_type, edges(id, name)))`,
     )
     .eq("id", householdId)
@@ -174,7 +173,6 @@ export default async function HouseholdDetailPage({
           <h3 className="text-lg font-semibold text-foreground">
             {household.display_name ?? "Unnamed household"}
           </h3>
-          <StatusChip kind="household" status={household.status} />
         </div>
       </div>
 
