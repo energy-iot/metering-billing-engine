@@ -66,7 +66,6 @@ const HOUSEHOLD_BASE = {
   address_line1: "Plot 14, Kisakye Ln",
   address_line2: "Block A",
   unit_label: "Unit 1",
-  status: "active",
 };
 
 const DEVICE_ROW = {
