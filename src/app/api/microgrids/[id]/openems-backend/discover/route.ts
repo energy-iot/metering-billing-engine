@@ -36,10 +36,11 @@ export async function POST(
 
   const supabase = await createClient();
 
-  // Discover mutates ems_last_discover_* health fields and reads the decrypted
-  // secret (fn_get_ems_secret is SECURITY DEFINER, super_admin / service_role
-  // only). Gate here so org_managers cannot trigger a write or observe backend
-  // connectivity status indirectly through error messages.
+  // Discover mutates ems_last_discover_* health fields and resolves the
+  // decrypted secret via getMicrogridEmsConfig. Gate here so org_managers
+  // cannot trigger a write or observe backend connectivity status indirectly
+  // through error messages. This gate is in addition to the RLS row read that
+  // getEmsSecretForMicrogrid performs before its service-role decrypt.
   if (!(await currentUserIsSuperAdmin(supabase))) {
     return NextResponse.json(
       { error: "Only super admins can run OpenEMS backend discovery." },

@@ -21,11 +21,9 @@ import { OpenEmsError } from "./errors";
  *   - RLS on `microgrids` filters the row via `user_can_access_microgrid(id)`.
  *     Cross-org access surfaces as `row = null` → we return `null` and the
  *     caller translates to 404.
- *   - For cloud_aws, the plaintext secret is only released to super_admin or
- *     service_role (see `fn_get_ems_secret` body in migration 00018). An
- *     org_manager of the owning org CAN see the microgrid row but CANNOT
- *     decrypt the secret → we throw 403. This is the pilot's compromise
- *     until per-microgrid secret-access roles ship.
+ *   - For cloud_aws, the decrypt runs on the service-role client via
+ *     `getEmsSecretForMicrogrid` below, which re-establishes the RLS row read
+ *     as the authorization step before any decrypt is reachable.
  *   - For direct_url, no secret retrieval is needed; org_managers are allowed
  *     to run Discover because nothing is redacted.
  */
@@ -82,7 +80,92 @@ export async function getMicrogridEmsConfig(
     );
   }
 
-  const { data: secret, error: secretErr } = await supabase.rpc(
+  const secret = await getEmsSecretForMicrogrid(supabase, microgridId);
+
+  if (!secret) {
+    // The RLS row read above already succeeded, so the caller is authorized.
+    // A null here means the authorization step inside
+    // `getEmsSecretForMicrogrid` did not resolve the row (a concurrent
+    // delete / permission change) or no ciphertext is stored for the row.
+    // Both are non-retrievable states for this caller — surface as 403 so
+    // callers keep their existing "forbidden" mapping.
+    throw new OpenEmsError(
+      "The stored secret access key for this Cloud (AWS) microgrid could not be retrieved. Re-enter the secret access key in Setup → OpenEMS Backend.",
+      "OPENEMS_FORBIDDEN",
+      403
+    );
+  }
+
+  return {
+    type: "cloud_aws",
+    url: mg.ems_backend_url,
+    region: mg.ems_aws_region,
+    accessKeyId: mg.ems_aws_access_key_id,
+    secretAccessKey: secret,
+  };
+}
+
+/**
+ * Decrypt a microgrid's stored EMS secret.
+ *
+ * ── The ordering here is load-bearing. Do not reorder. ───────────────────
+ *
+ * The decrypt runs on the **service-role** client. `fn_get_ems_secret`
+ * short-circuits its own permission gate for `service_role`, so the function
+ * contributes NO authorization on this path. The RLS row read in step 1 is
+ * therefore the ONLY authorization, not a second layer:
+ *
+ *   1. Read the `microgrids` row on the caller's own (cookie-scoped, RLS-
+ *      evaluated) client. This is the authorization step.
+ *   2. Treat "no row" as TERMINAL — return before any decrypt is reachable.
+ *      A cross-org caller is filtered by `user_can_access_microgrid` in RLS
+ *      and exits here; the service-role client is never constructed.
+ *   3. Only then decrypt on the service-role client.
+ *
+ * Written in the other order this becomes an ungated internal decrypt. Every
+ * caller that needs the plaintext MUST go through this helper rather than
+ * calling `fn_get_ems_secret` directly, so the invariant lives in one place.
+ *
+ * `authorizedClient` MUST be an RLS-evaluated client (`@/lib/supabase/server`).
+ * Passing a service-role client makes step 1 a no-op — that is only correct
+ * for machine callers that have already performed their own org check (e.g.
+ * the token-authenticated generation route, which verifies `org_id` first).
+ *
+ * Returns the plaintext, or `null` when the caller is not authorized for the
+ * row or no ciphertext is stored. Throws `OpenEmsError` on infrastructure
+ * failure (read error / decrypt RPC error).
+ */
+export async function getEmsSecretForMicrogrid(
+  authorizedClient: SupabaseClient,
+  microgridId: string
+): Promise<string | null> {
+  // ── Step 1: authorization. RLS on `microgrids` decides visibility. ──────
+  const { data: authorizedRow, error: authErr } = await authorizedClient
+    .from("microgrids")
+    .select("id")
+    .eq("id", microgridId)
+    .maybeSingle<{ id: string }>();
+
+  if (authErr) {
+    throw new OpenEmsError(
+      `Failed to authorize secret access: ${authErr.message}`,
+      "OPENEMS_INVALID_CONFIG",
+      500,
+      authErr
+    );
+  }
+
+  // ── Step 2: TERMINAL. No row → no decrypt path is reachable. ───────────
+  if (!authorizedRow) return null;
+
+  // ── Step 3: decrypt only. ──────────────────────────────────────────────
+  //
+  // Imported lazily so that SUPABASE_SERVICE_ROLE_KEY is only a hard
+  // requirement for surfaces that actually decrypt. `@/lib/supabase/service`
+  // throws at module load when the key is unset; an eager import would make
+  // every page that merely *reads* EMS config fail to boot without it.
+  const { createServiceClient } = await import("@/lib/supabase/service");
+  const { data: secret, error: secretErr } = await createServiceClient().rpc(
     "fn_get_ems_secret",
     { _microgrid_id: microgridId }
   );
@@ -96,22 +179,5 @@ export async function getMicrogridEmsConfig(
     );
   }
 
-  if (!secret) {
-    // secret is NULL — either the caller is not super_admin/service_role OR
-    // the row has no secret set (but CHECK constraint requires it for
-    // cloud_aws, so we treat the first case as the cause).
-    throw new OpenEmsError(
-      "Only super_admin may test or read meters for a Cloud (AWS) microgrid configuration. Ask a super admin to run Discover.",
-      "OPENEMS_FORBIDDEN",
-      403
-    );
-  }
-
-  return {
-    type: "cloud_aws",
-    url: mg.ems_backend_url,
-    region: mg.ems_aws_region,
-    accessKeyId: mg.ems_aws_access_key_id,
-    secretAccessKey: secret as string,
-  };
+  return typeof secret === "string" && secret.length > 0 ? secret : null;
 }
