@@ -611,6 +611,7 @@ export type Database = {
           address_region: string | null
           community_id: string
           created_at: string
+          created_by: string | null
           currency: string
           ems_aws_access_key_id: string | null
           ems_aws_region: string | null
@@ -636,6 +637,7 @@ export type Database = {
           address_region?: string | null
           community_id: string
           created_at?: string
+          created_by?: string | null
           currency?: string
           ems_aws_access_key_id?: string | null
           ems_aws_region?: string | null
@@ -661,6 +663,7 @@ export type Database = {
           address_region?: string | null
           community_id?: string
           created_at?: string
+          created_by?: string | null
           currency?: string
           ems_aws_access_key_id?: string | null
           ems_aws_region?: string | null
@@ -897,6 +900,8 @@ export type Database = {
           id: string
           role: Database["public"]["Enums"]["user_role"]
           scope_id: string | null
+          scope_microgrid_id: string | null
+          scope_org_id: string | null
           scope_type: Database["public"]["Enums"]["role_scope_type"]
           user_id: string
         }
@@ -905,6 +910,8 @@ export type Database = {
           id?: string
           role: Database["public"]["Enums"]["user_role"]
           scope_id?: string | null
+          scope_microgrid_id?: string | null
+          scope_org_id?: string | null
           scope_type: Database["public"]["Enums"]["role_scope_type"]
           user_id: string
         }
@@ -913,13 +920,22 @@ export type Database = {
           id?: string
           role?: Database["public"]["Enums"]["user_role"]
           scope_id?: string | null
+          scope_microgrid_id?: string | null
+          scope_org_id?: string | null
           scope_type?: Database["public"]["Enums"]["role_scope_type"]
           user_id?: string
         }
         Relationships: [
           {
+            foreignKeyName: "user_roles_scope_microgrid_fkey"
+            columns: ["scope_microgrid_id"]
+            isOneToOne: false
+            referencedRelation: "microgrids"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "user_roles_scope_org_fkey"
-            columns: ["scope_id"]
+            columns: ["scope_org_id"]
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
@@ -1018,6 +1034,7 @@ export type Database = {
         Args: {
           p_role: Database["public"]["Enums"]["user_role"]
           p_scope_id?: string
+          p_scope_type?: Database["public"]["Enums"]["role_scope_type"]
           p_user_id: string
         }
         Returns: undefined
@@ -1089,11 +1106,21 @@ export type Database = {
         Returns: string
       }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }
+      fn_list_ems_operators: {
+        Args: { _microgrid_id: string }
+        Returns: {
+          email: string
+          first_name: string
+          last_name: string
+          user_id: string
+        }[]
+      }
       fn_list_visible_users: {
         Args: { _target_user_ids?: string[] }
         Returns: {
           email: string
           email_confirmed_at: string
+          ems_operator_count: number
           first_name: string
           last_name: string
           last_sign_in_at: string
@@ -1169,6 +1196,10 @@ export type Database = {
         Returns: boolean
       }
       user_can_access_org: { Args: { _org_id: string }; Returns: boolean }
+      user_can_configure_ems: {
+        Args: { _microgrid_id: string }
+        Returns: boolean
+      }
       user_can_see_user_profile: {
         Args: { _target_user_id: string }
         Returns: boolean
@@ -1209,8 +1240,8 @@ export type Database = {
         | "other"
       microgrid_ems_type: "cloud_aws" | "direct_url"
       payment_provider_type: "pesapal"
-      role_scope_type: "org"
-      user_role: "super_admin" | "org_manager"
+      role_scope_type: "org" | "microgrid"
+      user_role: "super_admin" | "org_manager" | "ems_operator"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1379,8 +1410,8 @@ export const Constants = {
       ],
       microgrid_ems_type: ["cloud_aws", "direct_url"],
       payment_provider_type: ["pesapal"],
-      role_scope_type: ["org"],
-      user_role: ["super_admin", "org_manager"],
+      role_scope_type: ["org", "microgrid"],
+      user_role: ["super_admin", "org_manager", "ems_operator"],
     },
   },
 } as const

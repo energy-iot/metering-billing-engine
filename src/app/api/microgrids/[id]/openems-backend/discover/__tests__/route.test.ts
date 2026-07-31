@@ -31,10 +31,10 @@ vi.mock("@/lib/openems/config", () => ({
   getMicrogridEmsConfig: getMicrogridEmsConfigMock,
 }));
 
-let isSuperAdminReturn = true;
+let canConfigureEmsReturn = true;
 
 vi.mock("@/lib/auth/access", () => ({
-  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
+  currentUserCanConfigureEms: async () => canConfigureEmsReturn,
 }));
 
 const mockFrom = vi.fn();
@@ -67,7 +67,7 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     vi.clearAllMocks();
     handlers = [];
     index = 0;
-    isSuperAdminReturn = true;
+    canConfigureEmsReturn = true;
     mockFrom.mockImplementation((table: string) => {
       const h = handlers[index++];
       if (!h) throw new Error(`unexpected from(${table}) #${index}`);
@@ -83,8 +83,9 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 403 when caller is not super_admin (Nit #1 security gate)", async () => {
-    isSuperAdminReturn = false;
+  it("returns 403 — and never reaches the decrypt — when the caller cannot configure (#316)", async () => {
+    canConfigureEmsReturn = false;
+    getMicrogridEmsConfigMock.mockClear();
 
     const { POST } = await import("../route");
     const res = await POST(makeReq(), {
@@ -92,7 +93,12 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     });
     expect(res.status).toBe(403);
     const json = await res.json();
-    expect(json.error).toBe("Only super admins can run OpenEMS backend discovery.");
+    expect(json.error).toBe(
+      "You do not have permission to run OpenEMS discovery for this microgrid."
+    );
+    // Unreachability, not merely an error: getMicrogridEmsConfig is what
+    // resolves the decrypted credential, so it must not have been called.
+    expect(getMicrogridEmsConfigMock).not.toHaveBeenCalled();
   });
 
   it("returns 404 when microgrid is RLS-hidden or missing", async () => {

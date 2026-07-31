@@ -15,7 +15,7 @@
 //
 // Enforced by `src/lib/__tests__/no-microgrid-star-select.test.ts`.
 export const MICROGRID_PUBLIC_COLUMNS =
-  "id, community_id, name, currency, address_line1, address_line2, address_city, address_region, address_country, address_postal_code, lat, lng, created_at, ems_type, ems_backend_url, ems_aws_region, ems_aws_access_key_id, ems_known_edge_ids, ems_last_discover_at, ems_last_discover_count, ems_last_discover_error, ems_last_discover_status" as const;
+  "id, community_id, name, currency, address_line1, address_line2, address_city, address_region, address_country, address_postal_code, lat, lng, created_at, created_by, ems_type, ems_backend_url, ems_aws_region, ems_aws_access_key_id, ems_known_edge_ids, ems_last_discover_at, ems_last_discover_count, ems_last_discover_error, ems_last_discover_status" as const;
 
 // Customerapp-boundary subset (#257). The full `MICROGRID_PUBLIC_COLUMNS`
 // above is the operator-side public projection — wide enough to power the

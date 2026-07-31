@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
   currentUserCanAccessMicrogrid,
-  currentUserIsSuperAdmin,
+  currentUserCanConfigureEms,
 } from "@/lib/auth/access";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
@@ -16,8 +16,9 @@ import { OpenemsBackendShell } from "./openems-backend-shell";
 //   1. Microgrid row (name + ems_* columns)
 //   2. Draft billing-period count (mid-period guard)
 //   3. Closed billing-period count (for the type-to-confirm bypass PM copy)
-//   4. Decrypted AWS secret last-4 (super_admin only; org_manager renders "—")
-//   5. Permission flags: isSuperAdmin, canAccessMicrogrid
+//   4. Decrypted AWS secret last-4 (configurers only; everyone else "—")
+//   5. Permission flags: canConfigure, canAccessMicrogrid
+//   6. The microgrid's ems_operator list (attributability line, #316)
 //
 // The server component passes everything as props to a single client shell
 // that owns mode state (empty / configured / editing), form state, Save
@@ -34,7 +35,9 @@ export default async function OpenemsBackendPage({
   const canAccess = await currentUserCanAccessMicrogrid(supabase, id);
   if (!canAccess) notFound();
 
-  const isSuperAdmin = await currentUserIsSuperAdmin(supabase);
+  // #316: configuration is microgrid-scoped (ems_operator on this microgrid,
+  // or super_admin) — not org access, and no longer super_admin-only.
+  const canConfigure = await currentUserCanConfigureEms(supabase, id);
 
   const { data: mg, error: mgErr } = await supabase
     .from("microgrids")
@@ -76,15 +79,16 @@ export default async function OpenemsBackendPage({
       .eq("status", "closed"),
   ]);
 
-  // Last-4 mask of the decrypted AWS secret, super_admin only.
+  // Last-4 mask of the decrypted AWS secret. Configurers only.
   //
-  // `getEmsSecretForMicrogrid` re-reads the microgrid row on this same
-  // RLS-evaluated client and returns null before reaching the decrypt if the
-  // row is not visible — see the ordering note on that helper. The
-  // `isSuperAdmin` check below is the surface-level policy on top of it;
-  // neither replaces the other.
+  // `canConfigure` is checked BEFORE the call, so a viewer without the grant
+  // never reaches the decrypt — the ordering is the gate, not the null result.
+  // `getEmsSecretForMicrogrid` additionally re-reads the microgrid row on this
+  // same RLS-evaluated client and returns null before decrypting if the row is
+  // not visible; see the ordering note on that helper. Neither check replaces
+  // the other.
   let secretLast4: string | null = null;
-  if (mg.ems_type === "cloud_aws" && isSuperAdmin) {
+  if (mg.ems_type === "cloud_aws" && canConfigure) {
     try {
       const secret = await getEmsSecretForMicrogrid(supabase, id);
       if (secret && secret.length >= 4) {
@@ -95,6 +99,27 @@ export default async function OpenemsBackendPage({
       secretLast4 = null;
     }
   }
+
+  // Attributability line (#316). `fn_list_ems_operators` carries its own
+  // access gate and returns zero rows for a microgrid the caller cannot
+  // access, so no check is needed here.
+  const { data: emsOperatorRows } = await supabase.rpc(
+    "fn_list_ems_operators",
+    { _microgrid_id: id }
+  );
+
+  type EmsOperatorRow = {
+    user_id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string;
+  };
+
+  const emsOperators = ((emsOperatorRows ?? []) as EmsOperatorRow[]).map((r) => ({
+    userId: r.user_id,
+    name:
+      [r.first_name, r.last_name].filter(Boolean).join(" ").trim() || r.email,
+  }));
 
   const health = deriveOpenemsBackendHealth(mg);
 
@@ -124,7 +149,8 @@ export default async function OpenemsBackendPage({
         draftPeriodsCount={draftCount ?? 0}
         closedPeriodsCount={closedCount ?? 0}
         secretLast4={secretLast4}
-        isSuperAdmin={isSuperAdmin}
+        canConfigure={canConfigure}
+        emsOperators={emsOperators}
       />
     </div>
   );

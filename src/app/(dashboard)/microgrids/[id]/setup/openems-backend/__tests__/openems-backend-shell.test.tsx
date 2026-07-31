@@ -192,7 +192,8 @@ describe("OpenemsBackendShell — empty state", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4={null}
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
 
@@ -214,7 +215,8 @@ describe("OpenemsBackendShell — empty state", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4={null}
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
@@ -230,7 +232,8 @@ describe("OpenemsBackendShell — empty state", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4={null}
-        isSuperAdmin={false}
+        canConfigure={false}
+        emsOperators={[]}
       />
     );
     expect(screen.queryByRole("button", { name: /cloud \(aws\)/i })).toBeNull();
@@ -248,7 +251,8 @@ describe("OpenemsBackendShell — configured state", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     // Chip
@@ -260,7 +264,7 @@ describe("OpenemsBackendShell — configured state", () => {
     expect(screen.getByRole("button", { name: /reconfigure/i })).toBeDefined();
   });
 
-  it("(4) org_manager: no Reconfigure, read-only info banner visible, secret '—'", () => {
+  it("(4) no configure grant: no Reconfigure, read-only banner visible, secret '—'", () => {
     const { container } = render(
       <OpenemsBackendShell
         microgrid={CONFIGURED_CLOUD}
@@ -268,15 +272,65 @@ describe("OpenemsBackendShell — configured state", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4={null}
-        isSuperAdmin={false}
+        canConfigure={false}
+        emsOperators={[{ userId: "u1", name: "Ada Byron" }]}
       />
     );
     expect(screen.queryByRole("button", { name: /reconfigure/i })).toBeNull();
     expect(
-      screen.getByText(/only super admins can update openems credentials/i)
+      screen.getByText(
+        /you can view this connection but not change it\. configuration is limited to the people listed below, plus super admins\./i
+      )
     ).toBeDefined();
+    // The banner asserts a fact about another element ("the people listed
+    // below"). Assert that element is actually rendered, or the copy silently
+    // becomes a dangling reference.
+    expect(screen.getByTestId("ems-operator-line").textContent).toContain(
+      "Ada Byron"
+    );
+    // The removed copy must not come back.
+    expect(
+      screen.queryByText(/only super admins can update openems credentials/i)
+    ).toBeNull();
+    expect(screen.queryByText(/contact your administrator/i)).toBeNull();
     // Secret row renders "—" when NULL secretLast4
     expect(container.textContent).toContain("—");
+  });
+
+  it("(4b) operator line renders for viewers who CAN configure too", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4={null}
+        canConfigure={true}
+        emsOperators={[{ userId: "u1", name: "Ada Byron" }]}
+      />
+    );
+    // This is the acceptance criterion for the rollout grant: the only place a
+    // human confirms a headless grant landed.
+    expect(screen.getByTestId("ems-operator-line").textContent).toContain(
+      "Ada Byron"
+    );
+  });
+
+  it("(4c) empty operator list does not read as 'you cannot see them'", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={CONFIGURED_CLOUD}
+        health="healthy"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4={null}
+        canConfigure={false}
+        emsOperators={[]}
+      />
+    );
+    expect(screen.getByTestId("ems-operator-line").textContent).toMatch(
+      /no one is set up to configure this connection yet/i
+    );
   });
 });
 
@@ -289,7 +343,8 @@ describe("OpenemsBackendShell — reconfigure flow", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -306,7 +361,8 @@ describe("OpenemsBackendShell — reconfigure flow", () => {
         draftPeriodsCount={1}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -364,7 +420,8 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -399,7 +456,8 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -427,7 +485,8 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -477,7 +536,8 @@ describe("OpenemsBackendShell — Save & test outcomes", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={1}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -532,7 +592,8 @@ describe("OpenemsBackendShell — secret preserve on blank (#102 AC-TEST-PRESERV
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -586,7 +647,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4={null}
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /cloud \(aws\)/i }));
@@ -602,7 +664,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -621,7 +684,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /reconfigure/i }));
@@ -643,7 +707,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -677,7 +742,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     await openForm();
@@ -699,7 +765,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     expect(container.textContent).toContain("Edge IDs");
@@ -714,7 +781,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
         draftPeriodsCount={0}
         closedPeriodsCount={0}
         secretLast4="3ACH"
-        isSuperAdmin={true}
+        canConfigure={true}
+        emsOperators={[]}
       />
     );
     expect(container.textContent).toContain("Edge IDs");

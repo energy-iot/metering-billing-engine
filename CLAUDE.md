@@ -114,7 +114,7 @@ src/
 - **RLS everywhere** — new tables need Row Level Security policies
 - **Adapter pattern** — MBE doesn't import OpenEMS-specific types in billing logic. `DeviceDataAdapter` interface in `src/lib/adapters/types.ts` (renamed from `MeterDataAdapter` in C #51)
 - **Codegen types** — import entity types from `@/lib/types/domain`, never from `database.gen.ts` directly. Run `npm run db:types` after schema changes.
-- **Role constants** — import `SUPER_ADMIN`, `ORG_MANAGER`, `SCOPE_ORG` from `@/lib/roles` instead of spelling out string literals. Two MVP roles ship: `super_admin` and `org_manager`.
+- **Role constants** — import `SUPER_ADMIN`, `ORG_MANAGER`, `EMS_OPERATOR`, `SCOPE_ORG`, `SCOPE_MICROGRID` from `@/lib/roles` instead of spelling out string literals. Three roles ship: `super_admin` and `org_manager` (both `scope_type='org'`), and `ems_operator` (`scope_type='microgrid'`, #316). A user may hold several role rows at once — `user_roles` is `UNIQUE (user_id, role, scope_type, scope_id)`, not one row per user. Code that assumes one row per user is a bug (see `fn_list_visible_users`).
 - **Microgrid SELECT lists** — avoid `.select('*')` on `microgrids`; enumerate columns via `MICROGRID_PUBLIC_COLUMNS` (`src/lib/types/microgrid-columns.ts`) so new sensitive additions don't silently leak. Enforced by `src/lib/__tests__/no-microgrid-star-select.test.ts`.
 - **DCO sign-off** on docker-openems commits (`git commit -s`)
 
@@ -136,8 +136,16 @@ Three `SECURITY DEFINER STABLE` helpers, pinned to `search_path = public, pg_tem
 | `is_super_admin() -> BOOLEAN` | True iff `auth.uid()` has any `user_roles` row with `role='super_admin'`. |
 | `user_can_access_org(_org_id UUID) -> BOOLEAN` | True iff `is_super_admin()` OR exists a `user_roles` row with `role='org_manager' AND scope_type='org' AND scope_id=_org_id`. |
 | `user_can_access_microgrid(_microgrid_id UUID) -> BOOLEAN` | True iff `user_can_access_org(<microgrid's org_id>)` — resolves via `microgrids → communities → org_id`. |
+| `user_can_configure_ems(_microgrid_id UUID) -> BOOLEAN` (00052) | True iff `is_super_admin()` OR a `user_roles` row with `role='ems_operator' AND scope_type='microgrid' AND scope_id=_microgrid_id`. **Deliberately NOT chained through `user_can_access_microgrid`** — org access is not configuration access. |
 
-RLS policies are written with `FOR ALL` (not split per-verb) to match the existing pattern. When extending the role model (e.g. adding `microgrid_manager`), extend `user_can_access_microgrid()` rather than splitting the policy per verb.
+RLS policies are written with `FOR ALL` (not split per-verb) to match the existing pattern.
+
+**Do not extend `user_can_access_org` / `user_can_access_microgrid` to grant a new capability.** 23 of the 30 `CREATE POLICY` statements chain through them (13 and 10 respectively), all `FOR ALL`, so read and write move together on every one — an error there is a *silent widening*, not a visible failure. Add a role value with its own helper instead, which touches zero existing policies (that is what #316 did for `ems_operator`).
+
+**Column-level write restrictions are triggers, not policies.** RLS is row-level and column privileges are granted per-role rather than per-user, so neither can express "may update this row, but not these columns". `microgrids.ems_*` is the worked example (`fn_microgrids_guard_ems_config`, 00052). Two rules for that shape:
+
+- Enumerate the guarded columns **literally**, in both the `BEFORE UPDATE OF <cols>` statement filter and per-column `IS DISTINCT FROM` checks in the body. `UPDATE OF` alone keys off the columns *named* in the statement, not the values, so it rejects no-op resends that ORMs and PATCH handlers routinely produce. No prefix matching and no `information_schema` loops — they silently absorb adjacent columns (the `ems_last_discover_*` health columns must stay writable for Discover).
+- **Exempt `service_role` explicitly, and write the structural reason.** It already bypasses RLS and can write these columns; a new trigger exempting it *declines to add* a restriction rather than removing one. Do not write the circumstantial version ("it's the only write path while X") — that expires and reads as an invitation to delete the exemption.
 
 ### Migration conventions — SECURITY DEFINER grants
 
@@ -234,6 +242,32 @@ See `docs/setup.md` for three modes:
 - `./setup.sh` — local Supabase CLI
 - `./setup.sh --cloud` — cloud Supabase
 - `./setup.sh --docker` — full Docker stack (no Node.js required)
+
+## Writing Conventions
+
+### A comment asserting a cross-artifact fact must name its own invalidation condition
+
+The failure mode is not staleness in general — it is a comment that states a rule without naming what could change it, so nothing about reading it suggests checking whether it still holds. A docstring stating a permission truth table that a later migration had replaced misled four people during the scoping of #316, precisely because it gave them no reason to distrust it.
+
+Write the version that names what would make it wrong:
+
+> routes through this function rather than `user_directory` because `user_can_see_user_profile` filters `scope_type = 'org'` and would omit microgrid-scoped operators — if that filter changes, revisit
+
+Same length as the version that just states the rule.
+
+**Scope this narrowly.** It earns its keep only for comments asserting a **cross-artifact** fact: a policy enforced somewhere else, or copy that depends on another surface existing. A comment explaining what the code in front of you does needs no invalidation condition — the code is right there and cannot drift from itself. Applied to every comment this becomes "annotate everything", which reviewers stop reading within a sprint.
+
+The reason belongs **in the code**, with the ticket as the long-form record. Nobody reads a ticket six months later while editing a helper.
+
+### A public artifact describing an unfixed weakness is a disclosure regardless of how it is worded
+
+Venue is the decision; redaction is not. Careful wording, omitted identifiers and a neutral tone do not convert a description of an unfixed weakness into something safe to publish — they only make it a quieter disclosure. Decide *where it goes* first.
+
+Applies to issues, PR titles and bodies, commit messages, code comments, and test names in this repo, all of which are public. If the artifact would describe a weakness that is not yet fixed and deployed:
+
+- Put the detail in `mbe-docs` (private) and reference it by ticket number here.
+- Describe public-repo work by what it *adds* ("microgrid-scoped configuration role"), not by what it *fixes* ("any org manager could read stored cloud credentials").
+- A fix landing on `main` is not the same as a fix being deployed. Wait for applied-in-production before publishing the detail.
 
 ## Sensitive Information
 
