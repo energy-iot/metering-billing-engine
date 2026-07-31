@@ -1,5 +1,6 @@
 import type { DeviceConfig, DeviceDataAdapter, DeviceReading } from "@/lib/adapters/types";
 import { OpenEmsError } from "./errors";
+import { validateBackendUrl } from "./backend-url";
 import type { OpenEmsAuth } from "./auth";
 import type {
   ChannelValue,
@@ -42,7 +43,28 @@ export class OpenEmsClient implements DeviceDataAdapter {
       params,
     });
 
-    const url = this.auth.resolveUrl(this.baseUrl);
+    // Re-validate at the sink, immediately before the request is signed and
+    // sent (mbe-docs#8). This is defence in depth, not a substitute for the
+    // write-time check in the save route — the two cover different data.
+    //
+    // Write-time validation only governs rows written after it shipped. Every
+    // `ems_backend_url` stored before then reached the database without ever
+    // being checked, and this is the only place that catches those. Validating
+    // the resolved URL (rather than `this.baseUrl`) means the exact string
+    // handed to `fetch` is the string that passed.
+    const resolved = this.auth.resolveUrl(this.baseUrl);
+    const checked = validateBackendUrl(resolved);
+    if (!checked.ok) {
+      throw new OpenEmsError(
+        `The saved OpenEMS backend URL was not contacted because it is not valid: ${checked.error} ` +
+          `Open the microgrid's OpenEMS Backend setup and save a valid URL.`,
+        "OPENEMS_INVALID_BACKEND_URL",
+        503,
+        { baseUrl: this.baseUrl }
+      );
+    }
+    const url = checked.url;
+
     const headers = await this.auth.apply({ url, method: "POST", body });
 
     let response: Response;

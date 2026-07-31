@@ -159,6 +159,13 @@ export async function POST(
           discoverStatus = "auth_failed";
           discoverMessage =
             "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_INVALID_BACKEND_URL") {
+          // Stored URL predates the write-time rules (mbe-docs#8). Not a
+          // network fault — reported as unknown_error rather than
+          // 'unreachable' so it doesn't read as "the host is down", and the
+          // message tells the operator to re-save the config.
+          discoverStatus = "unknown_error";
+          discoverMessage = err.message;
         } else if (err.code === "OPENEMS_REDIRECT") {
           // Redirects are not followed (mbe-docs#8). Reported as 'unreachable'
           // because the discover-status CHECK constraint (migration 00018)

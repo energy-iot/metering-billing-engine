@@ -678,6 +678,71 @@ describe("OpenEmsClient", () => {
     });
   });
 
+  // ── Sink-side URL validation (mbe-docs#8) ────────────────────────────────
+  //
+  // Defence in depth behind the save route's write-time check. The two cover
+  // different data: write-time validation governs only rows written after it
+  // shipped, so a URL stored before then reaches this client having never been
+  // checked by anything. This is where those are caught.
+  describe("stored URL validation at the sink", () => {
+    it.each([
+      ["http (non-localhost)", "http://openems.example.com"],
+      ["loopback literal", "http://127.0.0.1:8075"],
+      ["private 10/8", "https://10.0.0.5"],
+      ["link-local metadata", "https://169.254.169.254"],
+      ["IPv6 loopback", "https://[::1]:8075"],
+      ["embedded credentials", "https://user:pass@openems.example.com"],
+      ["not absolute", "openems.example.com"],
+    ])(
+      "rejects a legacy stored URL (%s) without contacting it",
+      async (_label, storedUrl) => {
+        const legacyClient = new OpenEmsClient(
+          storedUrl,
+          new BasicAuth("admin", "testpass")
+        );
+
+        try {
+          await legacyClient.getEdgesStatus(["edge0"]);
+          expect.fail("Should have thrown");
+        } catch (err) {
+          expect(err).toBeInstanceOf(OpenEmsError);
+          const e = err as OpenEmsError;
+          // Distinguishable from a network fault, and points at re-saving.
+          expect(e.code).toBe("OPENEMS_INVALID_BACKEND_URL");
+          expect(e.code).not.toBe("OPENEMS_UNREACHABLE");
+          expect(e.message).toContain("was not contacted");
+          expect(e.message).toContain("save a valid URL");
+        }
+
+        // The whole point: no request left the process.
+        expect(fetchSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not signal an invalid URL as an auth or network failure", async () => {
+      const legacyClient = new OpenEmsClient(
+        "http://192.168.1.10:8075",
+        new BasicAuth("admin", "testpass")
+      );
+      await expect(
+        legacyClient.getEdgesStatus(["edge0"])
+      ).rejects.toMatchObject({ code: "OPENEMS_INVALID_BACKEND_URL" });
+    });
+
+    it("lets a valid stored URL through to fetch unchanged", async () => {
+      fetchSpy.mockResolvedValue(
+        mockResponse({ jsonrpc: "2.0", id: "id", result: {} })
+      );
+
+      // The default fixture client is http://localhost:8075 — the documented
+      // development case, which must keep working.
+      await client.getEdgesStatus(["edge0"]);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0][0]).toBe("http://localhost:8075/jsonrpc");
+    });
+  });
+
   // ── Redirects are not followed (mbe-docs#8) ──────────────────────────────
   //
   // The stored URL must be the URL actually contacted. Following a redirect
