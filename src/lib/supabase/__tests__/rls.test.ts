@@ -1702,10 +1702,33 @@ describe("RLS: OpenEMS Backend (#101)", () => {
     expect(decrypted).toBe("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
   });
 
-  describe("AC-TEST-4: fn_get_ems_secret truth table", () => {
-    // Set up a microgrid with a cloud_aws config under Org A so userA is
-    // the "owner org_manager" and userB is "different org_manager."
+  describe("AC-TEST-4: fn_get_ems_secret grant surface (post-00049)", () => {
+    // Migration 00049 withdrew EXECUTE from `authenticated`. The decrypt now
+    // runs only on the service-role client, behind an RLS row read performed
+    // on the caller's own client (`getEmsSecretForMicrogrid`).
+    //
+    // The old truth table asserted per-role RETURN VALUES for authenticated
+    // callers. Those rows no longer exist as a surface: every authenticated
+    // caller — including super_admin — is now stopped at the grant layer
+    // before the body runs, so role no longer differentiates the outcome.
     const SECRET_PLAINTEXT = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+    // Per CLAUDE.md § "Migration conventions", a post-hoc REVOKE on a
+    // pre-existing function surfaces as EITHER 42501 (grant layer) OR
+    // PGRST202 (PostgREST filtered it out of the schema cache). Same security
+    // outcome, different code — accept both.
+    function expectExecuteDenied(
+      error: { code?: string; message?: string } | null
+    ): void {
+      expect(error).not.toBeNull();
+      expect(
+        error?.code === "42501" ||
+          error?.code === "PGRST202" ||
+          error?.message?.toLowerCase().includes("permission denied") ||
+          error?.message?.toLowerCase().includes("could not find the function"),
+        `Expected 42501 / PGRST202 / permission-denied; got code=${error?.code} message=${error?.message}`
+      ).toBe(true);
+    }
 
     async function setupCloudAwsConfig() {
       const svc = await serviceClient();
@@ -1738,59 +1761,64 @@ describe("RLS: OpenEMS Backend (#101)", () => {
         .eq("id", FIXTURE.microgridA);
     }
 
-    it("super_admin gets plaintext when secret is set", async () => {
-      if (skipIfRequested()) return;
-      await setupCloudAwsConfig();
-      try {
-        const { data, error } = await userD.client.rpc("fn_get_ems_secret", {
-          _microgrid_id: FIXTURE.microgridA,
-        });
-        expect(error).toBeNull();
-        expect(data).toBe(SECRET_PLAINTEXT);
-      } finally {
-        await clearCloudAwsConfig();
-      }
-    });
+    // ── Every authenticated caller is denied at the grant layer ──────────
+    //
+    // These four cases previously differed by role. Post-00049 they are the
+    // same case, and that sameness is the point: role no longer decides
+    // whether the body runs, because the body is unreachable.
+    const deniedCallers: Array<[string, () => { client: SupabaseClient }]> = [
+      ["super_admin", () => userD],
+      ["org_manager (owner org)", () => userA],
+      ["org_manager (different org)", () => userB],
+      ["authenticated with no role", () => userC],
+    ];
 
-    it("super_admin gets NULL when secret is not set", async () => {
-      if (skipIfRequested()) return;
-      await clearCloudAwsConfig();
-      const { data, error } = await userD.client.rpc("fn_get_ems_secret", {
-        _microgrid_id: FIXTURE.microgridA,
+    for (const [label, getUser] of deniedCallers) {
+      it(`${label} cannot execute fn_get_ems_secret`, async () => {
+        if (skipIfRequested()) return;
+        await setupCloudAwsConfig();
+        try {
+          const { data, error } = await getUser().client.rpc(
+            "fn_get_ems_secret",
+            { _microgrid_id: FIXTURE.microgridA }
+          );
+          expectExecuteDenied(error);
+          expect(data).not.toBe(SECRET_PLAINTEXT);
+        } finally {
+          await clearCloudAwsConfig();
+        }
       });
-      expect(error).toBeNull();
-      expect(data).toBeNull();
-    });
+    }
 
-    it("org_manager (owner org) gets plaintext (post-#200 widening)", async () => {
+    it("authenticated cannot execute the underlying fn_ems_decrypt_secret either", async () => {
       if (skipIfRequested()) return;
       await setupCloudAwsConfig();
       try {
-        const { data, error } = await userA.client.rpc("fn_get_ems_secret", {
-          _microgrid_id: FIXTURE.microgridA,
-        });
-        expect(error).toBeNull();
-        expect(data).toBe(SECRET_PLAINTEXT);
+        // The ciphertext column is selectable by anyone RLS admits to the
+        // microgrid row, so withdrawing only the accessor would leave the
+        // decrypt primitive as an equivalent entry point. 00049 withdraws
+        // both. Read the ciphertext as the owner org_manager, then attempt
+        // the decrypt with it — the realistic two-step shape.
+        const { data: row } = await userA.client
+          .from("microgrids")
+          .select("ems_aws_secret_access_key_encrypted")
+          .eq("id", FIXTURE.microgridA)
+          .maybeSingle<{ ems_aws_secret_access_key_encrypted: string | null }>();
+
+        const { data, error } = await userA.client.rpc(
+          "fn_ems_decrypt_secret",
+          {
+            p_ciphertext: row?.ems_aws_secret_access_key_encrypted ?? "\\x00",
+          }
+        );
+        expectExecuteDenied(error);
+        expect(data).not.toBe(SECRET_PLAINTEXT);
       } finally {
         await clearCloudAwsConfig();
       }
     });
 
-    it("org_manager (different org) gets NULL — redacted by helper", async () => {
-      if (skipIfRequested()) return;
-      await setupCloudAwsConfig();
-      try {
-        const { data, error } = await userB.client.rpc("fn_get_ems_secret", {
-          _microgrid_id: FIXTURE.microgridA,
-        });
-        expect(error).toBeNull();
-        expect(data).toBeNull();
-      } finally {
-        await clearCloudAwsConfig();
-      }
-    });
-
-    it("service_role gets plaintext (server-side path)", async () => {
+    it("service_role still gets plaintext (the server-side decrypt path)", async () => {
       if (skipIfRequested()) return;
       await setupCloudAwsConfig();
       try {
@@ -1805,18 +1833,13 @@ describe("RLS: OpenEMS Backend (#101)", () => {
       }
     });
 
-    it("userC (no role) gets NULL", async () => {
+    it("authenticated retains fn_ems_encrypt_secret (Save flow encrypts as the user)", async () => {
       if (skipIfRequested()) return;
-      await setupCloudAwsConfig();
-      try {
-        const { data, error } = await userC.client.rpc("fn_get_ems_secret", {
-          _microgrid_id: FIXTURE.microgridA,
-        });
-        expect(error).toBeNull();
-        expect(data).toBeNull();
-      } finally {
-        await clearCloudAwsConfig();
-      }
+      const { data, error } = await userA.client.rpc("fn_ems_encrypt_secret", {
+        p_plaintext: SECRET_PLAINTEXT,
+      });
+      expect(error).toBeNull();
+      expect(data).toBeTruthy();
     });
   });
 });

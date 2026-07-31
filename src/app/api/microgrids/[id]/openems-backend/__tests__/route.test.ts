@@ -73,6 +73,15 @@ vi.mock("@/lib/auth/access", () => ({
   currentUserIsSuperAdmin: async () => isSuperAdminReturn,
 }));
 
+// The EMS secret decrypt runs on the service-role client (migration 00049).
+// `getEmsSecretForMicrogrid` performs its own RLS row read on the user client
+// first, so the preserve-secret path now issues an EXTRA from('microgrids')
+// before this RPC — see the handler ordering in that test.
+const mockServiceRpc = vi.fn();
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({ rpc: mockServiceRpc }),
+}));
+
 // Sequenced from() handlers — each test sets up the order of calls.
 let fromCallIndex = 0;
 const fromHandlers: Array<(table: string) => unknown> = [];
@@ -156,16 +165,14 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       return handler(table);
     });
 
-    mockRpc.mockImplementation((fnName: string) => {
-      if (fnName === "fn_get_ems_secret") {
-        return Promise.resolve({
-          data: "DECRYPTED_FAKE_SECRET",
-          error: null,
-        });
-      }
-      // fn_ems_encrypt_secret (default)
-      return Promise.resolve({ data: "\\x01020304", error: null });
-    });
+    // The user client only ever issues fn_ems_encrypt_secret now.
+    mockRpc.mockImplementation(() =>
+      Promise.resolve({ data: "\\x01020304", error: null })
+    );
+
+    mockServiceRpc.mockImplementation(() =>
+      Promise.resolve({ data: "DECRYPTED_FAKE_SECRET", error: null })
+    );
   });
 
   it("returns 400 on malformed body", async () => {
@@ -517,6 +524,9 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
       })
     );
     registerFrom(billingPeriodsHandler([]));
+    // getEmsSecretForMicrogrid's authorization read — the RLS row read that
+    // must precede the service-role decrypt.
+    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     registerFrom(mgUpdateHandler(null)); // persist config (WITHOUT re-encrypt)
     registerFrom(edgesSelectHandler([]));
     registerFrom(mgUpdateHandler(null)); // health
@@ -541,11 +551,14 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     const json = await res.json();
     expect(json.status).toBe("success");
 
-    // Two RPC calls expected: fn_get_ems_secret (decrypt existing) and
-    // NO fn_ems_encrypt_secret (the preserve branch skips re-encryption).
-    const rpcCalls = mockRpc.mock.calls.map((c) => c[0]);
-    expect(rpcCalls).toContain("fn_get_ems_secret");
-    expect(rpcCalls).not.toContain("fn_ems_encrypt_secret");
+    // The decrypt happens on the SERVICE-ROLE client (00049), never on the
+    // user client. The preserve branch skips re-encryption entirely.
+    const userRpcCalls = mockRpc.mock.calls.map((c) => c[0]);
+    expect(userRpcCalls).not.toContain("fn_get_ems_secret");
+    expect(userRpcCalls).not.toContain("fn_ems_encrypt_secret");
+
+    const serviceRpcCalls = mockServiceRpc.mock.calls.map((c) => c[0]);
+    expect(serviceRpcCalls).toContain("fn_get_ems_secret");
   });
 
   it("preserve-secret: blank secretAccessKey + NO existing ciphertext → 400", async () => {
