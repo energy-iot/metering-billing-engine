@@ -6,6 +6,7 @@ import {
 } from "@/lib/auth/access";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
+import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
 import { deriveOpenemsBackendHealth } from "./health";
 import { OpenemsBackendShell } from "./openems-backend-shell";
 
@@ -15,8 +16,7 @@ import { OpenemsBackendShell } from "./openems-backend-shell";
 //   1. Microgrid row (name + ems_* columns)
 //   2. Draft billing-period count (mid-period guard)
 //   3. Closed billing-period count (for the type-to-confirm bypass PM copy)
-//   4. Decrypted AWS secret last-4 (super_admin only; fn_get_ems_secret returns
-//      NULL for org_manager → we render "—" in the summary)
+//   4. Decrypted AWS secret last-4 (super_admin only; org_manager renders "—")
 //   5. Permission flags: isSuperAdmin, canAccessMicrogrid
 //
 // The server component passes everything as props to a single client shell
@@ -76,15 +76,23 @@ export default async function OpenemsBackendPage({
       .eq("status", "closed"),
   ]);
 
-  // Last-4 mask of the decrypted AWS secret. fn_get_ems_secret returns NULL
-  // for non-super_admin (even on own org) per migration 00018 truth table.
+  // Last-4 mask of the decrypted AWS secret, super_admin only.
+  //
+  // `getEmsSecretForMicrogrid` re-reads the microgrid row on this same
+  // RLS-evaluated client and returns null before reaching the decrypt if the
+  // row is not visible — see the ordering note on that helper. The
+  // `isSuperAdmin` check below is the surface-level policy on top of it;
+  // neither replaces the other.
   let secretLast4: string | null = null;
   if (mg.ems_type === "cloud_aws" && isSuperAdmin) {
-    const { data: secret } = await supabase.rpc("fn_get_ems_secret", {
-      _microgrid_id: id,
-    });
-    if (typeof secret === "string" && secret.length >= 4) {
-      secretLast4 = secret.slice(-4);
+    try {
+      const secret = await getEmsSecretForMicrogrid(supabase, id);
+      if (secret && secret.length >= 4) {
+        secretLast4 = secret.slice(-4);
+      }
+    } catch {
+      // Decrypt unavailable — render "—" rather than failing the page.
+      secretLast4 = null;
     }
   }
 

@@ -90,12 +90,17 @@ export async function GET(
   }
 
   // Resolve per-microgrid OpenEMS config.
-  // Post-#200: fn_get_ems_secret was widened to return plaintext to
-  // org_managers of the microgrid's parent org (00032), so the previous
-  // super_admin-only gate at this position has been removed. Cross-org
-  // callers are still rejected — currentUserCanAccessMicrogrid above filters
-  // them, and any residual OPENEMS_FORBIDDEN from getMicrogridEmsConfig is
-  // surfaced as 403 by the catch block below.
+  //
+  // Post-#200 (00032) org_managers are intentionally allowed here — this is
+  // the Add-Household wizard's inline discovery path, which is the surface
+  // that motivated the widening. There is no super_admin gate at this
+  // position by design.
+  //
+  // Authorization on the secret path is therefore: the `edges` RLS read
+  // above, `currentUserCanAccessMicrogrid`, and the RLS row read inside
+  // `getEmsSecretForMicrogrid` — which must run before that helper's
+  // service-role decrypt. Cross-org callers are rejected by all three. Any
+  // OPENEMS_FORBIDDEN from getMicrogridEmsConfig is surfaced as 403 below.
   let emsConfig;
   try {
     emsConfig = await getMicrogridEmsConfig(supabase, edge.microgrid_id);

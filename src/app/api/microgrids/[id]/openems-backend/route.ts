@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid, currentUserIsSuperAdmin } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
+import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 const UUID_RE =
@@ -271,12 +272,23 @@ export async function PUT(
   // We build the candidate OpenEmsClientConfig here (before the DB write) so
   // step 5 (edge-ID validation) can use it without a second decrypt round-trip.
   // effectiveSecret is also reused by step 7 (Discover after save).
+  //
+  // The decrypt runs on the service-role client inside
+  // `getEmsSecretForMicrogrid`, which re-reads the microgrid row on the
+  // RLS-evaluated `supabase` client first and returns null before any decrypt
+  // is reachable when that row is not visible. That read is the authorization
+  // — it must stay ahead of the decrypt (see the helper's ordering note). The
+  // route's own mgRow read + currentUserCanAccessMicrogrid + super_admin gates
+  // above have already run at this point.
   let effectiveSecret: string | undefined = secretAccessKey;
   if (type === "cloud_aws" && preserveExistingSecret) {
-    const { data: decrypted, error: decryptErr } = await supabase.rpc(
-      "fn_get_ems_secret",
-      { _microgrid_id: microgridId }
-    );
+    let decrypted: string | null = null;
+    let decryptErr: unknown = null;
+    try {
+      decrypted = await getEmsSecretForMicrogrid(supabase, microgridId);
+    } catch (err) {
+      decryptErr = err;
+    }
     if (decryptErr || !decrypted) {
       return NextResponse.json(
         {
@@ -286,7 +298,7 @@ export async function PUT(
         { status: 500 }
       );
     }
-    effectiveSecret = decrypted as string;
+    effectiveSecret = decrypted;
   }
 
   const candidateConfig: OpenEmsClientConfig =
