@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserIsSuperAdmin } from "@/lib/auth/access";
+import { currentUserCanConfigureEms } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 
@@ -10,10 +10,15 @@ const UUID_RE =
 /**
  * POST /api/microgrids/[id]/openems-backend/discover — Run Discover now.
  *
- * Used by the Add Edge dialog's "Discovering…" state. Authorization is
- * enforced by RLS (getMicrogridEmsConfig can only read visible rows) and
- * — for cloud_aws — by the SECURITY-DEFINER helper fn_get_ems_secret which
- * only decrypts for super_admin / service_role.
+ * Used by the Add Edge dialog's "Discovering…" state. Authorization is the
+ * `currentUserCanConfigureEms` gate below, plus RLS (getMicrogridEmsConfig can
+ * only read visible rows).
+ *
+ * Do not read `fn_get_ems_secret` as a second layer here: since #311 the
+ * decrypt runs on the service-role client, and that function's own gate is
+ * satisfied unconditionally by `auth.role() = 'service_role'`, so it
+ * contributes no authorization on this path. If the decrypt is ever moved back
+ * onto the caller's client, that changes and this note is wrong.
  *
  * Returns 409 if ems_type is NULL (microgrid not configured).
  *
@@ -36,14 +41,23 @@ export async function POST(
 
   const supabase = await createClient();
 
-  // Discover mutates ems_last_discover_* health fields and resolves the
-  // decrypted secret via getMicrogridEmsConfig. Gate here so org_managers
-  // cannot trigger a write or observe backend connectivity status indirectly
-  // through error messages. This gate is in addition to the RLS row read that
-  // getEmsSecretForMicrogrid performs before its service-role decrypt.
-  if (!(await currentUserIsSuperAdmin(supabase))) {
+  // Discover resolves the decrypted secret via getMicrogridEmsConfig, so this
+  // is a READ gate on the stored credential and it has to run before that call
+  // — the check is what makes the decrypt unreachable, not merely errored.
+  //
+  // Microgrid-scoped since #316: org access to the microgrid is not enough.
+  // Note this gate is app-layer by necessity. The BEFORE UPDATE trigger on
+  // `microgrids` covers the ems_* config columns, but Discover's own writes
+  // are to the ems_last_discover_* health columns, which are deliberately
+  // outside the trigger's guarded set — so nothing at the database layer
+  // would stop this path. If a read-side database gate is ever added,
+  // revisit whether this check is still the only one.
+  if (!(await currentUserCanConfigureEms(supabase, microgridId))) {
     return NextResponse.json(
-      { error: "Only super admins can run OpenEMS backend discovery." },
+      {
+        error:
+          "You do not have permission to run OpenEMS discovery for this microgrid.",
+      },
       { status: 403 }
     );
   }

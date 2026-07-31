@@ -45,7 +45,7 @@ const MG_NAME = "Kisakye";
 let mgRow: { id: string; name: string } | null = { id: MG_ID, name: MG_NAME };
 let periods: { id: string; status: "draft" | "closed" }[] = [];
 let canAccessMicrogridReturn = true;
-let isSuperAdminReturn = true;
+let canConfigureEmsReturn = true;
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
@@ -70,7 +70,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/lib/auth/access", () => ({
   currentUserCanAccessMicrogrid: async () => canAccessMicrogridReturn,
-  currentUserIsSuperAdmin: async () => isSuperAdminReturn,
+  currentUserCanConfigureEms: async () => canConfigureEmsReturn,
 }));
 
 // The EMS secret decrypt runs on the service-role client (migration 00049).
@@ -155,7 +155,7 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     fromCallIndex = 0;
     fromHandlers.length = 0;
     canAccessMicrogridReturn = true;
-    isSuperAdminReturn = true;
+    canConfigureEmsReturn = true;
     mgRow = { id: MG_ID, name: MG_NAME };
     periods = [];
 
@@ -327,11 +327,13 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(res.status).toBe(403);
   });
 
-  it("returns 403 with super_admin message when org_manager calls PUT (Nit #1 security gate)", async () => {
+  it("returns 403 when the caller can access the microgrid but cannot configure it (#316)", async () => {
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
-    // org_manager can access the microgrid but is not super_admin
+    // The sharp case: org access is TRUE, configuration access is FALSE.
+    // The database trigger is the enforcement; this asserts the route does not
+    // proceed to the outbound connection test before finding that out.
     canAccessMicrogridReturn = true;
-    isSuperAdminReturn = false;
+    canConfigureEmsReturn = false;
 
     const { PUT } = await import("../route");
     const res = await PUT(
@@ -344,7 +346,9 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     );
     expect(res.status).toBe(403);
     const json = await res.json();
-    expect(json.error).toBe("Only super admins can update OpenEMS backend config.");
+    expect(json.error).toBe(
+      "You do not have permission to configure this microgrid."
+    );
   });
 
   it("Branch (a): draft exists → 409 with no write", async () => {

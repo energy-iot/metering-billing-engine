@@ -176,8 +176,24 @@ export interface TestUser {
  */
 export async function createTestUser(opts: {
   email: string;
-  role: "super_admin" | "org_manager" | null;
+  role: "super_admin" | "org_manager" | "ems_operator" | null;
   scopeId?: string | null;
+  /**
+   * Defaults to 'org'. Pass 'microgrid' for `ems_operator` grants — the
+   * role-aware CHECK on user_roles (migration 00052) rejects the mismatched
+   * pairing, so this is not merely cosmetic.
+   */
+  scopeType?: "org" | "microgrid";
+  /**
+   * Additional role rows to seed for the same user. The one-row-per-user
+   * invariant went away with #316; a user can hold an org role and any number
+   * of microgrid-scoped grants at once.
+   */
+  extraRoles?: {
+    role: "super_admin" | "org_manager" | "ems_operator";
+    scopeType: "org" | "microgrid";
+    scopeId: string | null;
+  }[];
 }): Promise<TestUser> {
   const svc = await serviceClient();
 
@@ -207,12 +223,26 @@ export async function createTestUser(opts: {
     const { error: roleError } = await svc.from("user_roles").insert({
       user_id: userId,
       role: opts.role,
-      scope_type: "org",
+      scope_type: opts.scopeType ?? "org",
       scope_id: opts.role === "super_admin" ? null : (opts.scopeId ?? null),
     });
     if (roleError) {
       throw new Error(
         `[RLS tests] Failed to insert user_roles for ${opts.email}: ${roleError.message}`
+      );
+    }
+  }
+
+  for (const extra of opts.extraRoles ?? []) {
+    const { error: extraErr } = await svc.from("user_roles").insert({
+      user_id: userId,
+      role: extra.role,
+      scope_type: extra.scopeType,
+      scope_id: extra.scopeId,
+    });
+    if (extraErr) {
+      throw new Error(
+        `[RLS tests] Failed to insert extra user_roles (${extra.role}@${extra.scopeType}) for ${opts.email}: ${extraErr.message}`
       );
     }
   }

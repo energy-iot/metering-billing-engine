@@ -10,7 +10,7 @@
 //   - typed-confirm dialog state (closed-period bypass)
 //
 // Data flow:
-//   Server component passes (microgrid, health, counts, secretLast4, isSuperAdmin).
+//   Server component passes (microgrid, health, counts, secretLast4, canConfigure).
 //   On Save/Test/Dialog-confirm success → router.refresh() so the server
 //   component re-fetches health + counts.
 
@@ -51,7 +51,20 @@ export type OpenemsBackendShellProps = {
   draftPeriodsCount: number;
   closedPeriodsCount: number;
   secretLast4: string | null;
-  isSuperAdmin: boolean;
+  /**
+   * True iff the viewer may change this microgrid's OpenEMS configuration —
+   * `ems_operator` scoped to it, or super_admin. Resolved server-side via
+   * `currentUserCanConfigureEms`, and enforced independently by a BEFORE
+   * UPDATE trigger on `microgrids`, so this only controls what is offered.
+   */
+  canConfigure: boolean;
+  /**
+   * The people holding `ems_operator` on this microgrid, from
+   * `fn_list_ems_operators`. The read-only banner copy below refers to this
+   * list ("the people listed below") — if this stops rendering, that copy is
+   * wrong and needs rewriting.
+   */
+  emsOperators: { userId: string; name: string }[];
 };
 
 type FormType = "cloud_aws" | "direct_url";
@@ -80,7 +93,8 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     draftPeriodsCount,
     closedPeriodsCount,
     secretLast4,
-    isSuperAdmin,
+    canConfigure,
+    emsOperators,
   } = props;
 
   const router = useRouter();
@@ -451,7 +465,7 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
 
   // Empty state
   if (mode === "empty" && !isEditing) {
-    if (!isSuperAdmin) {
+    if (!canConfigure) {
       return (
         <div className="space-y-4">
           {header}
@@ -590,7 +604,7 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
                 No discovery has run yet.
               </p>
             )}
-            {isSuperAdmin && (
+            {canConfigure && (
               <button
                 type="button"
                 onClick={handleTestAgain}
@@ -603,7 +617,7 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
           </div>
         </div>
 
-        {isSuperAdmin && !isEditing && (
+        {canConfigure && !isEditing && (
           <div className="mt-5 flex justify-end">
             <button
               type="button"
@@ -784,14 +798,19 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     <div className="space-y-4">
       {header}
 
-      {!isSuperAdmin && mode === "configured" && (
-        <Banner tone="info" title="Read-only view">
-          Only super admins can update OpenEMS credentials. Contact your
-          administrator to request changes.
+      {/* Copy depends on the operator line below rendering — "the people
+          listed below" resolves to <EmsOperatorLine />. Do not remove one
+          without rewriting the other. */}
+      {!canConfigure && mode === "configured" && (
+        <Banner tone="info" title="Read-only">
+          You can view this connection but not change it. Configuration is
+          limited to the people listed below, plus super admins.
         </Banner>
       )}
 
       {summaryCard}
+
+      <EmsOperatorLine operators={emsOperators} />
 
       {showMidPeriodBanner && (
         <Banner
@@ -888,5 +907,47 @@ function OutcomeBanner({ outcome }: { outcome: SaveOutcome }) {
     <Banner tone="destructive" title="Something went wrong">
       {outcome.message}
     </Banner>
+  );
+}
+
+/**
+ * Attributability line: who can configure this connection.
+ *
+ * This is the surface the read-only banner points at ("the people listed
+ * below"), and the only place a headless rollout grant becomes visible to a
+ * human — so it renders in both the read-only and the configurable state
+ * rather than only for viewers who cannot edit.
+ *
+ * Data comes from `fn_list_ems_operators`, which applies its own access gate
+ * and returns zero rows for a microgrid the caller cannot access. An empty
+ * list therefore means "nobody holds a grant" for anyone who can see this
+ * page at all — if that function's gate is ever loosened, this copy needs
+ * revisiting.
+ */
+function EmsOperatorLine({
+  operators,
+}: {
+  operators: { userId: string; name: string }[];
+}) {
+  return (
+    <p
+      className="text-xs text-muted-foreground"
+      data-testid="ems-operator-line"
+    >
+      {operators.length === 0 ? (
+        <>
+          No one is set up to configure this connection yet. A super admin can
+          grant access.
+        </>
+      ) : (
+        <>
+          Can configure this connection:{" "}
+          <span className="text-foreground">
+            {operators.map((o) => o.name).join(", ")}
+          </span>
+          , plus super admins.
+        </>
+      )}
+    </p>
   );
 }

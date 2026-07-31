@@ -10,7 +10,13 @@
  * update roles.ts to match the new enum values.
  */
 import { describe, it, expect } from "vitest";
-import { SUPER_ADMIN, ORG_MANAGER } from "@/lib/roles";
+import {
+  SUPER_ADMIN,
+  ORG_MANAGER,
+  EMS_OPERATOR,
+  SCOPE_ORG,
+  SCOPE_MICROGRID,
+} from "@/lib/roles";
 
 // Import the Database type directly so we can extract the enum values at the
 // type level AND verify them at runtime via the generated const assertion below.
@@ -22,11 +28,19 @@ type GeneratedUserRole = Database["public"]["Enums"]["user_role"];
 
 // Compile-time assertion: each constant must be assignable to the generated type.
 // If the enum is renamed in the DB, TypeScript will error here before runtime.
+type GeneratedScopeType = Database["public"]["Enums"]["role_scope_type"];
+
 const _superAdmin: GeneratedUserRole = SUPER_ADMIN;
 const _orgManager: GeneratedUserRole = ORG_MANAGER;
+const _emsOperator: GeneratedUserRole = EMS_OPERATOR;
+const _scopeOrg: GeneratedScopeType = SCOPE_ORG;
+const _scopeMicrogrid: GeneratedScopeType = SCOPE_MICROGRID;
 // Suppress "unused variable" lint without touching the values.
 void _superAdmin;
 void _orgManager;
+void _emsOperator;
+void _scopeOrg;
+void _scopeMicrogrid;
 
 describe("roles — drift-prevention", () => {
   it("SUPER_ADMIN constant matches the database enum value", () => {
@@ -37,14 +51,39 @@ describe("roles — drift-prevention", () => {
     expect(ORG_MANAGER).toBe("org_manager");
   });
 
+  it("EMS_OPERATOR constant matches the database enum value", () => {
+    expect(EMS_OPERATOR).toBe("ems_operator");
+  });
+
   it("all exported role constants are covered (no undeclared additions)", () => {
     // If the schema adds a new role, update this set AND add a constant to roles.ts.
-    const expectedRoles = new Set<GeneratedUserRole>(["super_admin", "org_manager"]);
-    const declaredRoles = new Set<GeneratedUserRole>([SUPER_ADMIN, ORG_MANAGER]);
+    const expectedRoles = new Set<GeneratedUserRole>([
+      "super_admin",
+      "org_manager",
+      "ems_operator",
+    ]);
+    const declaredRoles = new Set<GeneratedUserRole>([
+      SUPER_ADMIN,
+      ORG_MANAGER,
+      EMS_OPERATOR,
+    ]);
 
     for (const r of expectedRoles) {
       expect(declaredRoles.has(r)).toBe(true);
     }
     expect(declaredRoles.size).toBe(expectedRoles.size);
+  });
+
+  it("all exported scope-type constants are covered", () => {
+    const expectedScopes = new Set<GeneratedScopeType>(["org", "microgrid"]);
+    const declaredScopes = new Set<GeneratedScopeType>([
+      SCOPE_ORG,
+      SCOPE_MICROGRID,
+    ]);
+
+    for (const s of expectedScopes) {
+      expect(declaredScopes.has(s)).toBe(true);
+    }
+    expect(declaredScopes.size).toBe(expectedScopes.size);
   });
 });
