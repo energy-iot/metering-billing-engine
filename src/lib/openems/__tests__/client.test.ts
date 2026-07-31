@@ -677,4 +677,109 @@ describe("OpenEmsClient", () => {
       });
     });
   });
+
+  // ── Redirects are not followed (mbe-docs#8) ──────────────────────────────
+  //
+  // The stored URL must be the URL actually contacted. Following a redirect
+  // re-sends the POST — body included — to a host that never passed the
+  // write-time checks in `backend-url.ts`, and leaves the operator looking at
+  // a config screen showing somewhere their data did not go.
+  describe("redirect handling", () => {
+    function redirectResponse(status: number, location?: string): Response {
+      const headers = new Headers();
+      if (location) headers.set("location", location);
+      return {
+        ...mockResponse({}, 200),
+        ok: false,
+        status,
+        statusText: "Redirect",
+        redirected: false,
+        headers,
+        json: () => Promise.reject(new Error("not JSON")),
+      } as unknown as Response;
+    }
+
+    it("passes redirect: 'manual' to fetch on a normal request", async () => {
+      fetchSpy.mockResolvedValue(
+        mockResponse({ jsonrpc: "2.0", id: "id", result: {} })
+      );
+
+      await client.getEdgesStatus(["edge0"]);
+
+      const [, options] = fetchSpy.mock.calls[0];
+      expect(options?.redirect).toBe("manual");
+    });
+
+    it.each([301, 302, 307, 308])(
+      "surfaces a %i as an actionable OpenEmsError instead of following it",
+      async (status) => {
+        fetchSpy.mockResolvedValue(
+          redirectResponse(status, "https://elsewhere.example.com/jsonrpc")
+        );
+
+        await expect(client.getEdgesStatus(["edge0"])).rejects.toBeInstanceOf(
+          OpenEmsError
+        );
+
+        fetchSpy.mockResolvedValue(
+          redirectResponse(status, "https://elsewhere.example.com/jsonrpc")
+        );
+        try {
+          await client.getEdgesStatus(["edge0"]);
+          expect.fail("Should have thrown");
+        } catch (err) {
+          const e = err as OpenEmsError;
+          expect(e.code).toBe("OPENEMS_REDIRECT");
+          expect(e.message).toContain("redirect");
+          // Actionable: names the destination and what the operator must do.
+          expect(e.message).toContain("https://elsewhere.example.com/jsonrpc");
+          expect(e.message).toContain("update the saved backend URL");
+        }
+
+        // Exactly one request per call — the redirect was not followed.
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      }
+    );
+
+    it("handles an opaque redirect (status 0, type 'opaqueredirect')", async () => {
+      const opaque = {
+        ...mockResponse({}, 200),
+        ok: false,
+        status: 0,
+        type: "opaqueredirect" as ResponseType,
+        headers: new Headers(),
+        json: () => Promise.reject(new Error("not JSON")),
+      } as unknown as Response;
+      fetchSpy.mockResolvedValue(opaque);
+
+      try {
+        await client.getEdgesStatus(["edge0"]);
+        expect.fail("Should have thrown");
+      } catch (err) {
+        expect((err as OpenEmsError).code).toBe("OPENEMS_REDIRECT");
+      }
+    });
+
+    it("still succeeds normally on a 200 from a plain https endpoint", async () => {
+      const httpsClient = new OpenEmsClient(
+        "https://openems.example.com",
+        new BasicAuth("admin", "testpass")
+      );
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: { edge0: { online: true } },
+        })
+      );
+
+      const result = await httpsClient.getEdgesStatus(["edge0"]);
+
+      expect(result).toEqual([{ edgeId: "edge0", online: true }]);
+      const [url, options] = fetchSpy.mock.calls[0];
+      expect(url).toBe("https://openems.example.com/jsonrpc");
+      expect(options?.redirect).toBe("manual");
+      expect(options?.method).toBe("POST");
+    });
+  });
 });

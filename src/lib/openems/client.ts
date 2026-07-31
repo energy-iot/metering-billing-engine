@@ -47,13 +47,46 @@ export class OpenEmsClient implements DeviceDataAdapter {
 
     let response: Response;
     try {
-      response = await fetch(url, { method: "POST", headers, body });
+      // `redirect: "manual"` — we do NOT follow redirects (mbe-docs#8).
+      //
+      // fetch defaults to `follow`, which means the URL an operator saved and
+      // saw validated is not necessarily the URL their data reaches: a 308 at
+      // request time re-sends the POST — body included, which in direct_url
+      // mode is the whole JSON-RPC payload — to a host that never passed the
+      // write-time checks in `backend-url.ts`. A control that a redirect can
+      // sidestep is not a control, so the redirect is surfaced to the operator
+      // instead, with the instruction to store the final URL.
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        redirect: "manual",
+      });
     } catch (err) {
       throw new OpenEmsError(
         `Failed to reach OpenEMS at ${this.baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
         "OPENEMS_UNREACHABLE",
         503,
         err
+      );
+    }
+
+    // A redirect is a configuration problem, not a transport detail. Checked
+    // before the auth and JSON branches — a 3xx body is not JSON-RPC.
+    // With `redirect: "manual"` the runtime surfaces either the raw 3xx or an
+    // opaque redirect (type "opaqueredirect", status 0); handle both.
+    if (
+      (response.status >= 300 && response.status < 400) ||
+      response.type === "opaqueredirect"
+    ) {
+      const location = response.headers.get("location");
+      throw new OpenEmsError(
+        `OpenEMS Backend at ${this.baseUrl} responded with a redirect` +
+          (location ? ` to ${location}` : "") +
+          `. Redirects are not followed — update the saved backend URL to the final address.`,
+        "OPENEMS_REDIRECT",
+        502,
+        { status: response.status, location }
       );
     }
 

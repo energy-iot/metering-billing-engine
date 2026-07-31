@@ -159,6 +159,12 @@ export async function POST(
           discoverStatus = "auth_failed";
           discoverMessage =
             "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_REDIRECT") {
+          // Redirects are not followed (mbe-docs#8). Reported as 'unreachable'
+          // because the discover-status CHECK constraint (migration 00018)
+          // allows only the five existing values; the message carries detail.
+          discoverStatus = "unreachable";
+          discoverMessage = err.message;
         } else if (err.code === "OPENEMS_UNREACHABLE") {
           discoverStatus = "unreachable";
           discoverMessage = `Could not reach OpenEMS Backend at ${emsConfig.url}. Check the URL and that the host is reachable from Vercel.`;
