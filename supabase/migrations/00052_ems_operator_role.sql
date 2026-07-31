@@ -598,6 +598,15 @@ AS $$
   FROM user_roles ur
   JOIN auth.users au ON au.id = ur.user_id
   LEFT JOIN user_profiles up ON up.user_id = ur.user_id
+  -- Gates on user_can_access_microgrid, NOT user_can_configure_ems: this
+  -- answers "who do I ask", which is an org-level question — unlike
+  -- configuration, which is not. Section 3 of this file argues the opposite
+  -- for the config helper ("org access is not configuration access"); both
+  -- are deliberate, and the difference is that one authorizes an action on the
+  -- connection while this one only names the people responsible for it.
+  -- Gating this on user_can_configure_ems would show the list only to people
+  -- who already have it, which is precisely backwards — the read-only viewer
+  -- is the reader it exists for.
   WHERE user_can_access_microgrid(_microgrid_id)
     AND ur.role = 'ems_operator'
     AND ur.scope_type = 'microgrid'
