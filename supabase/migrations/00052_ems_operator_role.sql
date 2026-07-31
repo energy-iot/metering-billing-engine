@@ -550,12 +550,39 @@ GRANT  EXECUTE ON FUNCTION public.fn_list_visible_users(UUID[]) TO authenticated
 -- is_super_admin() short-circuits inside user_can_access_microgrid, so a
 -- super_admin viewing another org's microgrid sees the list. Rollout depends
 -- on that path.
+--
+-- ── The projection is exactly what the surface renders ───────────────────
+--
+-- Returns a single resolved `display_name`, not first_name / last_name /
+-- email. The consumer renders one string per operator, so returning the parts
+-- would emit columns its only caller discards — and for a SECURITY DEFINER
+-- function that is a directly-callable PostgREST endpoint the moment it is
+-- granted, "what the interface returns" and "what the surface needs" should be
+-- the same set.
+--
+-- `email` is used for ordering only. Note that a microgrid-only `ems_operator`
+-- does NOT appear in fn_list_visible_users, which requires the target to hold
+-- an org-scoped role (`user_can_see_user_profile` filters scope_type='org') —
+-- so for that user this function is their only listing. Do not reason about
+-- this projection on the assumption that another surface already returns the
+-- same fields; today every operator also holds an org role, and that is a
+-- property of the current data, not of the model.
+--
+-- The COALESCE fallback is deliberate and must not be dropped: both
+-- user_profiles name columns are nullable, so an invited-but-incomplete user
+-- would otherwise render as a blank entry in a list whose entire purpose is
+-- naming who can configure. Resolving it here rather than in the caller keeps
+-- the fallback from having to be re-implemented by every future consumer.
+--
+-- Return type changed from the four-column shape, so DROP + CREATE: CREATE OR
+-- REPLACE cannot alter a function's return type, and the guarded DROP keeps
+-- this file re-runnable against a database that has the earlier shape.
+DROP FUNCTION IF EXISTS public.fn_list_ems_operators(UUID);
+
 CREATE OR REPLACE FUNCTION public.fn_list_ems_operators(_microgrid_id UUID)
 RETURNS TABLE (
-  user_id    UUID,
-  first_name TEXT,
-  last_name  TEXT,
-  email      TEXT
+  user_id      UUID,
+  display_name TEXT
 )
 LANGUAGE sql
 STABLE
@@ -564,9 +591,10 @@ SET search_path = public, pg_temp
 AS $$
   SELECT
     ur.user_id,
-    up.first_name,
-    up.last_name,
-    au.email::TEXT AS email
+    COALESCE(
+      NULLIF(TRIM(CONCAT_WS(' ', up.first_name, up.last_name)), ''),
+      au.email
+    )::TEXT AS display_name
   FROM user_roles ur
   JOIN auth.users au ON au.id = ur.user_id
   LEFT JOIN user_profiles up ON up.user_id = ur.user_id
@@ -574,7 +602,7 @@ AS $$
     AND ur.role = 'ems_operator'
     AND ur.scope_type = 'microgrid'
     AND ur.scope_id = _microgrid_id
-  ORDER BY up.first_name NULLS LAST, up.last_name NULLS LAST, au.email;
+  ORDER BY 2, au.email;
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.fn_list_ems_operators(UUID) FROM PUBLIC, anon;

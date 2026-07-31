@@ -103,23 +103,24 @@ export default async function OpenemsBackendPage({
   // Attributability line (#316). `fn_list_ems_operators` carries its own
   // access gate and returns zero rows for a microgrid the caller cannot
   // access, so no check is needed here.
+  //
+  // The function resolves the display name itself (name, falling back to email
+  // when a profile is incomplete) and returns only that — so this is a rename,
+  // not a projection. If a future surface needs the parts separately, widen the
+  // function rather than reassembling them here.
   const { data: emsOperatorRows } = await supabase.rpc(
     "fn_list_ems_operators",
     { _microgrid_id: id }
   );
 
-  type EmsOperatorRow = {
-    user_id: string;
-    first_name: string | null;
-    last_name: string | null;
-    email: string;
-  };
+  type EmsOperatorRow = { user_id: string; display_name: string };
 
-  const emsOperators = ((emsOperatorRows ?? []) as EmsOperatorRow[]).map((r) => ({
-    userId: r.user_id,
-    name:
-      [r.first_name, r.last_name].filter(Boolean).join(" ").trim() || r.email,
-  }));
+  const emsOperators = ((emsOperatorRows ?? []) as EmsOperatorRow[]).map(
+    (r) => ({
+      userId: r.user_id,
+      name: r.display_name,
+    })
+  );
 
   const health = deriveOpenemsBackendHealth(mg);
 

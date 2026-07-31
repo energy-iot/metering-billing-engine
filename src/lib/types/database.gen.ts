@@ -1109,9 +1109,7 @@ export type Database = {
       fn_list_ems_operators: {
         Args: { _microgrid_id: string }
         Returns: {
-          email: string
-          first_name: string
-          last_name: string
+          display_name: string
           user_id: string
         }[]
       }

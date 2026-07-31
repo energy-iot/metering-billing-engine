@@ -52,6 +52,7 @@ const emails = [
   "ems-op-plain@test.local",
   "ems-op-outside@test.local",
   "ems-op-creator@test.local",
+  "ems-op-onlygrant@test.local",
 ];
 
 let SA: TestUser, OP: TestUser, PLAIN: TestUser, OUTSIDE: TestUser;
@@ -484,6 +485,85 @@ describe.skipIf(skip)("#316 — fn_list_ems_operators", () => {
     });
     expect(error).toBeNull();
     expect((data as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it("projects exactly user_id + display_name — no unrendered columns", async () => {
+    // The surface renders one string per operator. This function is a
+    // directly-callable PostgREST endpoint, so anything it returns beyond that
+    // is emitted to every authorized caller for no consumer. Asserted on the
+    // key set rather than by inspecting the migration, so widening the
+    // projection later fails here.
+    const { data } = await OP.client.rpc("fn_list_ems_operators", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    const rows = data as Record<string, unknown>[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(["display_name", "user_id"]);
+    }
+  });
+
+  it("display_name falls back to the address when the profile has no name", async () => {
+    // Both user_profiles name columns are nullable — an invited-but-incomplete
+    // user must not render as a blank entry in a list whose whole purpose is
+    // naming who can configure.
+    const svc = await serviceClient();
+    await svc
+      .from("user_profiles")
+      .update({ first_name: null, last_name: null })
+      .eq("user_id", OP.userId);
+
+    const { data } = await OP.client.rpc("fn_list_ems_operators", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    const row = (data as { user_id: string; display_name: string }[]).find(
+      (r) => r.user_id === OP.userId
+    );
+    expect(row?.display_name).toBe(emails[1]);
+
+    // ...and a populated profile wins over the fallback.
+    await svc
+      .from("user_profiles")
+      .update({ first_name: "Grace", last_name: "Hopper" })
+      .eq("user_id", OP.userId);
+
+    const { data: named } = await OP.client.rpc("fn_list_ems_operators", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    const namedRow = (
+      named as { user_id: string; display_name: string }[]
+    ).find((r) => r.user_id === OP.userId);
+    expect(namedRow?.display_name).toBe("Grace Hopper");
+  });
+
+  it("a microgrid-only ems_operator is listed here but NOT by fn_list_visible_users", async () => {
+    // Documents why this function's projection cannot be reasoned about as
+    // "the address is already returned elsewhere". `user_can_see_user_profile`
+    // requires the TARGET to hold an org-scoped role, which a microgrid-only
+    // operator does not — so for that user this is their only listing.
+    const svc = await serviceClient();
+    const onlyOperator = await createTestUser({
+      email: "ems-op-onlygrant@test.local",
+      role: "ems_operator",
+      scopeType: "microgrid",
+      scopeId: FIXTURE.microgridA,
+    });
+
+    const { data: listed } = await SA.client.rpc("fn_list_ems_operators", {
+      _microgrid_id: FIXTURE.microgridA,
+    });
+    expect(
+      (listed as { user_id: string }[]).map((r) => r.user_id)
+    ).toContain(onlyOperator.userId);
+
+    // PLAIN is an org_manager on this org — the population that
+    // fn_list_visible_users serves — and still cannot see this user there.
+    const { data: directory } = await PLAIN.client.rpc("fn_list_visible_users", {
+      _target_user_ids: [onlyOperator.userId],
+    });
+    expect(directory).toEqual([]);
+
+    await svc.auth.admin.deleteUser(onlyOperator.userId);
   });
 });
 
