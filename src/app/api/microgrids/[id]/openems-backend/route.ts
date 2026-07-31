@@ -4,6 +4,7 @@ import { currentUserCanAccessMicrogrid, currentUserIsSuperAdmin } from "@/lib/au
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
 import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
+import { validateBackendUrl } from "@/lib/openems/backend-url";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
 const UUID_RE =
@@ -24,6 +25,9 @@ const UUID_RE =
  *
  *   1. Validate body shape → 400 on malformed.
  *      Accepts known_edge_ids as string[] (non-array → 400).
+ *      backendUrl must additionally pass `validateBackendUrl` (mbe-docs#8):
+ *      absolute https:// URL (http:// for localhost only), no embedded
+ *      credentials, no private/loopback/link-local literal host.
  *   2. Permission check via currentUserCanAccessMicrogrid. 404 if the
  *      microgrid is hidden/missing (don't leak existence with a 403).
  *   3. Secret-preserve gate (cloud_aws): if secretAccessKey blank and an
@@ -92,6 +96,14 @@ export async function PUT(
       { error: "backendUrl is required" },
       { status: 400 }
     );
+  }
+
+  // Scheme / host validation before anything is persisted or contacted
+  // (mbe-docs#8). Runs ahead of the permission and mid-period gates because
+  // it is a pure body-shape check — same tier as the `type` check above.
+  const urlCheck = validateBackendUrl(backendUrl);
+  if (!urlCheck.ok) {
+    return NextResponse.json({ error: urlCheck.error }, { status: 400 });
   }
 
   // Validate known_edge_ids — must be an array of strings.
@@ -358,6 +370,12 @@ export async function PUT(
           reason = "auth_failed";
           errorMsg =
             "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_REDIRECT") {
+          // Reported as 'unreachable' — the discover-status CHECK constraint
+          // (migration 00018) allows only the five existing values, and this
+          // ticket adds no migration. The message carries the detail.
+          reason = "unreachable";
+          errorMsg = err.message;
         } else if (err.code === "OPENEMS_UNREACHABLE") {
           reason = "unreachable";
           errorMsg = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
@@ -516,6 +534,10 @@ export async function PUT(
           discoverStatus = "auth_failed";
           discoverMessage =
             "Authentication failed. Verify your AWS credentials and region (common cause: rotated access key).";
+        } else if (err.code === "OPENEMS_REDIRECT") {
+          // See the note in step 5 — no new status value without a migration.
+          discoverStatus = "unreachable";
+          discoverMessage = err.message;
         } else if (err.code === "OPENEMS_UNREACHABLE") {
           discoverStatus = "unreachable";
           discoverMessage = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;

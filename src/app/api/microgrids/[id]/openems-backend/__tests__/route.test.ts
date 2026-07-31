@@ -183,6 +183,68 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(res.status).toBe(400);
   });
 
+  // ── backendUrl validation (mbe-docs#8) ──────────────────────────────────
+  //
+  // Runs at the body-shape tier, before any DB read or write, so a rejected
+  // URL is never persisted and never contacted. Per-rule coverage of the
+  // validator itself lives in src/lib/openems/__tests__/backend-url.test.ts.
+  describe("backendUrl validation", () => {
+    async function put(backendUrl: string) {
+      const { PUT } = await import("../route");
+      return PUT(
+        makePutRequest({
+          type: "direct_url",
+          backendUrl,
+          known_edge_ids: [],
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+    }
+
+    it.each([
+      ["http (non-localhost)", "http://openems.example.com"],
+      ["loopback literal", "https://127.0.0.1:8443"],
+      ["private 10/8", "https://10.0.0.5"],
+      ["private 172.16/12", "https://172.20.1.1"],
+      ["private 192.168/16", "https://192.168.1.10"],
+      ["link-local 169.254/16", "https://169.254.169.254"],
+      ["IPv6 loopback", "https://[::1]"],
+      ["IPv6 unique-local", "https://[fd00::1]"],
+      ["embedded credentials", "https://user:pass@openems.example.com"],
+      ["non-absolute", "openems.example.com"],
+      ["non-http scheme", "file:///etc/passwd"],
+    ])("rejects %s with 400 and touches no DB call", async (_label, url) => {
+      const res = await put(url);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toContain("backendUrl");
+      expect(mockFrom).not.toHaveBeenCalled();
+    });
+
+    it("accepts an https URL and proceeds past validation", async () => {
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+      registerFrom(billingPeriodsHandler([]));
+      registerFrom(mgUpdateHandler());
+      registerFrom(mgUpdateHandler()); // health fields
+
+      const res = await put("https://openems.example.com/");
+      // known_edge_ids is empty → zero_edges, but the save happened.
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.status).toBe("zero_edges");
+    });
+
+    it("accepts http://localhost (documented development case)", async () => {
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+      registerFrom(billingPeriodsHandler([]));
+      registerFrom(mgUpdateHandler());
+      registerFrom(mgUpdateHandler());
+
+      const res = await put("http://localhost:8075");
+      expect(res.status).toBe(200);
+    });
+  });
+
   it("returns 400 when cloud_aws config is missing secretAccessKey AND no existing ciphertext", async () => {
     // Route now reads the microgrid row first to check for an existing
     // ciphertext (#102 secret-preserve). When none exists, blank secret
