@@ -116,34 +116,15 @@ export async function currentUserCanAccessMicrogrid(
   return currentUserCanAccessCommunity(supabase, mg.community_id);
 }
 
-/**
- * True iff the current user may change the OpenEMS configuration columns on
- * the given microgrid — i.e. holds `ems_operator` scoped to it, or is a
- * super_admin.
+/*
+ * #321 removed `currentUserCanConfigureEms`. Configuring OpenEMS on a
+ * microgrid is now the same permission as reaching the microgrid at all — an
+ * org manager configures any microgrid in their own org and nothing else — so
+ * `currentUserCanAccessMicrogrid` above is the check, and the BEFORE UPDATE
+ * trigger on `microgrids.ems_*` (migration 00053) chains through the matching
+ * database helper `user_can_access_microgrid`.
  *
- * Unlike the other helpers in this file, this one delegates to the database
- * function `user_can_configure_ems` rather than re-deriving the rule in
- * TypeScript. The same function is what the BEFORE UPDATE trigger on
- * `microgrids` consults, so there is exactly one definition of "may configure"
- * and the route cannot drift away from what the database will actually permit
- * — if that trigger is ever changed to use a different predicate, this call
- * stops being an accurate preview and should be revisited.
- *
- * Note the asymmetry this participates in: writes to the ems_* config columns
- * are enforced at the database by that trigger; reads are enforced here, in
- * the route. There is no read-side trigger.
- *
- * Safe to call on the caller's own RLS-evaluated client: `user_roles` SELECT
- * is self-only for non-super_admins, and a caller checking their own grant is
- * reading their own rows.
+ * Do not reintroduce a separate configuration predicate here without changing
+ * that trigger in the same wave: a second definition of "may configure" is the
+ * drift the two were merged to remove.
  */
-export async function currentUserCanConfigureEms(
-  supabase: SupabaseClient,
-  microgridId: string
-): Promise<boolean> {
-  const { data, error } = await supabase.rpc("user_can_configure_ems", {
-    _microgrid_id: microgridId,
-  });
-  if (error) return false;
-  return data === true;
-}

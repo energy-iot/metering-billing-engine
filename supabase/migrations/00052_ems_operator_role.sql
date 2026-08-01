@@ -1,6 +1,23 @@
 -- 00052_ems_operator_role.sql
 -- #316 part 2 of 2: microgrid-scoped OpenEMS configuration role.
 --
+-- ┌───────────────────────────────────────────────────────────────────────┐
+-- │ SUPERSEDED IN PART BY 00053 (#321). Read that file before this one.   │
+-- │                                                                       │
+-- │ The permission model below — a per-microgrid `ems_operator` grant,     │
+-- │ deliberately not chained through `user_can_access_microgrid` — is no   │
+-- │ longer what the database does. 00053 repoints the guard trigger at     │
+-- │ `user_can_access_microgrid`: an org manager can configure OpenEMS on   │
+-- │ any microgrid in their own org, and on nothing else.                   │
+-- │                                                                       │
+-- │ This file is kept verbatim as applied history and MUST NOT be edited   │
+-- │ except to mark what 00053 replaced — the markers below do that at      │
+-- │ each point where the reasoning no longer describes the live schema.    │
+-- │ What survives unchanged: the FK restructure and role-aware CHECK (§1), │
+-- │ `created_by` (§2), the trigger's guarded-column design (§4), and       │
+-- │ `fn_change_user_role`'s multi-row safety (§5).                         │
+-- └───────────────────────────────────────────────────────────────────────┘
+--
 -- Goal: an operator can configure OpenEMS on the microgrids they hold a grant
 -- on, and only those. Today the only options are a super_admin app-layer gate
 -- (nobody self-serves) or org-wide access (every org_manager can rewrite every
@@ -15,6 +32,13 @@
 -- So write enforcement is a BEFORE UPDATE trigger.
 --
 -- ── Why a new role value and not org_manager-at-microgrid-scope ──────────
+--
+-- SUPERSEDED BY 00053 (#321). The argument below is sound about the helpers —
+-- they do carry most of the policies, and changing what they *mean* would
+-- widen access silently. What it got wrong is that no widening was needed:
+-- the rule being implemented ("an org manager configures the microgrids in
+-- their own org") was already exactly `user_can_access_microgrid`, so 00053
+-- calls that helper without altering it. Retained for the record:
 --
 -- `user_can_access_org` / `user_can_access_microgrid` carry 23 of the 30
 -- policies in this schema, all FOR ALL, so read and write move together on
@@ -185,6 +209,13 @@ CREATE TRIGGER trg_microgrids_grant_creator_ems_operator
 --
 -- Shape mirrors is_super_admin() / user_can_access_org() in 00002_rls.sql:
 -- SECURITY DEFINER, STABLE, pinned search_path.
+--
+-- SUPERSEDED BY 00053 (#321): THIS FUNCTION NO LONGER HAS THE BODY BELOW.
+-- 00053 replaces it with a thin alias for `user_can_access_microgrid` — org
+-- access IS configuration access — and keeps the alias only so code deployed
+-- before #321 keeps working; a follow-up migration drops it. The guard trigger
+-- in § 4 calls `user_can_access_microgrid` directly. What follows is the
+-- original reasoning, retained because the file is applied history:
 --
 -- Deliberately NOT chained through user_can_access_microgrid: org access is
 -- not configuration access, and conflating them is the widening this ticket
@@ -598,6 +629,12 @@ AS $$
   FROM user_roles ur
   JOIN auth.users au ON au.id = ur.user_id
   LEFT JOIN user_profiles up ON up.user_id = ur.user_id
+  -- SUPERSEDED BY 00053 (#321): this function's body is replaced there — it
+  -- now lists the org managers of the microgrid's parent org, since that is
+  -- who can configure it. The access gate below is unchanged. The distinction
+  -- drawn in the rest of this comment no longer exists: both questions are
+  -- org-level now.
+  --
   -- Gates on user_can_access_microgrid, NOT user_can_configure_ems: this
   -- answers "who do I ask", which is an org-level question — unlike
   -- configuration, which is not. Section 3 of this file argues the opposite

@@ -1,9 +1,6 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import {
-  currentUserCanAccessMicrogrid,
-  currentUserCanConfigureEms,
-} from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
@@ -17,8 +14,11 @@ import { OpenemsBackendShell } from "./openems-backend-shell";
 //   2. Draft billing-period count (mid-period guard)
 //   3. Closed billing-period count (for the type-to-confirm bypass PM copy)
 //   4. Decrypted AWS secret last-4 (configurers only; everyone else "—")
-//   5. Permission flags: canConfigure, canAccessMicrogrid
-//   6. The microgrid's ems_operator list (attributability line, #316)
+//   5. Permission flag: canAccessMicrogrid, which since #321 is also
+//      "may configure" — the page 404s without it, so canConfigure is true
+//      for everyone who can see this page.
+//   6. The list of people who can configure this microgrid (attributability
+//      line) — the org's managers, from fn_list_ems_operators.
 //
 // The server component passes everything as props to a single client shell
 // that owns mode state (empty / configured / editing), form state, Save
@@ -35,9 +35,12 @@ export default async function OpenemsBackendPage({
   const canAccess = await currentUserCanAccessMicrogrid(supabase, id);
   if (!canAccess) notFound();
 
-  // #316: configuration is microgrid-scoped (ems_operator on this microgrid,
-  // or super_admin) — not org access, and no longer super_admin-only.
-  const canConfigure = await currentUserCanConfigureEms(supabase, id);
+  // #321: configuration access IS org access to the microgrid. The gate above
+  // has already established it, so this is a rename rather than a second
+  // check. Kept as a named flag because the shell takes it as a prop and the
+  // two would separate again if a narrower configuration predicate ever
+  // returns — see migration 00053.
+  const canConfigure = canAccess;
 
   const { data: mg, error: mgErr } = await supabase
     .from("microgrids")
@@ -81,7 +84,7 @@ export default async function OpenemsBackendPage({
 
   // Last-4 mask of the decrypted AWS secret. Configurers only.
   //
-  // `canConfigure` is checked BEFORE the call, so a viewer without the grant
+  // `canConfigure` is checked BEFORE the call, so a viewer without access
   // never reaches the decrypt — the ordering is the gate, not the null result.
   // `getEmsSecretForMicrogrid` additionally re-reads the microgrid row on this
   // same RLS-evaluated client and returns null before decrypting if the row is
@@ -100,9 +103,12 @@ export default async function OpenemsBackendPage({
     }
   }
 
-  // Attributability line (#316). `fn_list_ems_operators` carries its own
-  // access gate and returns zero rows for a microgrid the caller cannot
-  // access, so no check is needed here.
+  // Attributability line. `fn_list_ems_operators` carries its own access gate
+  // and returns zero rows for a microgrid the caller cannot access, so no
+  // check is needed here. Since #321 it returns the org's managers — the
+  // people who can configure this microgrid — rather than holders of a
+  // per-microgrid grant; if that function is repointed again, the copy in the
+  // shell that refers to "the people listed below" needs rereading.
   //
   // The function resolves the display name itself (name, falling back to email
   // when a profile is incomplete) and returns only that — so this is a rename,
