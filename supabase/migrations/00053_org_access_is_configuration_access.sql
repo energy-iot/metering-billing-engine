@@ -172,7 +172,19 @@ CREATE TRIGGER trg_microgrids_guard_ems_config
 -- Revoking from PUBLIC also removes `authenticated`'s inherited access, which
 -- is correct and safe: trigger functions are resolved and executed by the
 -- trigger machinery, and EXECUTE is checked at CREATE TRIGGER time rather than
--- at fire time. Same pattern and same reasoning as 00047 § 2d.
+-- at fire time.
+--
+-- Same pattern as 00047 § 2d. The half that transfers is "regardless of EXECUTE
+-- grants" — true of any trigger function. § 2d's other half, "fires with the
+-- function-owner's privileges", is a SECURITY DEFINER property; this function is
+-- SECURITY INVOKER and fires as the caller.
+--
+-- Statement order in this section — function, then trigger, then revoke — is
+-- safe to change only while migrations apply as the function's owner: REVOKE …
+-- FROM PUBLIC leaves owner rights intact, and CREATE TRIGGER requires EXECUTE on
+-- the function. An applier that is not the owner and revokes first fails at
+-- CREATE TRIGGER. If this repo ever applies migrations as a non-owner role,
+-- revisit the order here.
 REVOKE EXECUTE ON FUNCTION public.fn_microgrids_guard_ems_config() FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.fn_microgrids_guard_ems_config() TO service_role;
 
