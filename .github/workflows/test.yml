@@ -5,10 +5,17 @@ name: Test
 # job's name below MUST stay as "Test" so the required-check context
 # resolves; do NOT add a matrix-suffix or rename.
 #
-# Skip flags (SKIP_RLS_TESTS, SKIP_DEK_BOOTSTRAP_TEST) bypass the
-# Supabase-dependent suites — running them here would require
-# `supabase start` (Docker) + seed + JWT secret. Tracked as a follow-up
-# to issue #236.
+# The database-backed suites (vitest project "rls") now run here — see
+# #241. A local Supabase is started on the runner; the suites are
+# self-fixturing and need neither the generated seed nor a repository
+# secret. Measured cold on ubuntu-latest: `supabase start` ~81-85s, the
+# 13-file rls project ~14-16s.
+#
+# SKIP_DEK_BOOTSTRAP_TEST stays set, and NOT for cost. dek-bootstrap.test.ts
+# does `ALTER DATABASE postgres SET app.allow_dev_dek`, which fails with
+# `permission denied to set parameter` because the `postgres` role is not a
+# superuser on Supabase (local or CI). It cannot pass here at any time
+# budget; that is a defect in the test, tracked separately, not a deferral.
 
 on:
   pull_request:
@@ -28,7 +35,8 @@ jobs:
   Test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10: the Supabase start adds ~85s to the job.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +52,21 @@ jobs:
 
       - run: npm run lint
 
-      - run: npm test
+      # Started after tsc + lint on purpose: a type or lint failure should
+      # fail in seconds rather than after paying for a database.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - run: supabase start
+
+      - name: npm test
+        run: |
+          eval "$(supabase status -o env | grep -E '^(ANON_KEY|JWT_SECRET|SERVICE_ROLE_KEY)=')"
+          export SUPABASE_JWT_SECRET="$JWT_SECRET"
+          export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export NEXT_PUBLIC_SUPABASE_URL="http://localhost:54321"
+          npm test
         env:
-          SKIP_RLS_TESTS: '1'
           SKIP_DEK_BOOTSTRAP_TEST: '1'
