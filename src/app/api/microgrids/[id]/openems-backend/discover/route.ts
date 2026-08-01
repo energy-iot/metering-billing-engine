@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { currentUserCanConfigureEms } from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 
@@ -11,8 +11,8 @@ const UUID_RE =
  * POST /api/microgrids/[id]/openems-backend/discover — Run Discover now.
  *
  * Used by the Add Edge dialog's "Discovering…" state. Authorization is the
- * `currentUserCanConfigureEms` gate below, plus RLS (getMicrogridEmsConfig can
- * only read visible rows).
+ * `currentUserCanAccessMicrogrid` gate below, plus RLS (getMicrogridEmsConfig
+ * can only read visible rows).
  *
  * Do not read `fn_get_ems_secret` as a second layer here: since #311 the
  * decrypt runs on the service-role client, and that function's own gate is
@@ -45,14 +45,17 @@ export async function POST(
   // is a READ gate on the stored credential and it has to run before that call
   // — the check is what makes the decrypt unreachable, not merely errored.
   //
-  // Microgrid-scoped since #316: org access to the microgrid is not enough.
+  // Org-scoped since #321: access to the microgrid IS configuration access,
+  // so this is the same predicate the BEFORE UPDATE trigger on the ems_*
+  // config columns uses (migration 00053).
+  //
   // Note this gate is app-layer by necessity. The BEFORE UPDATE trigger on
   // `microgrids` covers the ems_* config columns, but Discover's own writes
   // are to the ems_last_discover_* health columns, which are deliberately
   // outside the trigger's guarded set — so nothing at the database layer
   // would stop this path. If a read-side database gate is ever added,
   // revisit whether this check is still the only one.
-  if (!(await currentUserCanConfigureEms(supabase, microgridId))) {
+  if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
     return NextResponse.json(
       {
         error:

@@ -176,22 +176,24 @@ export interface TestUser {
  */
 export async function createTestUser(opts: {
   email: string;
-  role: "super_admin" | "org_manager" | "ems_operator" | null;
+  role: "super_admin" | "org_manager" | null;
   scopeId?: string | null;
   /**
-   * Defaults to 'org'. Pass 'microgrid' for `ems_operator` grants — the
-   * role-aware CHECK on user_roles (migration 00052) rejects the mismatched
-   * pairing, so this is not merely cosmetic.
+   * Defaults to 'org', which is the only scope type in use. `microgrid` is
+   * inert enum residue from #316, removed from the permission model by #321 —
+   * the role-aware CHECK on user_roles (migration 00052) pairs it only with
+   * `ems_operator`, which nothing grants any more. Do not seed either.
    */
-  scopeType?: "org" | "microgrid";
+  scopeType?: "org";
   /**
    * Additional role rows to seed for the same user. The one-row-per-user
-   * invariant went away with #316; a user can hold an org role and any number
-   * of microgrid-scoped grants at once.
+   * invariant went away with #316 and has not come back: `user_roles` is
+   * UNIQUE (user_id, role, scope_type, scope_id), and every RLS helper reads
+   * through EXISTS(...), which is multi-row-safe.
    */
   extraRoles?: {
-    role: "super_admin" | "org_manager" | "ems_operator";
-    scopeType: "org" | "microgrid";
+    role: "super_admin" | "org_manager";
+    scopeType: "org";
     scopeId: string | null;
   }[];
 }): Promise<TestUser> {

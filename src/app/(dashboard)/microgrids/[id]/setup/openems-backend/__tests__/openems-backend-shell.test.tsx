@@ -329,7 +329,7 @@ describe("OpenemsBackendShell — configured state", () => {
       />
     );
     expect(screen.getByTestId("ems-operator-line").textContent).toMatch(
-      /no one is set up to configure this connection yet/i
+      /this organisation has no managers yet/i
     );
   });
 });

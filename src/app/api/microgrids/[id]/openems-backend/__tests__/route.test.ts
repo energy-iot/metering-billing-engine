@@ -45,7 +45,6 @@ const MG_NAME = "Kisakye";
 let mgRow: { id: string; name: string } | null = { id: MG_ID, name: MG_NAME };
 let periods: { id: string; status: "draft" | "closed" }[] = [];
 let canAccessMicrogridReturn = true;
-let canConfigureEmsReturn = true;
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
@@ -70,7 +69,6 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/lib/auth/access", () => ({
   currentUserCanAccessMicrogrid: async () => canAccessMicrogridReturn,
-  currentUserCanConfigureEms: async () => canConfigureEmsReturn,
 }));
 
 // The EMS secret decrypt runs on the service-role client (migration 00049).
@@ -155,7 +153,6 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     fromCallIndex = 0;
     fromHandlers.length = 0;
     canAccessMicrogridReturn = true;
-    canConfigureEmsReturn = true;
     mgRow = { id: MG_ID, name: MG_NAME };
     periods = [];
 
@@ -312,28 +309,13 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
   });
 
   it("returns 403 when currentUserCanAccessMicrogrid is false", async () => {
+    // Since #321 this is the configuration gate as well: access to the
+    // microgrid IS configuration access, so there is one check here rather
+    // than two. The BEFORE UPDATE trigger on the ems_* columns is the
+    // enforcement (migration 00053); this asserts the route refuses before
+    // running the outbound connection test.
     registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
     canAccessMicrogridReturn = false;
-
-    const { PUT } = await import("../route");
-    const res = await PUT(
-      makePutRequest({
-        type: "direct_url",
-        backendUrl: "http://localhost:8075",
-        known_edge_ids: [],
-      }),
-      { params: Promise.resolve({ id: MG_ID }) }
-    );
-    expect(res.status).toBe(403);
-  });
-
-  it("returns 403 when the caller can access the microgrid but cannot configure it (#316)", async () => {
-    registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
-    // The sharp case: org access is TRUE, configuration access is FALSE.
-    // The database trigger is the enforcement; this asserts the route does not
-    // proceed to the outbound connection test before finding that out.
-    canAccessMicrogridReturn = true;
-    canConfigureEmsReturn = false;
 
     const { PUT } = await import("../route");
     const res = await PUT(

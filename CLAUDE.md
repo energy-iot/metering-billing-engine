@@ -114,7 +114,7 @@ src/
 - **RLS everywhere** — new tables need Row Level Security policies
 - **Adapter pattern** — MBE doesn't import OpenEMS-specific types in billing logic. `DeviceDataAdapter` interface in `src/lib/adapters/types.ts` (renamed from `MeterDataAdapter` in C #51)
 - **Codegen types** — import entity types from `@/lib/types/domain`, never from `database.gen.ts` directly. Run `npm run db:types` after schema changes.
-- **Role constants** — import `SUPER_ADMIN`, `ORG_MANAGER`, `EMS_OPERATOR`, `SCOPE_ORG`, `SCOPE_MICROGRID` from `@/lib/roles` instead of spelling out string literals. Three roles ship: `super_admin` and `org_manager` (both `scope_type='org'`), and `ems_operator` (`scope_type='microgrid'`, #316). A user may hold several role rows at once — `user_roles` is `UNIQUE (user_id, role, scope_type, scope_id)`, not one row per user. Code that assumes one row per user is a bug (see `fn_list_visible_users`).
+- **Role constants** — import `SUPER_ADMIN`, `ORG_MANAGER`, `SCOPE_ORG` from `@/lib/roles` instead of spelling out string literals. Two roles ship: `super_admin` and `org_manager`, both `scope_type='org'`. The `ems_operator` role value and the `microgrid` scope type still exist in the enums and always will — `ALTER TYPE … ADD VALUE` cannot be undone — but **no role ships on them and nothing reads them** (#321 deleted the rows and repointed the predicate). The enums are deliberately wider than the constants; do not add constants back for enum values that carry no model. A user may still hold several role rows at once — `user_roles` is `UNIQUE (user_id, role, scope_type, scope_id)`, not one row per user. **Code that assumes one row per user is a bug** (see `fn_list_visible_users`); that constraint outlived the role that motivated it, and `fn_change_user_role` deleting rows it was not asked about is the data-loss path it exists to prevent.
 - **Microgrid SELECT lists** — avoid `.select('*')` on `microgrids`; enumerate columns via `MICROGRID_PUBLIC_COLUMNS` (`src/lib/types/microgrid-columns.ts`) so new sensitive additions don't silently leak. Enforced by `src/lib/__tests__/no-microgrid-star-select.test.ts`.
 - **DCO sign-off** on docker-openems commits (`git commit -s`)
 
@@ -129,18 +129,20 @@ The schema follows Org → Community → Microgrid → Edge → Device plus a pa
 
 ### RLS helper functions (migration 00002_rls.sql)
 
-Three `SECURITY DEFINER STABLE` helpers, pinned to `search_path = public, pg_temp`, owned by `postgres`. All policies chain through these — do not inline JOIN chains in `USING` clauses.
+**Three** `SECURITY DEFINER STABLE` helpers, pinned to `search_path = public, pg_temp`, owned by `postgres`. All policies chain through these — do not inline JOIN chains in `USING` clauses. The table below lists **four**: the fourth is a deprecated alias that no policy chains through and that a follow-up migration deletes.
 
 | Helper | Contract |
 |---|---|
 | `is_super_admin() -> BOOLEAN` | True iff `auth.uid()` has any `user_roles` row with `role='super_admin'`. |
 | `user_can_access_org(_org_id UUID) -> BOOLEAN` | True iff `is_super_admin()` OR exists a `user_roles` row with `role='org_manager' AND scope_type='org' AND scope_id=_org_id`. |
 | `user_can_access_microgrid(_microgrid_id UUID) -> BOOLEAN` | True iff `user_can_access_org(<microgrid's org_id>)` — resolves via `microgrids → communities → org_id`. |
-| `user_can_configure_ems(_microgrid_id UUID) -> BOOLEAN` (00052) | True iff `is_super_admin()` OR a `user_roles` row with `role='ems_operator' AND scope_type='microgrid' AND scope_id=_microgrid_id`. **Deliberately NOT chained through `user_can_access_microgrid`** — org access is not configuration access. |
+| `user_can_configure_ems(_microgrid_id UUID) -> BOOLEAN` (00053) | **Thin alias for `user_can_access_microgrid`** — org access *is* configuration access (#321). Kept only so code deployed before #321 keeps working; a follow-up migration drops it once nothing calls it. **Do not add call sites.** |
 
 RLS policies are written with `FOR ALL` (not split per-verb) to match the existing pattern.
 
-**Do not extend `user_can_access_org` / `user_can_access_microgrid` to grant a new capability.** 23 of the 30 `CREATE POLICY` statements chain through them (13 and 10 respectively), all `FOR ALL`, so read and write move together on every one — an error there is a *silent widening*, not a visible failure. Add a role value with its own helper instead, which touches zero existing policies (that is what #316 did for `ems_operator`).
+**Do not change what `user_can_access_org` / `user_can_access_microgrid` mean.** 23 of the 30 `CREATE POLICY` statements chain through them (13 and 10 respectively), all `FOR ALL`, so read and write move together on every one — an error there is a *silent widening*, not a visible failure. If a capability genuinely differs from org access, add a role value with its own helper, which touches zero existing policies.
+
+**But first ask whether it differs at all.** #316 added `ems_operator` on that reasoning and #321 removed it **the same day** — filed 18:53, merged 22:19, reverted by a ticket opened at 23:16. OpenEMS configuration turned out to *be* org access, and the tell was that the first thing anyone did with the scoped role was grant it org-wide by hand. **Note what #321 did and did not do** — it repointed a *caller* (`fn_microgrids_guard_ems_config`) at `user_can_access_microgrid` and left the helper itself untouched, so no policy moved. Pointing new callers at these helpers is routine; **editing the helpers' bodies is what this rule forbids.**
 
 **Column-level write restrictions are triggers, not policies.** RLS is row-level and column privileges are granted per-role rather than per-user, so neither can express "may update this row, but not these columns". `microgrids.ems_*` is the worked example (`fn_microgrids_guard_ems_config`, 00052). Two rules for that shape:
 

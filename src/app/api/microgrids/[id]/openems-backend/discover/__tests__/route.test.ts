@@ -31,10 +31,10 @@ vi.mock("@/lib/openems/config", () => ({
   getMicrogridEmsConfig: getMicrogridEmsConfigMock,
 }));
 
-let canConfigureEmsReturn = true;
+let canAccessMicrogridReturn = true;
 
 vi.mock("@/lib/auth/access", () => ({
-  currentUserCanConfigureEms: async () => canConfigureEmsReturn,
+  currentUserCanAccessMicrogrid: async () => canAccessMicrogridReturn,
 }));
 
 const mockFrom = vi.fn();
@@ -67,7 +67,7 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     vi.clearAllMocks();
     handlers = [];
     index = 0;
-    canConfigureEmsReturn = true;
+    canAccessMicrogridReturn = true;
     mockFrom.mockImplementation((table: string) => {
       const h = handlers[index++];
       if (!h) throw new Error(`unexpected from(${table}) #${index}`);
@@ -83,8 +83,8 @@ describe("POST /api/microgrids/[id]/openems-backend/discover", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 403 — and never reaches the decrypt — when the caller cannot configure (#316)", async () => {
-    canConfigureEmsReturn = false;
+  it("returns 403 — and never reaches the decrypt — when the caller cannot access the microgrid (#321)", async () => {
+    canAccessMicrogridReturn = false;
     getMicrogridEmsConfigMock.mockClear();
 
     const { POST } = await import("../route");

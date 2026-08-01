@@ -53,16 +53,22 @@ export type OpenemsBackendShellProps = {
   secretLast4: string | null;
   /**
    * True iff the viewer may change this microgrid's OpenEMS configuration —
-   * `ems_operator` scoped to it, or super_admin. Resolved server-side via
-   * `currentUserCanConfigureEms`, and enforced independently by a BEFORE
-   * UPDATE trigger on `microgrids`, so this only controls what is offered.
+   * since #321, org access to the microgrid, or super_admin. Resolved
+   * server-side via `currentUserCanAccessMicrogrid`, and enforced
+   * independently by a BEFORE UPDATE trigger on `microgrids` (migration
+   * 00053), so this only controls what is offered.
+   *
+   * The page that renders this shell 404s without that same access, so it
+   * passes `true` today. The prop stays because the read-only branches below
+   * are the shell's contract, not the page's, and they are what a narrower
+   * configuration rule would switch back on.
    */
   canConfigure: boolean;
   /**
-   * The people holding `ems_operator` on this microgrid, from
-   * `fn_list_ems_operators`. The read-only banner copy below refers to this
-   * list ("the people listed below") — if this stops rendering, that copy is
-   * wrong and needs rewriting.
+   * The people who can configure this microgrid, from `fn_list_ems_operators`
+   * — since #321 the org's managers. The read-only banner copy below refers to
+   * this list ("the people listed below") — if this stops rendering, that copy
+   * is wrong and needs rewriting.
    */
   emsOperators: { userId: string; name: string }[];
 };
@@ -914,15 +920,16 @@ function OutcomeBanner({ outcome }: { outcome: SaveOutcome }) {
  * Attributability line: who can configure this connection.
  *
  * This is the surface the read-only banner points at ("the people listed
- * below"), and the only place a headless rollout grant becomes visible to a
- * human — so it renders in both the read-only and the configurable state
+ * below"), and the only place the answer to "who do I ask" becomes visible to
+ * a human — so it renders in both the read-only and the configurable state
  * rather than only for viewers who cannot edit.
  *
- * Data comes from `fn_list_ems_operators`, which applies its own access gate
- * and returns zero rows for a microgrid the caller cannot access. An empty
- * list therefore means "nobody holds a grant" for anyone who can see this
- * page at all — if that function's gate is ever loosened, this copy needs
- * revisiting.
+ * Data comes from `fn_list_ems_operators`, which since #321 returns the org
+ * managers of the microgrid's parent org and applies its own access gate,
+ * returning zero rows for a microgrid the caller cannot access. An empty list
+ * therefore means "this org has no managers" for anyone who can see this page
+ * at all — if that function's gate or its population is changed again, this
+ * copy needs revisiting.
  */
 function EmsOperatorLine({
   operators,
@@ -936,8 +943,8 @@ function EmsOperatorLine({
     >
       {operators.length === 0 ? (
         <>
-          No one is set up to configure this connection yet. A super admin can
-          grant access.
+          This organisation has no managers yet, so only super admins can
+          configure this connection.
         </>
       ) : (
         <>

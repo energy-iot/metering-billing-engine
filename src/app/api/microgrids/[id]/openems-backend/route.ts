@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import {
-  currentUserCanAccessMicrogrid,
-  currentUserCanConfigureEms,
-} from "@/lib/auth/access";
+import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
 import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
@@ -212,19 +209,16 @@ export async function PUT(
       { status: 400 }
     );
   }
+  // Configuration gate. Since #321 this is the same permission as reaching
+  // the microgrid at all: an org manager configures any microgrid in their own
+  // org and nothing else. It is a preview of what the BEFORE UPDATE trigger on
+  // `microgrids` will decide at step 6 (migration 00053, which chains through
+  // `user_can_access_microgrid`) — it exists to produce an actionable 403 here
+  // rather than a bare Postgres 42501 after the outbound connection test has
+  // already run. The trigger is the enforcement; if this check were removed the
+  // write would still be rejected. If that trigger is ever repointed at a
+  // narrower predicate, this stops being an accurate preview.
   if (!(await currentUserCanAccessMicrogrid(supabase, microgridId))) {
-    return NextResponse.json(
-      { error: "You do not have permission to configure this microgrid." },
-      { status: 403 }
-    );
-  }
-  // Configuration gate (#316). Microgrid-scoped: holding org access to this
-  // microgrid is not sufficient. This is a preview of what the BEFORE UPDATE
-  // trigger on `microgrids` will decide at step 6 — it exists to produce an
-  // actionable 403 here rather than a bare Postgres 42501 after the outbound
-  // connection test has already run. The trigger is the enforcement; if this
-  // check were removed the write would still be rejected.
-  if (!(await currentUserCanConfigureEms(supabase, microgridId))) {
     return NextResponse.json(
       { error: "You do not have permission to configure this microgrid." },
       { status: 403 }
