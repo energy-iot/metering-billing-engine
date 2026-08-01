@@ -62,11 +62,15 @@ jobs:
 
       - name: npm test
         run: |
-          eval "$(supabase status -o env | grep -E '^(ANON_KEY|JWT_SECRET|SERVICE_ROLE_KEY)=')"
+          # These two are the only variables the suites read
+          # (rls.helpers.ts assertEnvironmentReady). The Supabase URL is NOT
+          # among them — rls.helpers hard-codes LOCAL_SUPABASE_URL, so setting
+          # NEXT_PUBLIC_SUPABASE_URL here would steer nothing while looking
+          # like it does. Service-role access is a JWT derived from the secret
+          # at runtime, not a key.
+          eval "$(supabase status -o env | grep -E '^(ANON_KEY|JWT_SECRET)=')"
           export SUPABASE_JWT_SECRET="$JWT_SECRET"
           export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
-          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-          export NEXT_PUBLIC_SUPABASE_URL="http://localhost:54321"
           npm test
         env:
           SKIP_DEK_BOOTSTRAP_TEST: '1'
