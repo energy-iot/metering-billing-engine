@@ -139,6 +139,16 @@ $$;
 -- `UPDATE OF` keys off the columns NAMED in the statement, not the values, so
 -- it must list every guarded column or a write naming only the new ones never
 -- fires the trigger at all. DROP … IF EXISTS keeps the file re-runnable.
+--
+-- APPLY THIS FILE IN A SINGLE TRANSACTION. Between the DROP and the CREATE
+-- below the ems_* columns are unguarded on a live table. Postgres DDL is
+-- transactional, so BEGIN … COMMIT (or psql --single-transaction) closes the
+-- gap completely; applied statement-by-statement over an interactive session
+-- it is real, and its length is however long the two statements are apart.
+-- Low consequence for THIS migration — the new columns are unwritten and the
+-- microgrids RLS policy still refuses cross-org writers throughout — but the
+-- property belongs to the DROP/CREATE pair, not to this migration's contents,
+-- so it holds for every future reissue of this trigger.
 
 DROP TRIGGER IF EXISTS trg_microgrids_guard_ems_config ON public.microgrids;
 CREATE TRIGGER trg_microgrids_guard_ems_config
