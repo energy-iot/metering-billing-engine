@@ -38,6 +38,14 @@ type MicrogridProps = {
   ems_backend_url: string | null;
   ems_aws_region: string | null;
   ems_aws_access_key_id: string | null;
+  ems_basic_auth_username: string | null;
+  /**
+   * Whether a Basic password is on record. Deliberately a boolean and not the
+   * ciphertext: this prop crosses to the client, and #106's rule is that no
+   * encrypted column reaches client-bound JSON or SSR HTML. The form only ever
+   * needs to know whether "leave blank to keep" is a meaningful offer.
+   */
+  ems_has_basic_auth_password: boolean;
   ems_known_edge_ids: string[];
   ems_last_discover_at: string | null;
   ems_last_discover_status: string | null;
@@ -130,6 +138,11 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     microgrid.ems_aws_access_key_id ?? ""
   );
   const [secretAccessKey, setSecretAccessKey] = React.useState<string>("");
+  const [basicAuthUsername, setBasicAuthUsername] = React.useState<string>(
+    microgrid.ems_basic_auth_username ?? ""
+  );
+  const [basicAuthPassword, setBasicAuthPassword] = React.useState<string>("");
+  const hasStoredBasicAuthPassword = microgrid.ems_has_basic_auth_password;
 
   // Known edge IDs input state.
   // Prefill logic (3 cases, pinned in #112):
@@ -178,6 +191,8 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     setRegion(microgrid.ems_aws_region ?? "us-east-1");
     setAccessKeyId(microgrid.ems_aws_access_key_id ?? "");
     setSecretAccessKey("");
+    setBasicAuthUsername(microgrid.ems_basic_auth_username ?? "");
+    setBasicAuthPassword("");
     // Prefill known edge IDs from the saved list (case 2 + 3 above).
     setKnownEdgeIds(microgrid.ems_known_edge_ids.join(", "));
     setIsEditing(true);
@@ -208,7 +223,18 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
     }
 
     if (formType === "direct_url") {
-      return { type: "direct_url", backendUrl, known_edge_ids: parsedEdgeIds };
+      const base: Record<string, unknown> = {
+        type: "direct_url",
+        backendUrl,
+        known_edge_ids: parsedEdgeIds,
+        basicAuthUsername,
+      };
+      // Same rule as the AWS secret: send the password only when typed, so a
+      // blank field means "keep the stored one" rather than "clear it".
+      if (basicAuthPassword && basicAuthPassword.length > 0) {
+        base.basicAuthPassword = basicAuthPassword;
+      }
+      return base;
     }
     const base: Record<string, unknown> = {
       type: "cloud_aws",
@@ -734,20 +760,81 @@ export function OpenemsBackendShell(props: OpenemsBackendShellProps) {
           </fieldset>
         </>
       ) : (
-        <div>
-          <label htmlFor="backend-url" className="mb-1 block text-xs font-medium text-foreground">
-            Backend URL
-          </label>
-          <Input
-            id="backend-url"
-            type="url"
-            value={backendUrl}
-            onChange={(e) => setBackendUrl(e.target.value)}
-            placeholder="http://localhost:8082"
-            required
-            className="font-mono text-xs"
-          />
-        </div>
+        <>
+          <div>
+            <label htmlFor="backend-url" className="mb-1 block text-xs font-medium text-foreground">
+              Backend URL
+            </label>
+            <Input
+              id="backend-url"
+              type="url"
+              value={backendUrl}
+              onChange={(e) => setBackendUrl(e.target.value)}
+              placeholder="http://localhost:8082"
+              required
+              className="font-mono text-xs"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              The address of the OpenEMS Backend REST/JSON-RPC API — not the
+              OpenEMS UI. `/jsonrpc` is appended automatically, so enter the
+              base path without it.
+            </p>
+          </div>
+
+          {/* HTTP Basic credentials (#327). Optional: leave both blank for an
+              unauthenticated backend. Required together — the route rejects a
+              half-filled pair, because a username with no password sends a
+              well-formed header carrying an empty password and the backend
+              reports bad credentials rather than missing ones. */}
+          <fieldset className="space-y-3 rounded-md border border-border p-3">
+            <legend className="px-1 text-xs font-medium text-muted-foreground">
+              Authentication (optional)
+            </legend>
+            <p className="text-[11px] text-muted-foreground">
+              Leave blank if your backend accepts unauthenticated requests. If
+              the REST API is enabled with credentials, enter them here and
+              they are stored encrypted.
+            </p>
+            <div>
+              <label htmlFor="basic-auth-username" className="mb-1 block text-xs font-medium text-foreground">
+                Username
+              </label>
+              <Input
+                id="basic-auth-username"
+                type="text"
+                value={basicAuthUsername}
+                onChange={(e) => setBasicAuthUsername(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono text-xs"
+              />
+            </div>
+            <div>
+              <label htmlFor="basic-auth-password" className="mb-1 block text-xs font-medium text-foreground">
+                Password
+              </label>
+              <Input
+                id="basic-auth-password"
+                type="password"
+                value={basicAuthPassword}
+                onChange={(e) => setBasicAuthPassword(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={
+                  hasStoredBasicAuthPassword
+                    ? "Leave blank to keep the current password"
+                    : ""
+                }
+                className="font-mono text-xs"
+              />
+              {hasStoredBasicAuthPassword && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Leave blank to keep the current password.
+                </p>
+              )}
+            </div>
+          </fieldset>
+        </>
       )}
 
       {/* Known edge IDs — shown for both connection types, below credentials (#112) */}

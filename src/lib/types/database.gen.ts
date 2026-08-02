@@ -617,6 +617,8 @@ export type Database = {
           ems_aws_region: string | null
           ems_aws_secret_access_key_encrypted: string | null
           ems_backend_url: string | null
+          ems_basic_auth_password_encrypted: string | null
+          ems_basic_auth_username: string | null
           ems_known_edge_ids: string[]
           ems_last_discover_at: string | null
           ems_last_discover_count: number | null
@@ -643,6 +645,8 @@ export type Database = {
           ems_aws_region?: string | null
           ems_aws_secret_access_key_encrypted?: string | null
           ems_backend_url?: string | null
+          ems_basic_auth_password_encrypted?: string | null
+          ems_basic_auth_username?: string | null
           ems_known_edge_ids?: string[]
           ems_last_discover_at?: string | null
           ems_last_discover_count?: number | null
@@ -669,6 +673,8 @@ export type Database = {
           ems_aws_region?: string | null
           ems_aws_secret_access_key_encrypted?: string | null
           ems_backend_url?: string | null
+          ems_basic_auth_password_encrypted?: string | null
+          ems_basic_auth_username?: string | null
           ems_known_edge_ids?: string[]
           ems_last_discover_at?: string | null
           ems_last_discover_count?: number | null
@@ -1103,6 +1109,10 @@ export type Database = {
       }
       fn_get_community_payment_secret: {
         Args: { _community_id: string }
+        Returns: string
+      }
+      fn_get_ems_basic_auth_password: {
+        Args: { _microgrid_id: string }
         Returns: string
       }
       fn_get_ems_secret: { Args: { _microgrid_id: string }; Returns: string }

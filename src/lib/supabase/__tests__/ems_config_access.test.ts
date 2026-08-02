@@ -38,9 +38,10 @@
  * database if the table policy is ever widened (e.g. a read-only viewer role),
  * which is exactly when the app-layer check would be the only thing left.
  *
- * Opt-out: SKIP_RLS_TESTS=1. NOTE: this file is in the `rls` vitest project,
- * which CI runs with SKIP_RLS_TESTS=1 — these assertions do NOT execute in the
- * merge gate. They must be run locally against `supabase start`.
+ * Opt-out: SKIP_RLS_TESTS=1, for running without a local Supabase. That note
+ * used to say CI skipped this file; #324 removed SKIP_RLS_TESTS from the merge
+ * gate, which now starts its own Supabase, so these assertions DO execute on
+ * every PR.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";

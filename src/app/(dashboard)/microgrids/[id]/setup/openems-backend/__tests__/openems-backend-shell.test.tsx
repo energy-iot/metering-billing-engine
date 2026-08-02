@@ -152,6 +152,8 @@ const BASE_MG = {
   ems_backend_url: null,
   ems_aws_region: null,
   ems_aws_access_key_id: null,
+  ems_basic_auth_username: null,
+  ems_has_basic_auth_password: false,
   ems_known_edge_ids: [] as string[],
   ems_last_discover_at: null,
   ems_last_discover_status: null,
@@ -166,6 +168,8 @@ const CONFIGURED_CLOUD = {
   ems_backend_url: "https://abc.lambda-url.us-east-1.on.aws/",
   ems_aws_region: "us-east-1",
   ems_aws_access_key_id: "AKIAIOSFODNN7EXAMPLE",
+  ems_basic_auth_username: null,
+  ems_has_basic_auth_password: false,
   ems_known_edge_ids: ["edge0", "edge1"],
   ems_last_discover_at: "2026-04-23T10:00:00Z",
   ems_last_discover_status: "success",
@@ -678,6 +682,8 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
       <OpenemsBackendShell
         microgrid={{
           ...CONFIGURED_CLOUD,
+          ems_basic_auth_username: null,
+          ems_has_basic_auth_password: false,
           ems_known_edge_ids: [],
         }}
         health="healthy"

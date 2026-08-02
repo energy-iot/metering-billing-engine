@@ -1,6 +1,6 @@
 import { OpenEmsError } from "./errors";
 import { OpenEmsClient } from "./client";
-import { SigV4Auth } from "./auth";
+import { BasicAuth, SigV4Auth } from "./auth";
 
 /**
  * Configuration for constructing an OpenEMS client.
@@ -14,11 +14,18 @@ import { SigV4Auth } from "./auth";
  * `cloud_aws`: AWS SigV4-signed request to a Lambda Function URL that fronts
  * an OpenEMS B2B endpoint. Requires IAM access key + region.
  *
- * `direct_url`: Plain (unauthenticated) HTTP POST to an OpenEMS B2B REST
- * endpoint. Per the product decision recorded in #101 amendments, direct_url
- * mode ships with NO auth fields — used for localhost development or
- * unauthenticated self-hosted OpenEMS only. For authenticated self-hosted
- * OpenEMS, use cloud_aws via an authenticated Lambda proxy.
+ * `direct_url`: HTTP POST to an OpenEMS B2B REST endpoint, with optional HTTP
+ * Basic credentials. #101 shipped this mode with no auth fields and directed
+ * authenticated self-hosted backends at `cloud_aws` behind a Lambda proxy;
+ * #327 widened it, because an operator running OpenEMS Backend with the
+ * REST/JSON-RPC API enabled gets an authenticated endpoint by default and
+ * asking them to stand up a Lambda to reach it is infrastructure work for a
+ * feature that already ships.
+ *
+ * Credentials are OPTIONAL and deliberately not a third `ems_type` value:
+ * `ALTER TYPE … ADD VALUE` cannot be undone, and #316/#321 left a permanent
+ * unused `user_role` value doing exactly that. Absent credentials, this mode
+ * behaves as it always did.
  */
 export type OpenEmsClientConfig =
   | {
@@ -31,6 +38,10 @@ export type OpenEmsClientConfig =
   | {
       type: "direct_url";
       url: string;
+      /** HTTP Basic username. Optional — omit for an unauthenticated backend. */
+      username?: string | null;
+      /** HTTP Basic password, plaintext at this boundary. Optional. */
+      password?: string | null;
     };
 
 /**
@@ -66,7 +77,22 @@ export function createOpenEmsClient(config: OpenEmsClientConfig): OpenEmsClient 
     );
   }
 
-  // direct_url — no auth, pass an empty BasicAuth-equivalent (null auth).
+  // direct_url. Credentials are optional (#327): with both present the client
+  // sends HTTP Basic, with neither it behaves exactly as it did before.
+  //
+  // Requiring BOTH rather than either is deliberate. A username with no
+  // password would send `Basic dXNlcjo=` — a well-formed header carrying an
+  // empty password — and the backend would reject it as bad credentials
+  // rather than as missing ones, sending the operator to check the password
+  // they never set. A half-filled form is a configuration error and belongs
+  // in the save route's validation, not in a header.
+  if (config.username && config.password) {
+    return new OpenEmsClient(
+      config.url,
+      new BasicAuth(config.username, config.password)
+    );
+  }
+
   // The OpenEmsAuth contract requires `apply`, so we use an auth-less helper.
   return new OpenEmsClient(config.url, new NoAuth());
 }
