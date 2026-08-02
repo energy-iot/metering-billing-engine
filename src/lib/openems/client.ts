@@ -120,11 +120,75 @@ export class OpenEmsClient implements DeviceDataAdapter {
       );
     }
 
-    const json = await response.json();
+    // Everything that is not 2xx, and not one of the two shapes handled above,
+    // stops here carrying the evidence (#325).
+    //
+    // Before this existed, control fell straight through to `response.json()`,
+    // so a 404, 405, 500 or 502 threw a bare `SyntaxError` on the HTML body —
+    // not an `OpenEmsError`, so the route's outer catch reported "Edge
+    // validation failed with an unexpected error. Check server logs." The
+    // cause existed only in the server log, and diagnosing one real incident
+    // took three people probing the operator's host directly.
+    //
+    // The status and the first bytes are the whole point: "returned HTTP 405"
+    // and "returned HTTP 502" send an operator to different places, and both
+    // are things they can act on without us.
+    //
+    // NOTE — this is where an OpenEMS auth failure actually lands. OpenEMS
+    // Backend answers an unauthenticated JSON-RPC call with **500** and
+    // `OpenemsNamedException: Authentication failed` in the body, not with
+    // 401/403, so the branch above never fires for it. Matching on the body
+    // text to re-classify it was considered and rejected: it is a different
+    // failure mode dressed as a string comparison, and the message below
+    // already names the cause verbatim. If OpenEMS ever starts sending 401,
+    // the branch above catches it and this comment is what tells you why the
+    // reason code changed.
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      // Single read: this branch throws, so the stream is never needed again.
+      throw new OpenEmsError(
+        `OpenEMS Backend at ${this.baseUrl} returned HTTP ${response.status}: ${body.slice(0, 500)}`,
+        "OPENEMS_HTTP_ERROR",
+        502,
+        { status: response.status, body: body.slice(0, 500) }
+      );
+    }
+
+    // A 2xx that is not JSON. Deliberately NOT gated on Content-Type: plenty of
+    // servers return valid JSON as `text/plain` or with no Content-Type at all,
+    // and making the header a precondition invents failures for setups that
+    // work today. The parse is the thing that genuinely cannot proceed — so let
+    // the parse decide, and put the content-type in the message where it does
+    // diagnostic work instead.
+    //
+    // The case this catches: a single-page-app catch-all that answers every
+    // path with `200 text/html`, which is what an operator gets when the URL
+    // points at an OpenEMS UI rather than at the Backend's REST API.
+    // Read the body ONCE, as text, then parse it. `response.json()` consumes
+    // the stream, so a `response.text()` in the catch would read an already-
+    // used body and yield "" — an error message promising the first bytes and
+    // delivering none, which is worse than not offering them.
+    const raw = await response.text();
+
+    let json: { error?: { message?: string } } & Record<string, unknown>;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      const contentType = response.headers.get("content-type") ?? "unknown";
+      const body = raw;
+      throw new OpenEmsError(
+        `OpenEMS Backend at ${this.baseUrl} returned ${contentType}, not JSON. ` +
+          `Check that the URL points at the Backend's JSON-RPC API rather than the OpenEMS UI. ` +
+          `First bytes: ${body.slice(0, 200)}`,
+        "OPENEMS_NOT_JSON",
+        502,
+        { contentType, body: body.slice(0, 200) }
+      );
+    }
 
     if ("error" in json) {
       throw new OpenEmsError(
-        `OpenEMS RPC error: ${json.error.message}`,
+        `OpenEMS RPC error: ${json.error?.message}`,
         "OPENEMS_RPC_ERROR",
         502,
         json.error

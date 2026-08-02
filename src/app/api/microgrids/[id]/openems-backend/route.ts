@@ -490,8 +490,26 @@ export async function PUT(
           reason = "unreachable";
           errorMsg = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
         } else {
+          // Every remaining OpenEmsError already carries an operator-actionable
+          // message; this branch used to replace all of them with a generic
+          // string and leave the only copy of the cause in a server log (#325).
+          //
+          // `reason` stays `unknown_error` deliberately. It is persisted to
+          // `ems_last_discover_status`, whose CHECK constraint (migration
+          // 00018) permits five values; widening it needs a migration that is
+          // out of this ticket's scope — the same boundary #318 documents.
+          // The message carries the detail; the status stays lossy and tracked.
+          //
+          // What reaches here and what it tells the operator:
+          //   OPENEMS_HTTP_ERROR          status + body — including an OpenEMS
+          //                               auth failure, which arrives as 500
+          //                               rather than 401
+          //   OPENEMS_NOT_JSON            the URL is not a JSON-RPC API
+          //                               (typically the OpenEMS UI)
+          //   OPENEMS_INVALID_BACKEND_URL a stored URL failed sink-side checks
+          //   OPENEMS_RPC_ERROR           the backend's own JSON-RPC error text
           reason = "unknown_error";
-          errorMsg = "Edge validation failed with an unexpected error. Check server logs.";
+          errorMsg = err.message;
         }
         return NextResponse.json(
           { error: errorMsg, reason },
@@ -685,6 +703,26 @@ export async function PUT(
           discoverStatus = "unreachable";
           discoverMessage = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
         } else {
+          // DO NOT change this to `err.message` without also scrubbing it.
+          //
+          // Unlike step 5 above — which returns its message to the caller and
+          // exits — `discoverMessage` is PERSISTED to
+          // `ems_last_discover_error`, and that column is in
+          // MICROGRID_PUBLIC_COLUMNS, so anyone with org access reads it.
+          //
+          // Since #325 an OPENEMS_HTTP_ERROR message carries up to 500 bytes of
+          // the backend's own response body, and since #327 `direct_url` sends
+          // `Authorization: Basic …`. A backend whose error page echoes the
+          // request would therefore put a credential into an org-readable
+          // column. Today it cannot: this branch discards the message, and
+          // `err.message` is used only for OPENEMS_REDIRECT below.
+          //
+          // Surfacing the real message here is a reasonable thing to want —
+          // #318 covers the adjacent status problem. If you do it, route it
+          // through `scrubSecretValues(msg, { secretAccessKey, password })`
+          // first, with the literal values rather than a `Basic …` pattern: the
+          // values catch the credential however the backend echoed it, the
+          // pattern only catches the header form.
           discoverStatus = "unknown_error";
           discoverMessage =
             "Discover failed with an unexpected error. Check server logs.";
@@ -698,6 +736,7 @@ export async function PUT(
   }
 
   // Update health fields.
+  //
   const { error: healthErr } = await supabase
     .from("microgrids")
     .update({
