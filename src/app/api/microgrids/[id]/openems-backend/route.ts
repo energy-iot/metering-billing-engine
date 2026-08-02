@@ -703,6 +703,26 @@ export async function PUT(
           discoverStatus = "unreachable";
           discoverMessage = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
         } else {
+          // DO NOT change this to `err.message` without also scrubbing it.
+          //
+          // Unlike step 5 above — which returns its message to the caller and
+          // exits — `discoverMessage` is PERSISTED to
+          // `ems_last_discover_error`, and that column is in
+          // MICROGRID_PUBLIC_COLUMNS, so anyone with org access reads it.
+          //
+          // Since #325 an OPENEMS_HTTP_ERROR message carries up to 500 bytes of
+          // the backend's own response body, and since #327 `direct_url` sends
+          // `Authorization: Basic …`. A backend whose error page echoes the
+          // request would therefore put a credential into an org-readable
+          // column. Today it cannot: this branch discards the message, and
+          // `err.message` is used only for OPENEMS_REDIRECT below.
+          //
+          // Surfacing the real message here is a reasonable thing to want —
+          // #318 covers the adjacent status problem. If you do it, route it
+          // through `scrubSecretValues(msg, { secretAccessKey, password })`
+          // first, with the literal values rather than a `Basic …` pattern: the
+          // values catch the credential however the backend echoed it, the
+          // pattern only catches the header form.
           discoverStatus = "unknown_error";
           discoverMessage =
             "Discover failed with an unexpected error. Check server logs.";
@@ -716,6 +736,7 @@ export async function PUT(
   }
 
   // Update health fields.
+  //
   const { error: healthErr } = await supabase
     .from("microgrids")
     .update({
