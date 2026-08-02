@@ -3,7 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import type { OpenEmsClientConfig } from "@/lib/openems";
-import { getEmsSecretForMicrogrid } from "@/lib/openems/config";
+import {
+  getEmsSecretForMicrogrid,
+  getEmsBasicAuthPasswordForMicrogrid,
+} from "@/lib/openems/config";
 import { validateBackendUrl } from "@/lib/openems/backend-url";
 import { scrubSecretValues } from "@/lib/logging/scrub-secrets";
 
@@ -18,8 +21,15 @@ const UUID_RE =
  *     backendUrl: string,
  *     known_edge_ids: string[],                // edge IDs to validate (#112)
  *     region?, accessKeyId?, secretAccessKey?  // cloud_aws only
+ *     basicAuthUsername?, basicAuthPassword?   // direct_url only (#327)
  *     confirmed_name?: string                  // closed-period bypass
  *   }
+ *
+ * `basicAuthUsername` / `basicAuthPassword` are optional and must be supplied
+ * together — a username with no password would send `Basic <user>:` and the
+ * backend would report bad credentials rather than missing ones. Blank
+ * password with a username and an existing ciphertext on record means
+ * "keep the stored password", mirroring the cloud_aws secret-preserve flow.
  *
  * Mandatory execution order (AC-ROUTE-1, amendments 2026-04-23 + #112):
  *
@@ -32,6 +42,8 @@ const UUID_RE =
  *      microgrid is hidden/missing (don't leak existence with a 403).
  *   3. Secret-preserve gate (cloud_aws): if secretAccessKey blank and an
  *      existing ciphertext is on record, preserve it. Otherwise 400.
+ *      Same gate for the direct_url Basic password (#327), plus a 400 when
+ *      exactly one of username/password is supplied.
  *   4. Mid-period lock — 3-branch decision tree:
  *        (a) draft exists            → hard 409
  *        (b) closed exists (no draft) → 409 with requires_typed_confirmation
@@ -161,6 +173,29 @@ export async function PUT(
     }
   }
 
+  // direct_url HTTP Basic credentials (#327). Both optional, but not
+  // independently: a username with no password produces `Basic dXNlcjo=`,
+  // which the backend rejects as *wrong* credentials rather than *missing*
+  // ones, sending the operator to check a password they never set. Rejecting
+  // the half-filled form here is the only place that distinction is still
+  // visible.
+  //
+  // Password required-ness is resolved after the row read, like the AWS
+  // secret: blank + existing ciphertext means "keep the stored one".
+  let basicAuthUsername: string | undefined;
+  let basicAuthPassword: string | undefined;
+
+  if (type === "direct_url") {
+    basicAuthUsername =
+      typeof body.basicAuthUsername === "string"
+        ? body.basicAuthUsername.trim()
+        : undefined;
+    basicAuthPassword =
+      typeof body.basicAuthPassword === "string"
+        ? body.basicAuthPassword
+        : undefined;
+  }
+
   const supabase = await createClient();
 
   // Permission check — 404 on hidden/missing (don't leak existence).
@@ -170,7 +205,7 @@ export async function PUT(
   const { data: mgRow, error: mgErr } = await supabase
     .from("microgrids")
     .select(
-      "id, name, ems_type, ems_aws_secret_access_key_encrypted"
+      "id, name, ems_type, ems_aws_secret_access_key_encrypted, ems_basic_auth_password_encrypted"
     )
     .eq("id", microgridId)
     .maybeSingle<{
@@ -178,6 +213,7 @@ export async function PUT(
       name: string;
       ems_type: "cloud_aws" | "direct_url" | null;
       ems_aws_secret_access_key_encrypted: string | null;
+      ems_basic_auth_password_encrypted: string | null;
     }>();
 
   if (mgErr) {
@@ -208,6 +244,43 @@ export async function PUT(
       },
       { status: 400 }
     );
+  }
+
+  // Basic-auth preserve gate (#327), mirroring the cloud_aws one above: a
+  // blank password with an existing ciphertext on record means "keep it".
+  const preserveExistingBasicAuthPassword =
+    type === "direct_url" &&
+    !!basicAuthUsername &&
+    (!basicAuthPassword || basicAuthPassword.length === 0) &&
+    mgRow.ems_basic_auth_password_encrypted !== null &&
+    mgRow.ems_basic_auth_password_encrypted !== undefined;
+
+  // Reject the half-filled form. Checked after the row read so that "username
+  // present, password blank, ciphertext on record" is a preserve rather than
+  // an error.
+  if (type === "direct_url") {
+    if (
+      basicAuthUsername &&
+      !basicAuthPassword &&
+      !preserveExistingBasicAuthPassword
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "A username was provided with no password. Enter the password, or clear the username to connect without authentication.",
+        },
+        { status: 400 }
+      );
+    }
+    if (!basicAuthUsername && basicAuthPassword) {
+      return NextResponse.json(
+        {
+          error:
+            "A password was provided with no username. Enter the username, or clear the password to connect without authentication.",
+        },
+        { status: 400 }
+      );
+    }
   }
   // Configuration gate. Since #321 this is the same permission as reaching
   // the microgrid at all: an org manager configures any microgrid in their own
@@ -316,6 +389,35 @@ export async function PUT(
     effectiveSecret = decrypted;
   }
 
+  // Same treatment for the Basic password (#327): when the operator left it
+  // blank and a ciphertext is on record, decrypt the stored one so step 5
+  // tests the credentials that will actually be in force after the save. A
+  // pre-save test that authenticates differently from the saved config is
+  // worse than no test — it reports green on something that will not run.
+  let effectiveBasicAuthPassword: string | undefined = basicAuthPassword;
+  if (preserveExistingBasicAuthPassword) {
+    let decrypted: string | null = null;
+    let decryptErr: unknown = null;
+    try {
+      decrypted = await getEmsBasicAuthPasswordForMicrogrid(
+        supabase,
+        microgridId
+      );
+    } catch (err) {
+      decryptErr = err;
+    }
+    if (decryptErr || !decrypted) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not retrieve the existing password to test the connection. Re-enter the password to proceed.",
+        },
+        { status: 500 }
+      );
+    }
+    effectiveBasicAuthPassword = decrypted;
+  }
+
   const candidateConfig: OpenEmsClientConfig =
     type === "cloud_aws"
       ? {
@@ -325,7 +427,12 @@ export async function PUT(
           accessKeyId: accessKeyId as string,
           secretAccessKey: effectiveSecret as string,
         }
-      : { type: "direct_url", url: backendUrl.trim() };
+      : {
+          type: "direct_url",
+          url: backendUrl.trim(),
+          username: basicAuthUsername ?? null,
+          password: effectiveBasicAuthPassword ?? null,
+        };
 
   // ── Step 5: Edge-ID validation (#112) ─────────────────────────────────────
   //
@@ -423,6 +530,28 @@ export async function PUT(
     encryptedSecret = data as string;
   }
 
+  // Same for the Basic password (#327). Encrypted through the same DEK path —
+  // fn_ems_encrypt_secret is not AWS-specific, it encrypts a string.
+  let encryptedBasicAuthPassword: string | null = null;
+  if (
+    type === "direct_url" &&
+    basicAuthPassword &&
+    !preserveExistingBasicAuthPassword
+  ) {
+    const { data, error } = await supabase.rpc("fn_ems_encrypt_secret", {
+      p_plaintext: basicAuthPassword,
+    });
+    if (error || !data) {
+      return NextResponse.json(
+        {
+          error: `Failed to encrypt password: ${error?.message ?? "no data"}`,
+        },
+        { status: 500 }
+      );
+    }
+    encryptedBasicAuthPassword = data as string;
+  }
+
   // Build the UPDATE payload. When preserving the secret we OMIT the
   // ems_aws_secret_access_key_encrypted column entirely so the existing
   // ciphertext is left untouched. Omitting the column also prevents a
@@ -432,11 +561,22 @@ export async function PUT(
     ems_backend_url: backendUrl.trim(),
     ems_aws_region: type === "cloud_aws" ? region : null,
     ems_aws_access_key_id: type === "cloud_aws" ? accessKeyId : null,
+    ems_basic_auth_username:
+      type === "direct_url" ? basicAuthUsername || null : null,
     ems_known_edge_ids: known_edge_ids,
   };
   if (!preserveExistingSecret) {
     updatePayload.ems_aws_secret_access_key_encrypted =
       type === "cloud_aws" ? encryptedSecret : null;
+  }
+  if (!preserveExistingBasicAuthPassword) {
+    // Switching to cloud_aws, or clearing the username, nulls the password.
+    // Leaving a stored credential behind a form that no longer shows it is
+    // how an operator ends up unable to explain what their microgrid sends.
+    updatePayload.ems_basic_auth_password_encrypted =
+      type === "direct_url" && basicAuthUsername
+        ? encryptedBasicAuthPassword
+        : null;
   }
 
   const { error: updErr } = await supabase
@@ -458,7 +598,7 @@ export async function PUT(
       {
         error: scrubSecretValues(
           `Failed to persist config: ${updErr.message}`,
-          { secretAccessKey }
+          { secretAccessKey, password: effectiveBasicAuthPassword }
         ),
       },
       { status: 500 }
@@ -595,7 +735,7 @@ export async function PUT(
           duration_ms: Date.now() - startedAt,
           at: new Date().toISOString(),
         },
-        { secretAccessKey }
+        { secretAccessKey, password: effectiveBasicAuthPassword }
       )
     )
   );

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createOpenEmsClient, NoAuth } from "../index";
 import { OpenEmsClient } from "../client";
-import { SigV4Auth } from "../auth";
+import { BasicAuth, SigV4Auth } from "../auth";
 import { OpenEmsError } from "../errors";
 
 // Helper: cast the returned client to access the private `auth` field for
@@ -88,4 +88,55 @@ describe("createOpenEmsClient(config)", () => {
       );
     });
   });
+
+  // #327 — optional HTTP Basic credentials on direct_url.
+  describe("type='direct_url' with credentials (#327)", () => {
+    const base = { type: "direct_url" as const, url: "https://ems.example/rest" };
+
+    it("returns a BasicAuth-backed client when BOTH are present", () => {
+      const client = createOpenEmsClient({
+        ...base,
+        username: "openems",
+        password: "s3cret",
+      });
+      expect(getAuth(client)).toBeInstanceOf(BasicAuth);
+    });
+
+    it("emits an Authorization header carrying those credentials", async () => {
+      const client = createOpenEmsClient({
+        ...base,
+        username: "openems",
+        password: "s3cret",
+      });
+      const auth = getAuth(client) as BasicAuth;
+      const headers = await auth.apply({ url: base.url, method: "POST", body: "" });
+      const expected = `Basic ${Buffer.from("openems:s3cret").toString("base64")}`;
+      expect(headers.Authorization).toBe(expected);
+    });
+
+    it("falls back to NoAuth when neither is present — unchanged pre-#327 behaviour", () => {
+      expect(getAuth(createOpenEmsClient(base))).toBeInstanceOf(NoAuth);
+      expect(
+        getAuth(createOpenEmsClient({ ...base, username: null, password: null }))
+      ).toBeInstanceOf(NoAuth);
+    });
+
+    // A half-filled pair must NOT produce a header. `Basic dXNlcjo=` is
+    // well-formed and carries an empty password, so the backend reports bad
+    // credentials rather than missing ones and the operator goes looking for a
+    // password they never set. The save route rejects the half-filled form;
+    // this is the second line of defence for any other caller.
+    it("falls back to NoAuth when only the username is present", () => {
+      expect(
+        getAuth(createOpenEmsClient({ ...base, username: "openems" }))
+      ).toBeInstanceOf(NoAuth);
+    });
+
+    it("falls back to NoAuth when only the password is present", () => {
+      expect(
+        getAuth(createOpenEmsClient({ ...base, password: "s3cret" }))
+      ).toBeInstanceOf(NoAuth);
+    });
+  });
+
 });

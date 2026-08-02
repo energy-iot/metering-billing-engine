@@ -10,7 +10,8 @@
 
 import * as React from "react";
 import { EntityForm } from "./EntityForm";
-import type { Organization, Community, Microgrid } from "@/lib/types/domain";
+import type { Organization, Community } from "@/lib/types/domain";
+import type { MicrogridPublic } from "@/lib/types/microgrid-columns";
 
 type Props =
   | {
@@ -29,7 +30,7 @@ type Props =
       entity: "microgrid";
       // Omit the encrypted ciphertext column so SSR-rendered HTML / client
       // components never receive it (defense-in-depth, see issue #106).
-      initialValues: Omit<Microgrid, "ems_aws_secret_access_key_encrypted">;
+      initialValues: MicrogridPublic;
       label?: string;
       className?: string;
     };

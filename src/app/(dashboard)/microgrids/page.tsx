@@ -1,15 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
-import type { Microgrid } from "@/lib/types/domain";
+import type { MicrogridPublic } from "@/lib/types/microgrid-columns";
 import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 import { HierarchyNav } from "@/components/ui/hierarchy-nav";
 import { getHierarchyLevels } from "@/lib/hierarchy";
 import { AddEntityButton } from "@/components/forms/AddEntityButton";
 import type { CommunityOption } from "@/components/forms/AddEntityButton";
 
-type MicrogridWithHouseholdCount = Omit<
-  Microgrid,
-  "ems_aws_secret_access_key_encrypted"
-> & {
+type MicrogridWithHouseholdCount = MicrogridPublic & {
   household_count: number;
 };
 
