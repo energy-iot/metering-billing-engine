@@ -33,6 +33,8 @@ import {
   fireEvent,
   act,
   within,
+  waitFor,
+  cleanup,
 } from "@testing-library/react";
 
 const mockRefresh = vi.fn();
@@ -794,5 +796,113 @@ describe("OpenemsBackendShell — Known edge IDs (#112)", () => {
     expect(container.textContent).toContain("Edge IDs");
     // The — character for empty
     expect(container.textContent).toContain("—");
+  });
+});
+
+// ── #327: HTTP Basic credential fields on the Direct URL form ─────────────
+//
+// The suite already carried `ems_basic_auth_username` and
+// `ems_has_basic_auth_password` in its fixtures, but only to satisfy the prop
+// type — nothing asserted the fields exist, render, or reach the request. A
+// fixture key is not coverage.
+describe("OpenemsBackendShell — #327 Basic credentials", () => {
+  function openDirectForm(mg: typeof BASE_MG) {
+    render(
+      <OpenemsBackendShell
+        microgrid={mg}
+        health="not_configured"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4={null}
+        canConfigure={true}
+        emsOperators={[]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /direct url/i }));
+  }
+
+  it("renders username and password fields on the Direct URL form", () => {
+    openDirectForm(BASE_MG);
+    expect(screen.getByLabelText(/^username$/i)).toBeDefined();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+  });
+
+  it("does NOT render them on the Cloud (AWS) form", () => {
+    render(
+      <OpenemsBackendShell
+        microgrid={BASE_MG}
+        health="not_configured"
+        draftPeriodsCount={0}
+        closedPeriodsCount={0}
+        secretLast4={null}
+        canConfigure={true}
+        emsOperators={[]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /cloud \(aws\)/i }));
+    expect(screen.queryByLabelText(/^username$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^password$/i)).toBeNull();
+  });
+
+  it("offers 'leave blank to keep' ONLY when a password is on record", () => {
+    openDirectForm(BASE_MG);
+    expect(screen.queryByText(/leave blank to keep the current password/i)).toBeNull();
+    cleanup();
+
+    openDirectForm({ ...BASE_MG, ems_has_basic_auth_password: true });
+    expect(screen.getByText(/leave blank to keep the current password/i)).toBeDefined();
+  });
+
+  it("posts the username, and omits the password when left blank", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "zero_edges", message: "No edges declared yet", edgeCount: 0, edges: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    openDirectForm({ ...BASE_MG, ems_has_basic_auth_password: true });
+    fireEvent.change(screen.getByLabelText(/backend url/i), {
+      target: { value: "https://ems.example/rest" },
+    });
+    fireEvent.change(screen.getByLabelText(/^username$/i), {
+      target: { value: "openems" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save & test|save and test|save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+    expect(body.type).toBe("direct_url");
+    expect(body.basicAuthUsername).toBe("openems");
+    // Absent, not empty-string: a blank field means "keep the stored password",
+    // and sending "" would be indistinguishable from clearing it.
+    expect(body).not.toHaveProperty("basicAuthPassword");
+  });
+
+  it("sends the password when the operator types one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "zero_edges", message: "No edges declared yet", edgeCount: 0, edges: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    openDirectForm(BASE_MG);
+    fireEvent.change(screen.getByLabelText(/backend url/i), {
+      target: { value: "https://ems.example/rest" },
+    });
+    fireEvent.change(screen.getByLabelText(/^username$/i), {
+      target: { value: "openems" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "s3cret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save & test|save and test|save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.basicAuthUsername).toBe("openems");
+    expect(body.basicAuthPassword).toBe("s3cret");
   });
 });

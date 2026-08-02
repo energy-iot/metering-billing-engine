@@ -104,6 +104,7 @@ function mgSelectHandler(
     name: string;
     ems_type?: "cloud_aws" | "direct_url" | null;
     ems_aws_secret_access_key_encrypted?: string | null;
+    ems_basic_auth_password_encrypted?: string | null;
   } | null
 ) {
   return () => ({
@@ -132,6 +133,24 @@ function mgUpdateHandler(error: unknown = null) {
     update: () => ({
       eq: () => Promise.resolve({ error }),
     }),
+  });
+}
+
+/**
+ * Like mgUpdateHandler, but records the payload. #327 added columns whose
+ * whole contract is what ends up in the UPDATE — "preserve" means the key is
+ * ABSENT, not null — and the discarding handler above cannot see the
+ * difference between omitted and nulled.
+ */
+function capturingUpdateHandler(
+  sink: { payload?: Record<string, unknown> },
+  error: unknown = null
+) {
+  return () => ({
+    update: (payload: Record<string, unknown>) => {
+      sink.payload = payload;
+      return { eq: () => Promise.resolve({ error }) };
+    },
   });
 }
 
@@ -745,6 +764,149 @@ describe("PUT /api/microgrids/[id]/openems-backend", () => {
     expect(saveLog.known_edge_ids_count).toBe(1);
     infoSpy.mockRestore();
   });
+
+  // ── #327: HTTP Basic credentials on direct_url ────────────────────────────
+  //
+  // The DB tests prove the columns are guarded and encrypted; the factory tests
+  // prove the client sends the header. NOTHING covered the layer between them
+  // — the save route, which is what the operator's form actually posts to.
+  // These fill that in.
+  describe("#327 direct_url Basic credentials", () => {
+    it("rejects a username with no password (400) before any write", async () => {
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          type: "direct_url",
+          backendUrl: "https://ems.example/rest",
+          known_edge_ids: [],
+          basicAuthUsername: "openems",
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/username was provided with no password/i);
+      // Only the row read happened — no billing-period check, no UPDATE.
+      expect(fromCallIndex).toBe(1);
+    });
+
+    it("rejects a password with no username (400)", async () => {
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          type: "direct_url",
+          backendUrl: "https://ems.example/rest",
+          known_edge_ids: [],
+          basicAuthPassword: "s3cret",
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/password was provided with no username/i);
+    });
+
+    it("persists the username and the ENCRYPTED password when both are given", async () => {
+      const sink: { payload?: Record<string, unknown> } = {};
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+      registerFrom(billingPeriodsHandler([]));
+      registerFrom(capturingUpdateHandler(sink)); // persist config
+      registerFrom(mgUpdateHandler(null)); // health update
+      getEdgesStatusMock.mockResolvedValue([]);
+
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          type: "direct_url",
+          backendUrl: "https://ems.example/rest",
+          known_edge_ids: [],
+          basicAuthUsername: "openems",
+          basicAuthPassword: "s3cret",
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+
+      expect(res.status).toBe(200);
+      expect(sink.payload?.ems_basic_auth_username).toBe("openems");
+      // Ciphertext from fn_ems_encrypt_secret, never the plaintext.
+      expect(sink.payload?.ems_basic_auth_password_encrypted).toBe("\\x01020304");
+      expect(JSON.stringify(sink.payload)).not.toContain("s3cret");
+      expect(mockRpc).toHaveBeenCalledWith("fn_ems_encrypt_secret", {
+        p_plaintext: "s3cret",
+      });
+    });
+
+    it("OMITS the password column when blank and a ciphertext is on record (preserve)", async () => {
+      const sink: { payload?: Record<string, unknown> } = {};
+      registerFrom(
+        mgSelectHandler({
+          id: MG_ID,
+          name: MG_NAME,
+          ems_type: "direct_url",
+          ems_basic_auth_password_encrypted: "\\xDEADBEEF",
+        })
+      );
+      registerFrom(billingPeriodsHandler([]));
+      // getEmsBasicAuthPasswordForMicrogrid re-reads the row on the user client
+      // before decrypting on the service client — that read is the
+      // authorization step, and it happens AFTER the mid-period gate, when the
+      // candidate config is assembled.
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+      registerFrom(capturingUpdateHandler(sink)); // persist config
+      registerFrom(mgUpdateHandler(null)); // health update
+      getEdgesStatusMock.mockResolvedValue([]);
+
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          type: "direct_url",
+          backendUrl: "https://ems.example/rest",
+          known_edge_ids: [],
+          basicAuthUsername: "openems",
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+
+      expect(res.status).toBe(200);
+      // ABSENT, not null. Setting it to null would wipe the stored credential —
+      // the distinction the discarding update handler could not express.
+      expect(sink.payload).not.toHaveProperty("ems_basic_auth_password_encrypted");
+      expect(sink.payload?.ems_basic_auth_username).toBe("openems");
+    });
+
+    it("nulls both credential columns when the connection type is cloud_aws", async () => {
+      const sink: { payload?: Record<string, unknown> } = {};
+      registerFrom(mgSelectHandler({ id: MG_ID, name: MG_NAME }));
+      registerFrom(billingPeriodsHandler([]));
+      registerFrom(capturingUpdateHandler(sink)); // persist config
+      registerFrom(mgUpdateHandler(null)); // health update
+      getEdgesStatusMock.mockResolvedValue([]);
+
+      const { PUT } = await import("../route");
+      const res = await PUT(
+        makePutRequest({
+          type: "cloud_aws",
+          backendUrl: "https://abc.lambda-url.us-east-1.on.aws/",
+          known_edge_ids: [],
+          region: "us-east-1",
+          accessKeyId: "AKIA",
+          secretAccessKey: "shhh",
+        }),
+        { params: Promise.resolve({ id: MG_ID }) }
+      );
+
+      expect(res.status).toBe(200);
+      // A credential left behind a form that no longer shows it is how an
+      // operator ends up unable to explain what their microgrid sends.
+      expect(sink.payload?.ems_basic_auth_username).toBeNull();
+      expect(sink.payload?.ems_basic_auth_password_encrypted).toBeNull();
+    });
+  });
+
 });
 
 // Silence `periods` unused-warning when linter is strict about top-level lets.
