@@ -490,8 +490,26 @@ export async function PUT(
           reason = "unreachable";
           errorMsg = `Could not reach OpenEMS Backend at ${backendUrl.trim()}. Check the URL and that the host is reachable from Vercel.`;
         } else {
+          // Every remaining OpenEmsError already carries an operator-actionable
+          // message; this branch used to replace all of them with a generic
+          // string and leave the only copy of the cause in a server log (#325).
+          //
+          // `reason` stays `unknown_error` deliberately. It is persisted to
+          // `ems_last_discover_status`, whose CHECK constraint (migration
+          // 00018) permits five values; widening it needs a migration that is
+          // out of this ticket's scope — the same boundary #318 documents.
+          // The message carries the detail; the status stays lossy and tracked.
+          //
+          // What reaches here and what it tells the operator:
+          //   OPENEMS_HTTP_ERROR          status + body — including an OpenEMS
+          //                               auth failure, which arrives as 500
+          //                               rather than 401
+          //   OPENEMS_NOT_JSON            the URL is not a JSON-RPC API
+          //                               (typically the OpenEMS UI)
+          //   OPENEMS_INVALID_BACKEND_URL a stored URL failed sink-side checks
+          //   OPENEMS_RPC_ERROR           the backend's own JSON-RPC error text
           reason = "unknown_error";
-          errorMsg = "Edge validation failed with an unexpected error. Check server logs.";
+          errorMsg = err.message;
         }
         return NextResponse.json(
           { error: errorMsg, reason },

@@ -26,6 +26,39 @@ function mockResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
+/**
+ * A response whose body is RAW TEXT, not a JSON-serialised object.
+ *
+ * `mockResponse` above stringifies whatever it is given, so it can only ever
+ * produce well-formed JSON — it cannot express "the backend sent an HTML error
+ * page", which is exactly the case #325 is about. Tests that need a non-JSON
+ * body must use this one.
+ */
+function mockRawResponse(
+  raw: string,
+  status = 200,
+  contentType = "text/html"
+): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.reject(new SyntaxError("Unexpected token < in JSON")),
+    headers: new Headers({ "content-type": contentType }),
+    redirected: false,
+    statusText: "",
+    type: "basic" as ResponseType,
+    url: "",
+    clone: () => mockRawResponse(raw, status, contentType),
+    body: null,
+    bodyUsed: false,
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    blob: () => Promise.resolve(new Blob()),
+    formData: () => Promise.resolve(new FormData()),
+    text: () => Promise.resolve(raw),
+    bytes: () => Promise.resolve(new Uint8Array()),
+  } as Response;
+}
+
 // Helper to build a DeviceConfig fixture.
 // Post-#101: DeviceConfig no longer carries dataSourceType / openems_backend_url
 // — the client is constructed with a microgrid-scoped URL.
@@ -847,4 +880,99 @@ describe("OpenEmsClient", () => {
       expect(options?.method).toBe("POST");
     });
   });
+
+  // ── #325: non-2xx and non-JSON responses must carry their evidence ────────
+  //
+  // Before this, both fell through to `response.json()` and threw a bare
+  // SyntaxError — not an OpenEmsError — so the save route reported "Edge
+  // validation failed with an unexpected error. Check server logs." Diagnosing
+  // one real incident took three people probing the operator's host by hand.
+  describe("#325 HTTP and body-shape errors", () => {
+    it("405 with an HTML body → OPENEMS_HTTP_ERROR carrying status and body", async () => {
+      fetchSpy.mockResolvedValue(
+        mockRawResponse("<html><head><title>405 Not Allowed</title></head>", 405)
+      );
+
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toMatchObject({
+        code: "OPENEMS_HTTP_ERROR",
+        statusCode: 502,
+      });
+
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /returned HTTP 405/
+      );
+      // The body is the actionable part — without it "405" is a number.
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /405 Not Allowed/
+      );
+    });
+
+    it("502 from a proxy whose upstream is down → status is in the message", async () => {
+      fetchSpy.mockResolvedValue(
+        mockRawResponse("<html><head><title>502 Bad Gateway</title></head>", 502)
+      );
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /returned HTTP 502/
+      );
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /502 Bad Gateway/
+      );
+    });
+
+    it("an OpenEMS auth failure arrives as 500, NOT 401 — and says so", async () => {
+      // OpenEMS Backend answers an unauthenticated JSON-RPC call this way. The
+      // 401/403 branch never fires for it, which is why the generic bucket
+      // used to swallow the one message that named the cause.
+      fetchSpy.mockResolvedValue(
+        mockRawResponse(
+          "Error 500 io.openems.common.exceptions.OpenemsError$OpenemsNamedException: Authentication failed",
+          500
+        )
+      );
+
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toMatchObject({
+        code: "OPENEMS_HTTP_ERROR",
+      });
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /Authentication failed/
+      );
+    });
+
+    it("200 text/html (a UI catch-all) → OPENEMS_NOT_JSON naming the content type", async () => {
+      fetchSpy.mockResolvedValue(
+        mockRawResponse('<!DOCTYPE html><html lang="en"><base href="/">', 200)
+      );
+
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toMatchObject({
+        code: "OPENEMS_NOT_JSON",
+        statusCode: 502,
+      });
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(/text\/html/);
+      // The first bytes must actually be present. Reading the body via
+      // `.text()` AFTER `.json()` would yield "" here — the message would
+      // promise evidence and deliver none.
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(/!DOCTYPE html/);
+      await expect(client.getEdgesStatus(["edge0"])).rejects.toThrow(
+        /rather than the OpenEMS UI/
+      );
+    });
+
+    it("accepts valid JSON served WITHOUT a JSON content-type", async () => {
+      // The reason the parse decides rather than the header: servers that send
+      // correct JSON as text/plain are common, and a content-type gate would
+      // invent a failure for a setup that works.
+      fetchSpy.mockResolvedValue(
+        mockRawResponse(
+          JSON.stringify({ jsonrpc: "2.0", id: "x", result: { edge0: { online: true } } }),
+          200,
+          "text/plain"
+        )
+      );
+
+      await expect(client.getEdgesStatus(["edge0"])).resolves.toEqual([
+        { edgeId: "edge0", online: true },
+      ]);
+    });
+  });
+
 });
