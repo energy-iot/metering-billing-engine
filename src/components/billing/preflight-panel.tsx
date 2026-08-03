@@ -245,7 +245,17 @@ export function PreflightPanel(props: PreflightPanelProps) {
   const totalCount = households.length;
 
   async function handleSubmit() {
-    if (!allValid) return;
+    // BOTH gates, not just the manual one. The button is disabled on
+    // `!allValid || !allSeedsValid`, but the button is not the only way in:
+    // any second caller reaching handleSubmit with an unresolved seed row
+    // would send `startKwh: derivedSeed() ?? 0`, and #341's route accepts it
+    // because 0 <= dialReading satisfies the ordering bound. That bills from
+    // zero — the exact invoice this panel exists to prevent, arriving through
+    // the panel built to prevent it.
+    //
+    // The `?? 0` below stays as a type-level floor; this makes it dead behind
+    // two independent checks rather than merely unreachable behind one.
+    if (!allValid || !allSeedsValid) return;
     setSubmitting(true);
     setErrorMsg(null);
 

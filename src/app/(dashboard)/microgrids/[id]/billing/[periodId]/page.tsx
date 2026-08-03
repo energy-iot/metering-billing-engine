@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { computeSeedNeeded } from "@/lib/billing/seed-detection";
 import type {
   BillingLineItem,
   BillingPeriod,
@@ -249,11 +250,14 @@ export default async function BillingPeriodDetailPage({
       }
     }
 
-    for (const [hhId, devId] of Object.entries(deviceIdByHouseholdId)) {
-      seedNeededByHouseholdId[hhId] =
-        edgeAvailableByHouseholdId[hhId] === true &&
-        !priorEndByDevice.has(devId);
-    }
+    Object.assign(
+      seedNeededByHouseholdId,
+      computeSeedNeeded({
+        deviceIdByHouseholdId,
+        edgeAvailableByHouseholdId,
+        devicesWithPriorEnd: priorEndByDevice,
+      })
+    );
   }
 
   // BC2 (#174) — resolve the actor display name per line item via a
