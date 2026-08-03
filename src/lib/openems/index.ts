@@ -1,6 +1,6 @@
 import { OpenEmsError } from "./errors";
 import { OpenEmsClient } from "./client";
-import { BasicAuth, SigV4Auth } from "./auth";
+import { appendJsonRpcPath, BasicAuth, SigV4Auth } from "./auth";
 
 /**
  * Configuration for constructing an OpenEMS client.
@@ -104,7 +104,7 @@ export function createOpenEmsClient(config: OpenEmsClientConfig): OpenEmsClient 
  */
 export class NoAuth {
   resolveUrl(baseUrl: string): string {
-    return `${baseUrl}/jsonrpc`;
+    return appendJsonRpcPath(baseUrl);
   }
   async apply(): Promise<Record<string, string>> {
     return { "Content-Type": "application/json" };
