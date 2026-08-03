@@ -4,6 +4,7 @@ import {
   isRunGenerationFatal,
   runGenerationFor,
   type ManualReadingInput,
+  type SeedReadingInput,
 } from "@/lib/billing/generate";
 
 /**
@@ -64,6 +65,7 @@ type ParsedBody = {
   billingPeriodId: string;
   householdIds?: string[];
   manualReadings?: ManualReadingInput[];
+  seedReadings?: SeedReadingInput[];
 };
 
 /**
@@ -156,7 +158,77 @@ function parseBody(raw: unknown): { parsed: ParsedBody } | ParseError {
     manualReadings = out;
   }
 
-  return { parsed: { billingPeriodId, householdIds, manualReadings } };
+  // seedReadings — optional array of { deviceId, dialReadingKwh, readAt, startKwh } (#339).
+  //
+  // All four are required together. `startKwh` is derived by the client as
+  // `dialReadingKwh − usage(period start → readAt)`.
+  //
+  // WHAT THIS VALIDATES, precisely: shape, and the ordering invariant
+  // `startKwh <= dialReadingKwh` — you cannot have consumed a negative amount
+  // since the period began. It does NOT re-derive the subtraction: OpenEMS is
+  // not consulted here, so a wrong `startKwh` that still sits below the dial
+  // reading is accepted.
+  //
+  // That is a real gap and it is stated rather than papered over. Re-deriving
+  // server-side is buildable — `POST /api/openems/energy` already answers
+  // usage over an arbitrary window — and is tracked separately rather than
+  // claimed here. An earlier version of this comment asserted the
+  // recomputation; the comment was wrong, not the code, and a comment
+  // promising a stronger guarantee than the code delivers is the exact defect
+  // this repo has spent three days removing from migrations.
+  //
+  // The inputs travel with the derived value regardless, so a wrong seed stays
+  // diagnosable a year later instead of anonymous.
+  let seedReadings: SeedReadingInput[] | undefined;
+  if (rec.seedReadings !== undefined) {
+    if (!Array.isArray(rec.seedReadings)) {
+      return { error: "seedReadings must be an array" };
+    }
+    const out: SeedReadingInput[] = [];
+    const seenDevices = new Set<string>();
+    for (let i = 0; i < rec.seedReadings.length; i++) {
+      const r = rec.seedReadings[i] as Record<string, unknown>;
+      if (!r || typeof r !== "object") {
+        return { error: `seedReadings[${i}] must be an object` };
+      }
+      if (typeof r.deviceId !== "string" || !UUID_RE.test(r.deviceId)) {
+        return { error: `seedReadings[${i}].deviceId must be a UUID` };
+      }
+      // One seed per device. Two entries for the same meter is a client bug,
+      // and silently taking the last one would make which reading was used
+      // depend on array order.
+      if (seenDevices.has(r.deviceId)) {
+        return { error: `seedReadings has more than one entry for device ${r.deviceId}` };
+      }
+      seenDevices.add(r.deviceId);
+      for (const f of ["dialReadingKwh", "startKwh"] as const) {
+        const v = r[f];
+        if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+          return {
+            error: `seedReadings[${i}].${f} must be a non-negative finite number`,
+          };
+        }
+      }
+      if (typeof r.readAt !== "string" || Number.isNaN(Date.parse(r.readAt))) {
+        return { error: `seedReadings[${i}].readAt must be an ISO timestamp` };
+      }
+      // The dial cannot read less than the period's own usage implies.
+      if ((r.startKwh as number) > (r.dialReadingKwh as number)) {
+        return {
+          error: `seedReadings[${i}].startKwh cannot exceed dialReadingKwh`,
+        };
+      }
+      out.push({
+        deviceId: r.deviceId,
+        dialReadingKwh: r.dialReadingKwh as number,
+        readAt: r.readAt,
+        startKwh: r.startKwh as number,
+      });
+    }
+    seedReadings = out;
+  }
+
+  return { parsed: { billingPeriodId, householdIds, manualReadings, seedReadings } };
 }
 
 export async function POST(request: NextRequest) {
@@ -192,6 +264,7 @@ export async function POST(request: NextRequest) {
     periodId: parsed.billingPeriodId,
     householdIds: parsed.householdIds,
     manualReadings: parsed.manualReadings,
+    seedReadings: parsed.seedReadings,
     mode: "write",
     actorUserId: user.id,
   });

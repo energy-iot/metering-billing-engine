@@ -33,6 +33,15 @@ export function errorCodeCopy(err: PartialFailureError): string {
       return `${name} has an invalid manual reading.`;
     case "unmetered_no_manual":
       return `${name} has no meter and no manual reading provided.`;
+    case "needs_seed_reading":
+      // #339. This message decides whether the operator walks to the meter or
+      // types a zero to clear a block, so it must not read as a validation
+      // complaint. It says why THIS household and not the others — without the
+      // "billed before it was connected" clause the reasonable conclusion is
+      // that something is broken, and the next action is a support message
+      // rather than a walk to the wall — and it names the number wanted in the
+      // operator's terms rather than as "a seed" or "start_kwh".
+      return `${name}'s meter was billed before it was connected to OpenEMS — enter the reading from the meter to bill this household.`;
     default:
       return `${name}: ${err.error}`;
   }
