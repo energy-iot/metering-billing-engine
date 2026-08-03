@@ -56,6 +56,9 @@ export function BillingTable({
   isSuperAdmin = false,
   communityId,
   edgeAvailableByHouseholdId,
+  seedNeededByHouseholdId,
+  priorHintByHouseholdId,
+  deviceIdByHouseholdId,
   actorByLineItemId,
 }: {
   microgridId: string;
@@ -77,6 +80,12 @@ export function BillingTable({
    * Defaults to `true` when a household id is missing from the map.
    */
   edgeAvailableByHouseholdId?: Record<string, boolean>;
+  /** #339 — households whose meter has no prior MBE reading. */
+  seedNeededByHouseholdId?: Record<string, boolean>;
+  /** #339 — the household's last recorded end_kwh, shown as a hint only. */
+  priorHintByHouseholdId?: Record<string, number | null>;
+  /** #339 — primary consumption meter per household, for the seed payload. */
+  deviceIdByHouseholdId?: Record<string, string>;
   /**
    * Map of `billing_line_items.id → actor display name` resolved via the
    * `user_directory!entered_by_user_id` join in the page loader. Drives
@@ -947,6 +956,10 @@ export function BillingTable({
           billingPeriodId={period.id}
           households={households}
           edgeAvailableByHouseholdId={edgeAvailableByHouseholdId ?? {}}
+          seedNeededByHouseholdId={seedNeededByHouseholdId ?? {}}
+          priorHintByHouseholdId={priorHintByHouseholdId ?? {}}
+          deviceIdByHouseholdId={deviceIdByHouseholdId ?? {}}
+          periodStartDate={period.start_date}
         />
       )}
 

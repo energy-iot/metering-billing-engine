@@ -550,3 +550,145 @@ describe("PreflightPanel — Generate button label", () => {
     expect(btn?.textContent).toContain("Generate (2 households)");
   });
 });
+
+// #339 — the seed section. Shipped without tests in the first pass; these pin
+// the three things that decide whether real readings get collected or zeroes
+// get typed to clear a form.
+describe("PreflightPanel — seed readings (#339)", () => {
+  const DEVICE = "d-1";
+
+  function renderWithSeed(opts: {
+    seedNeeded?: boolean;
+    priorHint?: number | null;
+  } = {}) {
+    const households = [makeHousehold("h-1", "Nakato")];
+    return render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={households}
+          edgeAvailableByHouseholdId={{ "h-1": true }}
+          seedNeededByHouseholdId={{ "h-1": opts.seedNeeded ?? true }}
+          priorHintByHouseholdId={{ "h-1": opts.priorHint ?? null }}
+          deviceIdByHouseholdId={{ "h-1": DEVICE }}
+          periodStartDate="2026-08-01"
+        />
+      </Wrap>,
+    );
+  }
+
+  function energyResponse(totalKwh: number) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ deviceId: DEVICE, totalKwh }] }),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The section must be ABSENT when nothing needs a seed. An always-present
+  // optional field is skipped, and a skipped seed is indistinguishable from a
+  // seeded zero — which is the defect being fixed.
+  it("does not render the section when no household needs a seed", () => {
+    renderWithSeed({ seedNeeded: false });
+    expect(
+      document.querySelector('[data-testid="preflight-needs-seed-section"]'),
+    ).toBeNull();
+  });
+
+  it("renders the section and blocks Generate until the reading resolves", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(214)));
+    renderWithSeed();
+
+    expect(
+      document.querySelector('[data-testid="preflight-needs-seed-section"]'),
+    ).not.toBeNull();
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => expect(btn.disabled).toBe(false));
+  });
+
+  // The operator types one number and a different one is stored. If the
+  // derived value is wrong they must be able to see WHICH input was wrong,
+  // so the arithmetic is on screen rather than behind the field.
+  it("shows the subtraction and the derived starting reading", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(214)));
+    renderWithSeed();
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => {
+      const math = document.querySelector(
+        '[data-testid="preflight-seed-math-h-1"]',
+      );
+      expect(math?.textContent).toContain("214");
+      // 4196 − 214
+      expect(math?.textContent).toContain("3,982");
+    });
+  });
+
+  // A derived value below zero means the dial reads under the usage already
+  // recorded this period — a mistyped digit, not a meter running backwards.
+  it("keeps Generate disabled when the derived reading is negative", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(5000)));
+    renderWithSeed();
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "100" } },
+    );
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-seed-math-h-1"]'),
+      ).not.toBeNull(),
+    );
+    expect(btn.disabled).toBe(true);
+  });
+
+  // The hint is the number the operator would otherwise go looking for. It is
+  // text, never a prefill: a plausible prefilled figure is confirmed by
+  // inertia, and this one is a household's number rather than this meter's.
+  it("shows the prior manual figure as a hint without prefilling the input", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    renderWithSeed({ priorHint: 4182 });
+
+    const input = document.querySelector(
+      '[data-testid="preflight-seed-dial-h-1"]',
+    ) as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(document.body.textContent).toContain("4,182");
+  });
+
+  it("says so when there is no prior manual bill, rather than showing nothing", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    renderWithSeed({ priorHint: null });
+    expect(document.body.textContent).toContain("No previous manual bill on record");
+  });
+});
