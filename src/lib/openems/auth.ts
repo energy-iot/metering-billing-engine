@@ -14,7 +14,15 @@ import aws4 from "aws4";
  * existed in two places because the append did.
  */
 export function appendJsonRpcPath(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/jsonrpc`;
+  // Scanned as a loop rather than `replace(/\/+$/, "")` on purpose. That regex
+  // is a polynomial ReDoS on operator-supplied input (CodeQL js/polynomial-redos,
+  // high) — `+$` backtracks quadratically over a string of many slashes, and
+  // this value comes straight from a form field. The loop is linear and cannot
+  // backtrack. Do not "simplify" it back into a regex; the gate will reject it,
+  // and it would be a real slow-input path in a request handler.
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return `${baseUrl.slice(0, end)}/jsonrpc`;
 }
 
 export interface OpenEmsAuth {
