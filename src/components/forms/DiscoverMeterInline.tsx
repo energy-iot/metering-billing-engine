@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { DiscoveredDevice, EdgeDiscoveryResponse } from "@/lib/openems/types";
+import { humanReadable } from "@/lib/openems/device-descriptions";
 import type { AvailableMeter } from "@/components/forms/HouseholdWizard";
 
 export type DiscoverMeterInlineEdge = {
@@ -350,11 +351,47 @@ export function DiscoverMeterInline({
         </div>
       )}
 
+      {/* Two distinct states, previously collapsed into one message (#335).
+          `discovered.length === 0` is genuinely "nothing found" and the
+          original copy is correct for it. `discovered.length > 0` with no
+          candidates means devices WERE found and none classify as consumption
+          meters — and the old sentence told the operator to check that the
+          edge was online and had components configured, both of which are
+          already true in that branch (it is guarded by `edgeOnline`, and
+          discovery returned devices). That sent a pilot operator to rename his
+          meter to contain a keyword, when the device-type control has existed
+          since #151. */}
       {showResults && edgeOnline && candidates.length === 0 && (
-        <p className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
-          No new consumption meters on this edge. Make sure the edge is online
-          and has components configured.
-        </p>
+        discovered.length === 0 ? (
+          <p className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
+            No new consumption meters on this edge. Make sure the edge is online
+            and has components configured.
+          </p>
+        ) : (
+          <div className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
+            <p className="text-foreground">
+              Found {discovered.length}{" "}
+              {discovered.length === 1 ? "device" : "devices"} on this edge, but{" "}
+              {discovered.length === 1 ? "it is not" : "none are"} classified as
+              a consumption meter, so {discovered.length === 1 ? "it" : "none"}{" "}
+              can bill a household.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {discovered.map((d) => (
+                <li key={d.componentId} className="font-mono text-xs">
+                  {d.alias || d.componentId}
+                  <span className="ml-2 font-sans text-muted-foreground">
+                    — {humanReadable(d.suggestedDeviceType)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              If one of these meters a household, open it on the edge&apos;s
+              device list and change its type to Consumption meter.
+            </p>
+          </div>
+        )
       )}
 
       {showResults && candidates.length > 0 && (

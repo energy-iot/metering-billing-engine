@@ -860,6 +860,59 @@ describe("HouseholdWizard", () => {
       });
     });
 
+    /** A generic branded meter — the shape that classifies `other` (#335). */
+    function unclassifiedDevice(
+      componentId: string,
+      alias = "Workshop Meter (addr 10)"
+    ) {
+      return {
+        componentId,
+        factoryId: "Meter.Chint.DDSU666",
+        alias,
+        nature: "io.openems.edge.meter.api.ElectricityMeter",
+        openemsChannelAddress: null,
+        suggestedDeviceType: "other",
+        alreadyAdded: false,
+      };
+    }
+
+    // #335. Devices WERE found and none classify as consumption meters. The
+    // old copy told the operator to check that the edge was online and had
+    // components configured — both already true in this branch — and said
+    // nothing about the classification that removed their meter.
+    it("discovery that found only unclassified devices names them and explains why", async () => {
+      const { impl } = makeUrlDispatcher({
+        discover: [discoveryResponse([unclassifiedDevice("meter0")])],
+        devices: [],
+        household: [],
+      });
+      fetchMock.mockImplementation(impl as never);
+
+      renderWizard({
+        availableMeters: [],
+        edges: [EDGE_1],
+        edgeIdsWithoutConsumptionMeter: [EDGE_1.id],
+      });
+      fillDisplayName("HH");
+      fillPhone("+256");
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(/Address line 1/i)).toBeDefined()
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Discover meters/i })
+      );
+
+      // Names the device the operator can see, and its classification.
+      await waitFor(() =>
+        expect(screen.getByText(/Workshop Meter \(addr 10\)/)).toBeDefined()
+      );
+      expect(screen.getByText(/not classified as a consumption meter/i)).toBeDefined();
+      // And must NOT tell them to check two things that are already true.
+      expect(screen.queryByText(/Make sure the edge is online/i)).toBeNull();
+    });
+
     it("empty discovery (no consumption meters after filter) renders the no-meters message", async () => {
       const { impl } = makeUrlDispatcher({
         discover: [discoveryResponse([])],
