@@ -139,4 +139,46 @@ describe("createOpenEmsClient(config)", () => {
     });
   });
 
+
+  // #326 — NoAuth is the direct_url path, and it had NO resolveUrl coverage at
+  // all. The trailing-slash defect existed at both append sites; only the
+  // BasicAuth one had a test, and that test asserted the bug as correct.
+  describe("NoAuth.resolveUrl (#326)", () => {
+    const noAuth = new NoAuth();
+
+    it("appends /jsonrpc", () => {
+      expect(noAuth.resolveUrl("https://ems.example/rest")).toBe(
+        "https://ems.example/rest/jsonrpc"
+      );
+    });
+
+    it("strips a trailing slash rather than producing a double slash", () => {
+      expect(noAuth.resolveUrl("https://ems.example/rest/")).toBe(
+        "https://ems.example/rest/jsonrpc"
+      );
+    });
+
+    it("strips repeated trailing slashes", () => {
+      expect(noAuth.resolveUrl("https://ems.example/rest///")).toBe(
+        "https://ems.example/rest/jsonrpc"
+      );
+    });
+  });
+
+  // SigV4 signs the root URL — the Lambda routes internally — so it must NOT
+  // acquire the strip. Pinned because "make them consistent" is the plausible
+  // wrong fix.
+  describe("SigV4Auth.resolveUrl is unaffected (#326)", () => {
+    it("returns the URL unchanged, trailing slash included", () => {
+      const auth = new SigV4Auth({
+        accessKeyId: "AKIA",
+        secretAccessKey: "s",
+        region: "us-east-1",
+      });
+      expect(auth.resolveUrl("https://abc.lambda-url.us-east-1.on.aws/")).toBe(
+        "https://abc.lambda-url.us-east-1.on.aws/"
+      );
+    });
+  });
+
 });

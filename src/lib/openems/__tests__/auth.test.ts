@@ -27,10 +27,26 @@ describe("BasicAuth", () => {
     );
   });
 
-  it("resolveUrl works with trailing slash", () => {
-    // Preserves exactly what the caller passes
+  // #326. This test previously asserted the double slash as CORRECT, named
+  // "works with trailing slash" and commented "Preserves exactly what the
+  // caller passes" — so the defect shipped with a green test in front of it and
+  // a reviewer scanning the suite saw trailing slashes covered.
+  it("resolveUrl strips a trailing slash before appending", () => {
     expect(auth.resolveUrl("http://localhost:8075/")).toBe(
-      "http://localhost:8075//jsonrpc"
+      "http://localhost:8075/jsonrpc"
+    );
+  });
+
+  it("resolveUrl strips repeated trailing slashes", () => {
+    expect(auth.resolveUrl("http://localhost:8075///")).toBe(
+      "http://localhost:8075/jsonrpc"
+    );
+  });
+
+  it("resolveUrl preserves a path segment while stripping its trailing slash", () => {
+    // The real shape: an operator whose backend is proxied under /rest.
+    expect(auth.resolveUrl("https://ems.example/rest/")).toBe(
+      "https://ems.example/rest/jsonrpc"
     );
   });
 

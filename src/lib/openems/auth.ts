@@ -1,5 +1,22 @@
 import aws4 from "aws4";
 
+/**
+ * Append the JSON-RPC path to a stored backend URL.
+ *
+ * Trailing slashes are stripped first (#326). An operator who saves
+ * `https://host/rest/` would otherwise get `https://host/rest//jsonrpc`, and
+ * whether that matters is entirely up to their server: some normalise it, some
+ * 404, some route it to a different location block than the one intended. The
+ * operator typed something that looks right and cannot see the difference from
+ * any screen we show them.
+ *
+ * Exported so `NoAuth` in ./index.ts uses the same implementation — the bug
+ * existed in two places because the append did.
+ */
+export function appendJsonRpcPath(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/jsonrpc`;
+}
+
 export interface OpenEmsAuth {
   /** Resolve the full request URL given the configured baseUrl. */
   resolveUrl(baseUrl: string): string;
@@ -22,7 +39,7 @@ export class BasicAuth implements OpenEmsAuth {
   ) {}
 
   resolveUrl(baseUrl: string): string {
-    return `${baseUrl}/jsonrpc`;
+    return appendJsonRpcPath(baseUrl);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
