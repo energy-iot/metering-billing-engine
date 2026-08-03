@@ -36,6 +36,7 @@ let lastGenerateCall: {
   periodId?: string;
   householdIds?: string[];
   manualReadings?: unknown[];
+  seedReadings?: unknown[];
   mode?: string;
   actorUserId?: string | null;
 } | null = null;
@@ -59,6 +60,7 @@ vi.mock("@/lib/billing/generate", async () => ({
     periodId: string;
     householdIds?: string[];
     manualReadings?: unknown[];
+    seedReadings?: unknown[];
     mode: string;
     actorUserId: string | null;
   }) => {
@@ -66,6 +68,7 @@ vi.mock("@/lib/billing/generate", async () => ({
       periodId: params.periodId,
       householdIds: params.householdIds,
       manualReadings: params.manualReadings,
+      seedReadings: params.seedReadings,
       mode: params.mode,
       actorUserId: params.actorUserId,
     };
@@ -284,4 +287,73 @@ describe("POST /api/billing/generate (#173 BC1)", () => {
     const json = await res.json();
     expect(json.error).toBe("Billing period not found");
   });
+
+  // #339 — seedReadings validation. The validator shipped with no tests, and
+  // its docstring claimed a server-side recomputation it does not perform;
+  // both are corrected here. These pin what it ACTUALLY guarantees.
+  describe("seedReadings (#339)", () => {
+    const DEVICE = "660e8400-e29b-41d4-a716-446655443001";
+    const ok = {
+      deviceId: DEVICE,
+      dialReadingKwh: 4196,
+      readAt: "2026-08-20T09:00:00Z",
+      startKwh: 3982,
+    };
+
+    async function post(seedReadings: unknown) {
+      const { POST } = await import("../route");
+      return POST(makePostRequest({ billingPeriodId: PERIOD_ID, seedReadings }));
+    }
+
+    it("passes a well-formed array through to runGenerationFor", async () => {
+      const res = await post([ok]);
+      expect(res.status).toBe(200);
+      expect(lastGenerateCall?.seedReadings).toEqual([ok]);
+    });
+
+    it("400 when seedReadings is not an array", async () => {
+      const res = await post({ deviceId: DEVICE });
+      expect(res.status).toBe(400);
+    });
+
+    it("400 on a non-UUID deviceId", async () => {
+      const res = await post([{ ...ok, deviceId: "not-a-uuid" }]);
+      expect(res.status).toBe(400);
+    });
+
+    it("400 on a negative or non-finite reading", async () => {
+      expect((await post([{ ...ok, dialReadingKwh: -1 }])).status).toBe(400);
+      expect((await post([{ ...ok, startKwh: Number.NaN }])).status).toBe(400);
+    });
+
+    it("400 on an unparseable readAt", async () => {
+      const res = await post([{ ...ok, readAt: "yesterday" }]);
+      expect(res.status).toBe(400);
+    });
+
+    // The ordering invariant: you cannot have consumed a negative amount since
+    // the period began, so a startKwh above the dial reading is provably wrong
+    // regardless of what OpenEMS says.
+    it("400 when startKwh exceeds dialReadingKwh", async () => {
+      const res = await post([{ ...ok, startKwh: 5000 }]);
+      expect(res.status).toBe(400);
+    });
+
+    // Two entries for one meter would make the reading used depend on array
+    // order, which is a silent wrong answer rather than a loud one.
+    it("400 on duplicate deviceId entries", async () => {
+      const res = await post([ok, { ...ok, startKwh: 1 }]);
+      expect(res.status).toBe(400);
+    });
+
+    // What it does NOT do, pinned so the gap stays visible: a startKwh that is
+    // simply wrong but below the dial reading is accepted. Re-deriving it
+    // server-side is tracked separately; this test is what stops the docstring
+    // drifting back to claiming otherwise.
+    it("ACCEPTS a plausible-but-wrong startKwh below the dial reading", async () => {
+      const res = await post([{ ...ok, startKwh: 1 }]);
+      expect(res.status).toBe(200);
+    });
+  });
+
 });

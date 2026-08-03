@@ -161,12 +161,24 @@ function parseBody(raw: unknown): { parsed: ParsedBody } | ParseError {
   // seedReadings — optional array of { deviceId, dialReadingKwh, readAt, startKwh } (#339).
   //
   // All four are required together. `startKwh` is derived by the client as
-  // `dialReadingKwh − usage(period start → readAt)`, and the derivation is
-  // RE-COMPUTED server-side against OpenEMS before use — the client's
-  // arithmetic is a display convenience, not a trusted input, for the same
-  // reason every other value on this route is re-validated. The inputs are
-  // carried alongside the result so a wrong seed is diagnosable later rather
-  // than anonymous.
+  // `dialReadingKwh − usage(period start → readAt)`.
+  //
+  // WHAT THIS VALIDATES, precisely: shape, and the ordering invariant
+  // `startKwh <= dialReadingKwh` — you cannot have consumed a negative amount
+  // since the period began. It does NOT re-derive the subtraction: OpenEMS is
+  // not consulted here, so a wrong `startKwh` that still sits below the dial
+  // reading is accepted.
+  //
+  // That is a real gap and it is stated rather than papered over. Re-deriving
+  // server-side is buildable — `POST /api/openems/energy` already answers
+  // usage over an arbitrary window — and is tracked separately rather than
+  // claimed here. An earlier version of this comment asserted the
+  // recomputation; the comment was wrong, not the code, and a comment
+  // promising a stronger guarantee than the code delivers is the exact defect
+  // this repo has spent three days removing from migrations.
+  //
+  // The inputs travel with the derived value regardless, so a wrong seed stays
+  // diagnosable a year later instead of anonymous.
   let seedReadings: SeedReadingInput[] | undefined;
   if (rec.seedReadings !== undefined) {
     if (!Array.isArray(rec.seedReadings)) {
