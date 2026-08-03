@@ -675,7 +675,7 @@ describe("PreflightPanel — seed readings (#339)", () => {
   // The hint is the number the operator would otherwise go looking for. It is
   // text, never a prefill: a plausible prefilled figure is confirmed by
   // inertia, and this one is a household's number rather than this meter's.
-  it("shows the prior manual figure as a hint without prefilling the input", () => {
+  it("shows the prior manual figure as a cause line without prefilling the input", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
     renderWithSeed({ priorHint: 4182 });
 
@@ -683,12 +683,64 @@ describe("PreflightPanel — seed readings (#339)", () => {
       '[data-testid="preflight-seed-dial-h-1"]',
     ) as HTMLInputElement;
     expect(input.value).toBe("");
-    expect(document.body.textContent).toContain("4,182");
+
+    const cause = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    expect(cause?.textContent).toContain("Billed manually until now");
+    expect(cause?.textContent).toContain("4,182");
+    // The other branch must NOT also appear.
+    expect(cause?.textContent).not.toContain("No earlier reading on record");
   });
 
-  it("says so when there is no prior manual bill, rather than showing nothing", () => {
+  it("says there is no earlier reading, and that zero is a real reading", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
     renderWithSeed({ priorHint: null });
-    expect(document.body.textContent).toContain("No previous manual bill on record");
+
+    const cause = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    expect(cause?.textContent).toContain("No earlier reading on record");
+    // The permission to enter zero is what makes this a question rather than
+    // a wall — without it the operator's only exit is to invent a number.
+    expect(cause?.textContent).toContain("enter zero");
+    expect(cause?.textContent).not.toContain("Billed manually until now");
+  });
+
+  // THE shape that two single-row renders cannot catch. A cause computed at
+  // section level rather than per row still looks correct in any render
+  // containing one state; only a render holding BOTH states at once
+  // distinguishes them. This is the defect the copy change exists to fix.
+  it("gives each row its own cause when two households differ", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={[makeHousehold("h-1", "Nakato"), makeHousehold("h-2", "Okello")]}
+          edgeAvailableByHouseholdId={{ "h-1": true, "h-2": true }}
+          seedNeededByHouseholdId={{ "h-1": true, "h-2": true }}
+          priorHintByHouseholdId={{ "h-1": 4182, "h-2": null }}
+          deviceIdByHouseholdId={{ "h-1": "d-1", "h-2": "d-2" }}
+          periodStartDate="2026-08-01"
+        />
+      </Wrap>,
+    );
+
+    const withHistory = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    const withoutHistory = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-2"]',
+    );
+
+    expect(withHistory?.textContent).toContain("Billed manually until now");
+    expect(withoutHistory?.textContent).toContain("No earlier reading on record");
+    // And neither leaks the other's sentence — a section-level branch would
+    // give both rows whichever one it computed.
+    expect(withHistory?.textContent).not.toContain("No earlier reading on record");
+    expect(withoutHistory?.textContent).not.toContain("Billed manually until now");
   });
 });

@@ -415,11 +415,16 @@ export function PreflightPanel(props: PreflightPanelProps) {
             <h4 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
               Needs a starting reading ({needsSeed.length})
             </h4>
+            {/* One string, no branch. The CAUSE is a per-household fact and
+                belongs on the row: a microgrid with history can be adding a
+                brand-new household today, so a section-level "these were
+                billed before they were connected" is false for that row while
+                true for its neighbour. Stating an unestablished cause is
+                #335's defect, and this section would have reproduced it. */}
             <p className="mb-2 text-[12px] text-muted-foreground">
-              These meters were billed before they were connected to OpenEMS,
-              so MBE does not know what they read at the start of this period.
-              Enter the reading shown on the meter now — the starting reading
-              is worked out from it.
+              MBE has no starting reading for these meters, so it cannot work
+              out what to print as the previous reading on the invoice. Enter
+              what each meter reads now.
             </p>
             <ul className="space-y-3">
               {needsSeed.map((h) => {
@@ -457,17 +462,21 @@ export function PreflightPanel(props: PreflightPanelProps) {
                         }
                       }}
                     />
-                    {hint != null && (
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        Last manual bill for this household ended at{" "}
-                        {hint.toLocaleString()} kWh
-                      </p>
-                    )}
-                    {hint == null && (
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        No previous manual bill on record
-                      </p>
-                    )}
+                    {/* Per-row cause. `hint` is this household's own last
+                        recorded end_kwh, so its presence IS the per-row
+                        signal: non-null means this household has been billed
+                        here before, null means it has not — whether because
+                        the household is new or the microgrid is. Those are the
+                        same situation from the operator's side and take the
+                        same sentence. */}
+                    <p
+                      className="mt-1 text-[11px] text-muted-foreground"
+                      data-testid={`preflight-seed-cause-${h.id}`}
+                    >
+                      {hint != null
+                        ? `Billed manually until now — the last manual bill ended at ${hint.toLocaleString()} kWh.`
+                        : "No earlier reading on record. If this meter was installed for this period and started at zero, enter zero — that is a real reading, not a placeholder."}
+                    </p>
 
                     {/* The subtraction is on screen rather than behind the
                         field: the operator types one number and a different
