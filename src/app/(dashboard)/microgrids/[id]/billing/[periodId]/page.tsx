@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { computeSeedNeeded } from "@/lib/billing/seed-detection";
 import type {
   BillingLineItem,
   BillingPeriod,
@@ -37,6 +38,7 @@ export default async function BillingPeriodDetailPage({
     household_devices: Array<{
       role: string;
       devices: {
+        id: string;
         openems_component_id: string | null;
         edges: { openems_edge_id: string | null } | null;
       } | null;
@@ -85,6 +87,7 @@ export default async function BillingPeriodDetailPage({
          household_devices(
            role,
            devices(
+             id,
              openems_component_id,
              edges(openems_edge_id)
            )
@@ -172,6 +175,7 @@ export default async function BillingPeriodDetailPage({
   // available iff a primary_consumption_meter device exists AND its
   // edge.openems_edge_id AND device.openems_component_id are non-null.
   const edgeAvailableByHouseholdId: Record<string, boolean> = {};
+  const deviceIdByHouseholdId: Record<string, string> = {};
   for (const row of householdEdges ?? []) {
     const primaryHD = row.household_devices.find(
       (hd) => hd.role === "primary_consumption_meter",
@@ -183,6 +187,77 @@ export default async function BillingPeriodDetailPage({
       device.openems_component_id != null &&
       edge != null &&
       edge.openems_edge_id != null;
+    if (primaryHD?.devices) {
+      deviceIdByHouseholdId[row.id] = (primaryHD as { devices: { id?: string } })
+        .devices.id as string;
+    }
+  }
+
+  // #339 — which households need a starting reading before this period can
+  // generate.
+  //
+  // This MUST agree with `runGenerationFor`'s own condition, or the panel asks
+  // for readings generation does not want (or worse, does not ask and
+  // generation refuses). Same shape as `generate.ts`'s priorEndKwhMap: prior
+  // periods for this microgrid, line items with a non-null end_kwh, keyed by
+  // device. A device with no such row and an available edge is one whose
+  // billing history predates its OpenEMS connection.
+  const seedNeededByHouseholdId: Record<string, boolean> = {};
+  const priorHintByHouseholdId: Record<string, number | null> = {};
+  const deviceIds = Object.values(deviceIdByHouseholdId).filter(Boolean);
+
+  if (deviceIds.length > 0) {
+    const { data: priorPeriods } = await supabase
+      .from("billing_periods")
+      .select("id")
+      .eq("microgrid_id", id)
+      .lte("end_date", period.start_date)
+      .neq("id", period.id);
+
+    const priorIds = (priorPeriods ?? []).map((p) => p.id);
+    const priorEndByDevice = new Set<string>();
+
+    if (priorIds.length > 0) {
+      const { data: priorItems } = await supabase
+        .from("billing_line_items")
+        .select("device_id, end_kwh")
+        .in("billing_period_id", priorIds)
+        .in("device_id", deviceIds)
+        .not("end_kwh", "is", null);
+      for (const it of priorItems ?? []) {
+        if (it.device_id) priorEndByDevice.add(it.device_id);
+      }
+
+      // The hint line: the household's own last recorded end_kwh, including
+      // rows written before the device existed (device_id IS NULL). Shown as
+      // text and NEVER prefilled — it is a household figure, not a reading of
+      // this meter, and a prefilled plausible number is the failure mode.
+      const { data: hhPrior } = await supabase
+        .from("billing_line_items")
+        .select("household_id, end_kwh, billing_period_id")
+        .in("billing_period_id", priorIds)
+        .not("end_kwh", "is", null);
+      const order = new Map(priorIds.map((pid, i) => [pid, i]));
+      const sorted = [...(hhPrior ?? [])].sort(
+        (a, b) =>
+          (order.get(a.billing_period_id) ?? 999) -
+          (order.get(b.billing_period_id) ?? 999)
+      );
+      for (const it of sorted) {
+        if (it.household_id && !(it.household_id in priorHintByHouseholdId)) {
+          priorHintByHouseholdId[it.household_id] = Number(it.end_kwh);
+        }
+      }
+    }
+
+    Object.assign(
+      seedNeededByHouseholdId,
+      computeSeedNeeded({
+        deviceIdByHouseholdId,
+        edgeAvailableByHouseholdId,
+        devicesWithPriorEnd: priorEndByDevice,
+      })
+    );
   }
 
   // BC2 (#174) — resolve the actor display name per line item via a
@@ -247,6 +322,9 @@ export default async function BillingPeriodDetailPage({
         isSuperAdmin={isSuperAdmin}
         communityId={communityId}
         edgeAvailableByHouseholdId={edgeAvailableByHouseholdId}
+        seedNeededByHouseholdId={seedNeededByHouseholdId}
+        priorHintByHouseholdId={priorHintByHouseholdId}
+        deviceIdByHouseholdId={deviceIdByHouseholdId}
         actorByLineItemId={actorByLineItemId}
       />
     </>

@@ -550,3 +550,197 @@ describe("PreflightPanel — Generate button label", () => {
     expect(btn?.textContent).toContain("Generate (2 households)");
   });
 });
+
+// #339 — the seed section. Shipped without tests in the first pass; these pin
+// the three things that decide whether real readings get collected or zeroes
+// get typed to clear a form.
+describe("PreflightPanel — seed readings (#339)", () => {
+  const DEVICE = "d-1";
+
+  function renderWithSeed(opts: {
+    seedNeeded?: boolean;
+    priorHint?: number | null;
+  } = {}) {
+    const households = [makeHousehold("h-1", "Nakato")];
+    return render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={households}
+          edgeAvailableByHouseholdId={{ "h-1": true }}
+          seedNeededByHouseholdId={{ "h-1": opts.seedNeeded ?? true }}
+          priorHintByHouseholdId={{ "h-1": opts.priorHint ?? null }}
+          deviceIdByHouseholdId={{ "h-1": DEVICE }}
+          periodStartDate="2026-08-01"
+        />
+      </Wrap>,
+    );
+  }
+
+  function energyResponse(totalKwh: number) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ deviceId: DEVICE, totalKwh }] }),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The section must be ABSENT when nothing needs a seed. An always-present
+  // optional field is skipped, and a skipped seed is indistinguishable from a
+  // seeded zero — which is the defect being fixed.
+  it("does not render the section when no household needs a seed", () => {
+    renderWithSeed({ seedNeeded: false });
+    expect(
+      document.querySelector('[data-testid="preflight-needs-seed-section"]'),
+    ).toBeNull();
+  });
+
+  it("renders the section and blocks Generate until the reading resolves", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(214)));
+    renderWithSeed();
+
+    expect(
+      document.querySelector('[data-testid="preflight-needs-seed-section"]'),
+    ).not.toBeNull();
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => expect(btn.disabled).toBe(false));
+  });
+
+  // The operator types one number and a different one is stored. If the
+  // derived value is wrong they must be able to see WHICH input was wrong,
+  // so the arithmetic is on screen rather than behind the field.
+  it("shows the subtraction and the derived starting reading", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(214)));
+    renderWithSeed();
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => {
+      const math = document.querySelector(
+        '[data-testid="preflight-seed-math-h-1"]',
+      );
+      expect(math?.textContent).toContain("214");
+      // 4196 − 214
+      expect(math?.textContent).toContain("3,982");
+    });
+  });
+
+  // A derived value below zero means the dial reads under the usage already
+  // recorded this period — a mistyped digit, not a meter running backwards.
+  it("keeps Generate disabled when the derived reading is negative", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(5000)));
+    renderWithSeed();
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "100" } },
+    );
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-seed-math-h-1"]'),
+      ).not.toBeNull(),
+    );
+    expect(btn.disabled).toBe(true);
+  });
+
+  // The hint is the number the operator would otherwise go looking for. It is
+  // text, never a prefill: a plausible prefilled figure is confirmed by
+  // inertia, and this one is a household's number rather than this meter's.
+  it("shows the prior manual figure as a cause line without prefilling the input", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    renderWithSeed({ priorHint: 4182 });
+
+    const input = document.querySelector(
+      '[data-testid="preflight-seed-dial-h-1"]',
+    ) as HTMLInputElement;
+    expect(input.value).toBe("");
+
+    const cause = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    expect(cause?.textContent).toContain("Billed manually until now");
+    expect(cause?.textContent).toContain("4,182");
+    // The other branch must NOT also appear.
+    expect(cause?.textContent).not.toContain("No earlier reading on record");
+  });
+
+  it("says there is no earlier reading, and that zero is a real reading", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    renderWithSeed({ priorHint: null });
+
+    const cause = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    expect(cause?.textContent).toContain("No earlier reading on record");
+    // The permission to enter zero is what makes this a question rather than
+    // a wall — without it the operator's only exit is to invent a number.
+    expect(cause?.textContent).toContain("enter zero");
+    expect(cause?.textContent).not.toContain("Billed manually until now");
+  });
+
+  // THE shape that two single-row renders cannot catch. A cause computed at
+  // section level rather than per row still looks correct in any render
+  // containing one state; only a render holding BOTH states at once
+  // distinguishes them. This is the defect the copy change exists to fix.
+  it("gives each row its own cause when two households differ", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(energyResponse(0)));
+    render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={[makeHousehold("h-1", "Nakato"), makeHousehold("h-2", "Okello")]}
+          edgeAvailableByHouseholdId={{ "h-1": true, "h-2": true }}
+          seedNeededByHouseholdId={{ "h-1": true, "h-2": true }}
+          priorHintByHouseholdId={{ "h-1": 4182, "h-2": null }}
+          deviceIdByHouseholdId={{ "h-1": "d-1", "h-2": "d-2" }}
+          periodStartDate="2026-08-01"
+        />
+      </Wrap>,
+    );
+
+    const withHistory = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-1"]',
+    );
+    const withoutHistory = document.querySelector(
+      '[data-testid="preflight-seed-cause-h-2"]',
+    );
+
+    expect(withHistory?.textContent).toContain("Billed manually until now");
+    expect(withoutHistory?.textContent).toContain("No earlier reading on record");
+    // And neither leaks the other's sentence — a section-level branch would
+    // give both rows whichever one it computed.
+    expect(withHistory?.textContent).not.toContain("No earlier reading on record");
+    expect(withoutHistory?.textContent).not.toContain("Billed manually until now");
+  });
+});

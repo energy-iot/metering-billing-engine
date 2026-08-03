@@ -51,12 +51,30 @@ export interface PreflightPanelProps {
   households: Household[];
   /** Whether each household has a primary_consumption_meter on a configured edge. */
   edgeAvailableByHouseholdId: Record<string, boolean>;
+  /** #339 — households whose meter has no prior MBE reading. */
+  seedNeededByHouseholdId?: Record<string, boolean>;
+  /** #339 — the household's last recorded end_kwh. Hint text only; never
+   *  prefilled, because it is a household figure rather than a reading of
+   *  this meter and a plausible prefill is confirmed by inertia. */
+  priorHintByHouseholdId?: Record<string, number | null>;
+  /** #339 — primary consumption meter per household. */
+  deviceIdByHouseholdId?: Record<string, string>;
+  /** #339 — period start, the lower bound of the elapsed-usage query. */
+  periodStartDate?: string;
 }
 
 interface RowFormState {
   startKwh: string;
   endKwh: string;
   reason: string;
+  /** #339 — what the operator read on the dial. */
+  dialReading: string;
+  /** #339 — when they read it. Not "now": a dial read in the morning and
+   *  typed that evening is wrong by the usage in between. */
+  readAt: string;
+  /** #339 — usage from period start to readAt, fetched from OpenEMS. */
+  elapsedKwh: number | null;
+  elapsedState: "idle" | "loading" | "error";
   /** Only relevant for the override section. */
   overrideEnabled: boolean;
 }
@@ -71,6 +89,10 @@ const EMPTY_ROW: RowFormState = {
   startKwh: "",
   endKwh: "",
   reason: "",
+  dialReading: "",
+  readAt: "",
+  elapsedKwh: null,
+  elapsedState: "idle",
   overrideEnabled: false,
 };
 
@@ -92,6 +114,10 @@ export function PreflightPanel(props: PreflightPanelProps) {
     billingPeriodId,
     households,
     edgeAvailableByHouseholdId,
+    seedNeededByHouseholdId = {},
+    priorHintByHouseholdId = {},
+    deviceIdByHouseholdId = {},
+    periodStartDate,
   } = props;
   const router = useRouter();
 
@@ -137,6 +163,66 @@ export function PreflightPanel(props: PreflightPanelProps) {
     (h) => edgeAvailableByHouseholdId[h.id] !== false,
   );
 
+  // #339 — households whose meter has no prior reading. Disjoint from
+  // needsManual by construction: a seed is only meaningful for an
+  // edge-available device, and needsManual is exactly the not-available set.
+  const needsSeed = households.filter(
+    (h) => seedNeededByHouseholdId[h.id] === true,
+  );
+
+  /**
+   * The derived starting reading.
+   *
+   *     startKwh = dialReading − usage(period start → readAt)
+   *
+   * The operator is asked the answerable question ("what does the dial say?")
+   * rather than the unanswerable one ("what did it read on the 1st?"), and the
+   * subtraction is over the interval that actually elapsed rather than to now.
+   *
+   * Returns null while the elapsed usage is unknown, which is what keeps the
+   * Generate button disabled rather than letting a half-resolved row through.
+   */
+  function derivedSeed(hid: string): number | null {
+    const f = getRow(hid);
+    const dial = parseField(f.dialReading);
+    if (!dial.ok || f.elapsedKwh == null) return null;
+    const v = dial.value - f.elapsedKwh;
+    return Number.isFinite(v) ? v : null;
+  }
+
+  /** Fetch usage(period start → readAt) for this household's meter. */
+  async function loadElapsed(hid: string, readAtIso: string) {
+    const deviceId = deviceIdByHouseholdId[hid];
+    if (!deviceId || !periodStartDate) return;
+    setRow(hid, { elapsedState: "loading", elapsedKwh: null });
+    try {
+      const res = await fetch("/api/openems/energy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceIds: [deviceId],
+          fromDate: periodStartDate,
+          toDate: readAtIso.slice(0, 10),
+        }),
+      });
+      if (!res.ok) {
+        setRow(hid, { elapsedState: "error", elapsedKwh: null });
+        return;
+      }
+      const body = (await res.json()) as {
+        results?: Array<{ deviceId: string; totalKwh: number | null }>;
+      };
+      const hit = (body.results ?? []).find((r) => r.deviceId === deviceId);
+      if (!hit || hit.totalKwh == null) {
+        setRow(hid, { elapsedState: "error", elapsedKwh: null });
+        return;
+      }
+      setRow(hid, { elapsedState: "idle", elapsedKwh: hit.totalKwh });
+    } catch {
+      setRow(hid, { elapsedState: "error", elapsedKwh: null });
+    }
+  }
+
   // Validation — needs-manual + override-toggled rows must all be valid.
   const overrideRows = edgeReady.filter((h) => getRow(h.id).overrideEnabled);
   const requiredRows = [...needsManual, ...overrideRows];
@@ -147,10 +233,29 @@ export function PreflightPanel(props: PreflightPanelProps) {
     if (!s.ok || !e.ok) return false;
     return e.value >= s.value;
   });
+  // #339 — every seed row must resolve to a non-negative number before
+  // Generate is offered. A negative derived value means the dial reads below
+  // the period's own usage, which is a mistyped digit rather than a meter that
+  // ran backwards.
+  const allSeedsValid = needsSeed.every((h) => {
+    const v = derivedSeed(h.id);
+    return v != null && v >= 0;
+  });
+
   const totalCount = households.length;
 
   async function handleSubmit() {
-    if (!allValid) return;
+    // BOTH gates, not just the manual one. The button is disabled on
+    // `!allValid || !allSeedsValid`, but the button is not the only way in:
+    // any second caller reaching handleSubmit with an unresolved seed row
+    // would send `startKwh: derivedSeed() ?? 0`, and #341's route accepts it
+    // because 0 <= dialReading satisfies the ordering bound. That bills from
+    // zero — the exact invoice this panel exists to prevent, arriving through
+    // the panel built to prevent it.
+    //
+    // The `?? 0` below stays as a type-level floor; this makes it dead behind
+    // two independent checks rather than merely unreachable behind one.
+    if (!allValid || !allSeedsValid) return;
     setSubmitting(true);
     setErrorMsg(null);
 
@@ -174,6 +279,22 @@ export function PreflightPanel(props: PreflightPanelProps) {
         body: JSON.stringify({
           billingPeriodId,
           manualReadings,
+          // #339. Inputs travel with the derived value: the route recomputes
+          // and rejects a mismatch, and a wrong seed stays diagnosable.
+          ...(needsSeed.length > 0
+            ? {
+                seedReadings: needsSeed.map((h) => {
+                  const f = getRow(h.id);
+                  const dial = parseField(f.dialReading);
+                  return {
+                    deviceId: deviceIdByHouseholdId[h.id],
+                    dialReadingKwh: dial.ok ? dial.value : 0,
+                    readAt: f.readAt || new Date().toISOString(),
+                    startKwh: derivedSeed(h.id) ?? 0,
+                  };
+                }),
+              }
+            : {}),
         }),
       });
       const body = (await res.json().catch(() => ({}))) as {
@@ -285,6 +406,116 @@ export function PreflightPanel(props: PreflightPanelProps) {
           )}
         </Disclosure>
 
+        {/* Section 0 (#339): meters with no prior reading. Above "Needs
+            manual entry" because it blocks the same button and is rarer.
+            Absent entirely when nothing needs a seed, which is what keeps
+            this from becoming another optional field. */}
+        {needsSeed.length > 0 && (
+          <section data-testid="preflight-needs-seed-section">
+            <h4 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Needs a starting reading ({needsSeed.length})
+            </h4>
+            {/* One string, no branch. The CAUSE is a per-household fact and
+                belongs on the row: a microgrid with history can be adding a
+                brand-new household today, so a section-level "these were
+                billed before they were connected" is false for that row while
+                true for its neighbour. Stating an unestablished cause is
+                #335's defect, and this section would have reproduced it. */}
+            <p className="mb-2 text-[12px] text-muted-foreground">
+              MBE has no starting reading for these meters, so it cannot work
+              out what to print as the previous reading on the invoice. Enter
+              what each meter reads now.
+            </p>
+            <ul className="space-y-3">
+              {needsSeed.map((h) => {
+                const f = getRow(h.id);
+                const derived = derivedSeed(h.id);
+                const hint = priorHintByHouseholdId[h.id];
+                return (
+                  <li
+                    key={h.id}
+                    data-testid={`preflight-seed-row-${h.id}`}
+                    className="rounded-md border border-border p-2"
+                  >
+                    <div className="text-[12px] font-medium text-foreground">
+                      {h.display_name}
+                    </div>
+                    <label
+                      htmlFor={`seed-dial-${h.id}`}
+                      className="mt-1 block text-[11px] text-muted-foreground"
+                    >
+                      Reading on the meter (kWh)
+                    </label>
+                    <input
+                      id={`seed-dial-${h.id}`}
+                      data-testid={`preflight-seed-dial-${h.id}`}
+                      type="number"
+                      inputMode="decimal"
+                      className="w-40 rounded-md border border-border bg-card px-2 py-1 font-mono text-xs"
+                      value={f.dialReading}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setRow(h.id, { dialReading: v });
+                        const when = f.readAt || new Date().toISOString();
+                        if (f.elapsedKwh == null && f.elapsedState !== "loading") {
+                          void loadElapsed(h.id, when);
+                        }
+                      }}
+                    />
+                    {/* Per-row cause. `hint` is this household's own last
+                        recorded end_kwh, so its presence IS the per-row
+                        signal: non-null means this household has been billed
+                        here before, null means it has not — whether because
+                        the household is new or the microgrid is. Those are the
+                        same situation from the operator's side and take the
+                        same sentence. */}
+                    <p
+                      className="mt-1 text-[11px] text-muted-foreground"
+                      data-testid={`preflight-seed-cause-${h.id}`}
+                    >
+                      {hint != null
+                        ? `Billed manually until now — the last manual bill ended at ${hint.toLocaleString()} kWh.`
+                        : "No earlier reading on record. If this meter was installed for this period and started at zero, enter zero — that is a real reading, not a placeholder."}
+                    </p>
+
+                    {/* The subtraction is on screen rather than behind the
+                        field: the operator types one number and a different
+                        one is stored, so a wrong result has to be traceable to
+                        which input was wrong. */}
+                    <div className="mt-2 text-[11px] text-muted-foreground">
+                      {f.elapsedState === "loading" && <span>Fetching usage since period start…</span>}
+                      {f.elapsedState === "error" && (
+                        <span className="text-destructive-fg">
+                          Could not read usage since period start from OpenEMS.
+                        </span>
+                      )}
+                      {f.elapsedState === "idle" && f.elapsedKwh != null && (
+                        <span data-testid={`preflight-seed-math-${h.id}`}>
+                          Used since period start −{f.elapsedKwh.toLocaleString()} kWh
+                          {derived != null && (
+                            <>
+                              {" "}· Starting reading{" "}
+                              <strong className="text-foreground">
+                                {derived.toLocaleString()} kWh
+                              </strong>
+                            </>
+                          )}
+                        </span>
+                      )}
+                      {derived != null && derived < 0 && (
+                        <span className="ml-1 text-destructive-fg">
+                          — that is below the usage already recorded this
+                          period; check the reading.
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
         {/* Section 2: Needs manual entry — expanded by default */}
         <section data-testid="preflight-needs-manual-section">
           <h4 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -378,7 +609,7 @@ export function PreflightPanel(props: PreflightPanelProps) {
           type="button"
           data-testid="preflight-generate-button"
           onClick={() => void handleSubmit()}
-          disabled={!allValid || submitting}
+          disabled={!allValid || !allSeedsValid || submitting}
           title={!allValid ? "Fill in all required readings to enable Generate." : undefined}
           className={cn(
             "inline-flex h-8 items-center gap-2 rounded-md border border-primary bg-primary px-3.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
