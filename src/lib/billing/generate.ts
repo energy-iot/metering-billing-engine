@@ -86,13 +86,52 @@ export type ManualReadingInput = {
   reason?: string;
 };
 
+/**
+ * A meter reading taken by the operator, used to establish `start_kwh` for a
+ * device whose billing history predates its OpenEMS connection (#339).
+ *
+ * Not staged in the database — supplied per-request, exactly like
+ * `ManualReadingInput`. The panel that collects these holds them in component
+ * state until Generate.
+ *
+ * `dialReadingKwh` / `readAt` are the operator's inputs and `startKwh` is
+ * derived from them:
+ *
+ *     startKwh = dialReadingKwh − usage(period.start_date → readAt)
+ *
+ * All three are sent. The derived value is what generation uses; the inputs
+ * are what make a wrong seed diagnosable a year later rather than anonymous,
+ * and the route recomputes from them and rejects a mismatch — the client's
+ * arithmetic is a display convenience, not a trusted input.
+ *
+ * `readAt` is NOT "now". An operator can read a dial in the morning and type
+ * it that evening, and the subtraction is over the interval that actually
+ * elapsed. Minutes do not matter; days do.
+ */
+export type SeedReadingInput = {
+  deviceId: string;
+  dialReadingKwh: number;
+  readAt: string;
+  startKwh: number;
+};
+
 export type GenerationErrorCode =
   | "currently_manual"
   | "no_meter_reading"
   | "missing_openems_config"
   | "invalid_manual_reading"
   | "unmetered_no_manual"
-  | "unknown_household";
+  | "unknown_household"
+  /**
+   * #339. The device has no prior MBE `end_kwh` and no seed was supplied, so
+   * `start_kwh` is unknowable. Previously this fell to `?? 0`, which asserted
+   * the meter read zero at period start and printed that on the invoice.
+   *
+   * Refusing is deliberate: "I have no record" and "the meter read zero" are
+   * different claims, and only one of them is safe to print on a document a
+   * customer checks against the box on their wall.
+   */
+  | "needs_seed_reading";
 
 export type WrittenHouseholdResult = {
   kind: "written";
@@ -142,6 +181,8 @@ export type RunGenerationParams = {
   /** Per-household reading overrides. Households here are implicitly added
    *  to the processed set. */
   manualReadings?: ManualReadingInput[];
+  /** Operator-supplied starting readings, keyed by device (#339). */
+  seedReadings?: SeedReadingInput[];
   mode: GenerationMode;
   /** Resolved `auth.uid()` from the route's session. Required when
    *  mode='write' (passed to RPC as actor + entered_by_user_id for manual).
@@ -232,6 +273,10 @@ export async function runGenerationFor(
   const actorRef = params.actorRef ?? null;
   const householdIdsParam = params.householdIds;
   const manualReadingsParam = params.manualReadings ?? [];
+  // #339. Keyed by device, not household: a seed is a reading of a specific
+  // physical meter, and the same household can change meters.
+  const seedByDevice = new Map<string, SeedReadingInput>();
+  for (const s of params.seedReadings ?? []) seedByDevice.set(s.deviceId, s);
 
   // ── 0. Empty-array short-circuit (AC3 explicit no-op) ─────────────────────
   // `householdIds: []` AND `manualReadings: []` is a well-defined no-op.
@@ -618,7 +663,40 @@ export async function runGenerationFor(
         continue;
       }
       usageKwh = u;
-      startKwh = priorEndKwhMap.get(dev.deviceId) ?? 0;
+
+      // #339. Three sources, in order, and NO zero default.
+      //
+      //   1. prior MBE end_kwh for this device — the running tally
+      //   2. an operator seed — the meter was billed before it was connected
+      //   3. neither → refuse; see needs_seed_reading
+      //
+      // The old `?? 0` converted "I have no record" into "the meter read
+      // zero". Those are different claims and the second one gets printed on
+      // an invoice the customer can check against the dial.
+      //
+      // A household-keyed fallback (the household's last end_kwh from rows
+      // written before the device existed) is deliberately NOT a fourth
+      // source. It is correct when a meter was connected and silently wrong
+      // when a meter was replaced, and the two are indistinguishable in the
+      // data — it would turn a visibly wrong 0 into a plausible wrong number.
+      const priorEnd = priorEndKwhMap.get(dev.deviceId);
+      const seed = seedByDevice.get(dev.deviceId);
+      if (priorEnd != null) {
+        startKwh = priorEnd;
+      } else if (seed) {
+        startKwh = seed.startKwh;
+      } else {
+        results.push({
+          kind: "error",
+          householdId: hid,
+          householdName,
+          error:
+            "This meter was billed before it was connected to OpenEMS, so its starting reading is unknown.",
+          code: "needs_seed_reading",
+        });
+        continue;
+      }
+
       endKwh = startKwh + usageKwh;
       readingSource = "edge";
       deviceId = dev.deviceId;
