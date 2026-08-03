@@ -1133,9 +1133,18 @@ function StepMeter({
               </Link>
             }
           >
-            All consumption meters on this microgrid are already assigned to a
-            household. Discover more devices on the edges setup page before
-            adding another household here, or check &ldquo;manual
+            {/* #335: this branch fires whenever no meter is AVAILABLE, which
+                has two causes — every consumption meter is already assigned,
+                or the microgrid has no device classified as a consumption
+                meter in the first place. The previous copy asserted the first
+                unconditionally, and a pilot operator whose meter had been
+                classified `other` was told his meters were all assigned when
+                he had none. Say what is true and name both causes. */}
+            No consumption meter is available to assign. Either every meter on
+            this microgrid is already linked to a household, or the devices on
+            your edges are not classified as consumption meters — a device
+            discovered as another type will not appear here until its type is
+            changed on the edges setup page. You can also check &ldquo;manual
             billing&rdquo; above to skip the meter assignment.
           </Banner>
         </div>
