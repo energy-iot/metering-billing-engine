@@ -1,6 +1,6 @@
 // PreflightPanel — component tests (jsdom environment) — BC3 #175 AC5
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { LocaleProvider } from "@/components/format/locale-context";
 import { PreflightPanel } from "../preflight-panel";
@@ -742,5 +742,217 @@ describe("PreflightPanel — seed readings (#339)", () => {
     // give both rows whichever one it computed.
     expect(withHistory?.textContent).not.toContain("No earlier reading on record");
     expect(withoutHistory?.textContent).not.toContain("Billed manually until now");
+  });
+});
+
+// #343 — the read date.
+//
+// #339 shipped a `readAt` field that no control ever wrote, so the subtraction
+// always ran to the entry date. Every test it shipped with entered the reading
+// the same day, which is the one case where that is correct — so a full green
+// suite sat on top of an over-billing defect.
+//
+// The mock below therefore answers by WINDOW: it returns a different usage
+// figure for `toDate: 2026-08-04` than for `toDate: 2026-08-10`. A test that
+// does not actually move the window gets the wrong number and fails, which is
+// what stops this file from re-acquiring the hole it is being added to close.
+describe("PreflightPanel — read date (#343)", () => {
+  const DEVICE = "d-1";
+  const TODAY = "2026-08-10";
+  const READ_DAY = "2026-08-04";
+  const USAGE_TO_READ_DAY = 214;
+  const USAGE_TO_TODAY = 980;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // shouldAdvanceTime keeps `waitFor` working — a frozen clock never
+    // resolves its polling and the suite hangs rather than fails.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-10T09:00:00"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Usage keyed by the `toDate` the panel actually asked for.
+   *
+   * `fallbackKwh` is null by default so an unexpected window yields no figure
+   * and the arithmetic tests cannot quietly pass on one.
+   *
+   * The date-validation tests MUST pass a number instead. With null, the row
+   * has no elapsed figure, `derivedSeed` returns null, and Generate is
+   * disabled for that reason — so an assertion on `btn.disabled` holds whether
+   * or not the date guard exists. Checked by mutation: removing the guard from
+   * `allSeedsValid` left all 22 tests green until this argument existed.
+   */
+  function windowedFetch(fallbackKwh: number | null = null) {
+    return vi.fn(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { toDate?: string };
+      const totalKwh =
+        body.toDate === READ_DAY
+          ? USAGE_TO_READ_DAY
+          : body.toDate === TODAY
+            ? USAGE_TO_TODAY
+            : fallbackKwh;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ deviceId: DEVICE, totalKwh }] }),
+      };
+    });
+  }
+
+  function renderSeedRow() {
+    return render(
+      <Wrap>
+        <PreflightPanel
+          open
+          onClose={vi.fn()}
+          billingPeriodId="p-1"
+          households={[makeHousehold("h-1", "Nakato")]}
+          edgeAvailableByHouseholdId={{ "h-1": true }}
+          seedNeededByHouseholdId={{ "h-1": true }}
+          deviceIdByHouseholdId={{ "h-1": DEVICE }}
+          periodStartDate="2026-08-01"
+        />
+      </Wrap>,
+    );
+  }
+
+  const dateInput = () =>
+    document.querySelector(
+      '[data-testid="preflight-seed-read-date-h-1"]',
+    ) as HTMLInputElement;
+  const dialInput = () =>
+    document.querySelector(
+      '[data-testid="preflight-seed-dial-h-1"]',
+    ) as HTMLInputElement;
+
+  it("defaults to today, so same-day entry stays a single field", () => {
+    vi.stubGlobal("fetch", windowedFetch());
+    renderSeedRow();
+    expect(dateInput().value).toBe(TODAY);
+  });
+
+  // THE test. Read on the 4th, typed on the 10th: the six days in between are
+  // not the operator's consumption to bill, and before #343 they were.
+  it("uses the usage window to the READ day, not the entry day", async () => {
+    vi.stubGlobal("fetch", windowedFetch());
+    renderSeedRow();
+
+    fireEvent.change(dialInput(), { target: { value: "4196" } });
+    fireEvent.change(dateInput(), { target: { value: READ_DAY } });
+
+    await waitFor(() => {
+      const math = document.querySelector(
+        '[data-testid="preflight-seed-math-h-1"]',
+      );
+      expect(math?.textContent).toContain("214");
+      // 4196 − 214. Billing to the entry day would subtract 980 and derive
+      // 3,216, understating the start by 766 kWh — which is then billed.
+      expect(math?.textContent).toContain("3,982");
+      expect(math?.textContent).not.toContain("3,216");
+    });
+
+    // The window itself is on screen, so a wrong date is visible rather than
+    // only inferable from a number the operator cannot check.
+    expect(
+      document.querySelector('[data-testid="preflight-seed-math-h-1"]')
+        ?.textContent,
+    ).toContain(READ_DAY);
+  });
+
+  it("sends the read day in readAt and the read-day arithmetic in startKwh", async () => {
+    const fetchMock = windowedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    renderSeedRow();
+
+    fireEvent.change(dialInput(), { target: { value: "4196" } });
+    fireEvent.change(dateInput(), { target: { value: READ_DAY } });
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await waitFor(() => expect(btn.disabled).toBe(false));
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    const generateCall = fetchMock.mock.calls.find(
+      ([url]) => url === "/api/billing/generate",
+    );
+    expect(generateCall).toBeDefined();
+    const sent = JSON.parse(
+      (generateCall![1] as { body: string }).body,
+    ) as { seedReadings: Array<{ readAt: string; startKwh: number }> };
+
+    expect(sent.seedReadings).toHaveLength(1);
+    expect(sent.seedReadings[0].startKwh).toBe(4196 - USAGE_TO_READ_DAY);
+    // Stored as an ISO timestamp, but it must be the read DAY — the audit
+    // value is what makes a wrong seed diagnosable a year later, and "now"
+    // was indistinguishable from a correct answer.
+    expect(sent.seedReadings[0].readAt.slice(0, 10)).toBe(READ_DAY);
+  });
+
+  // The control introduced two reachable wrong states that did not exist
+  // before it, so it owes both an answer. `min`/`max` are a browser hint a
+  // typed or pasted value walks straight past.
+  // `fallbackKwh: 300` is load-bearing in both of these. It resolves the
+  // arithmetic — dial 4196 − 300 = 3,896, a perfectly valid seed — so the
+  // ONLY thing left that can keep Generate disabled is the date guard.
+  it("blocks Generate on a read date before the period started", async () => {
+    vi.stubGlobal("fetch", windowedFetch(300));
+    renderSeedRow();
+
+    fireEvent.change(dialInput(), { target: { value: "4196" } });
+    fireEvent.change(dateInput(), { target: { value: "2026-07-28" } });
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-testid="preflight-seed-date-problem-h-1"]',
+        )?.textContent,
+      ).toContain("before this period started");
+    });
+    // The seed itself resolved, so this is the guard and nothing else.
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-seed-math-h-1"]')
+          ?.textContent,
+      ).toContain("3,896"),
+    );
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("blocks Generate on a read date in the future", async () => {
+    vi.stubGlobal("fetch", windowedFetch(300));
+    renderSeedRow();
+
+    fireEvent.change(dialInput(), { target: { value: "4196" } });
+    fireEvent.change(dateInput(), { target: { value: "2026-08-11" } });
+
+    const btn = document.querySelector(
+      '[data-testid="preflight-generate-button"]',
+    ) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-testid="preflight-seed-date-problem-h-1"]',
+        )?.textContent,
+      ).toContain("has not happened yet");
+    });
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="preflight-seed-math-h-1"]')
+          ?.textContent,
+      ).toContain("3,896"),
+    );
+    expect(btn.disabled).toBe(true);
   });
 });
