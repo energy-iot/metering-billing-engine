@@ -69,10 +69,21 @@ interface RowFormState {
   reason: string;
   /** #339 — what the operator read on the dial. */
   dialReading: string;
-  /** #339 — when they read it. Not "now": a dial read in the morning and
-   *  typed that evening is wrong by the usage in between. */
-  readAt: string;
-  /** #339 — usage from period start to readAt, fetched from OpenEMS. */
+  /**
+   * #343 — the DATE the dial was read, `YYYY-MM-DD`, local to the operator.
+   *
+   * Empty means "not yet touched", and the control shows `todayLocalDate()`
+   * in that case. Read `readAtDate` only through `readDateFor()` so the
+   * default is resolved in exactly one place.
+   *
+   * #339 shipped a `readAt` field here that nothing ever wrote, so both of its
+   * consumers silently fell back to `new Date()` and the subtraction always
+   * ran to the entry date instead of the reading date (#343). A date, not a
+   * timestamp: the elapsed-usage query is day-granular, so a time input would
+   * collect precision the answer cannot use.
+   */
+  readAtDate: string;
+  /** #339 — usage from period start to the read date, fetched from OpenEMS. */
   elapsedKwh: number | null;
   elapsedState: "idle" | "loading" | "error";
   /** Only relevant for the override section. */
@@ -90,13 +101,42 @@ const EMPTY_ROW: RowFormState = {
   endKwh: "",
   reason: "",
   dialReading: "",
-  readAt: "",
+  readAtDate: "",
   elapsedKwh: null,
   elapsedState: "idle",
   overrideEnabled: false,
 };
 
 const MAX_FAILURES_INLINE = 5;
+
+/**
+ * Today, as the operator's calendar sees it (#343).
+ *
+ * Built from local getters rather than `toISOString().slice(0, 10)`, which
+ * names the UTC day: at UTC−5 an evening entry is already tomorrow in UTC, so
+ * the slice would default the control to a date the operator has not reached
+ * and query usage through it.
+ */
+function todayLocalDate(): string {
+  const d = new Date();
+  const month = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * The `readAt` timestamp sent to the route for a chosen read date (#343).
+ *
+ * Only the date is collected, so the two branches say what is actually known
+ * rather than inventing a time. Today: the instant is real, send it. An
+ * earlier date: the day is known and the moment is not, so send local noon —
+ * far enough from either boundary that no timezone shifts it onto an adjacent
+ * day, which midnight would.
+ */
+function readAtIsoFor(dateStr: string): string {
+  if (dateStr === todayLocalDate()) return new Date().toISOString();
+  return new Date(`${dateStr}T12:00:00`).toISOString();
+}
 
 function parseField(raw: string): { ok: true; value: number } | { ok: false } {
   const trimmed = raw.trim();
@@ -154,6 +194,18 @@ export function PreflightPanel(props: PreflightPanelProps) {
       [hid]: { ...(prev[hid] ?? EMPTY_ROW), ...partial },
     }));
   }
+  /**
+   * The read date in force for a row — the operator's choice, or today (#343).
+   *
+   * The single resolution point for the default. #339's equivalent fallback
+   * was written inline at both consumers, where nothing rendered it, so a
+   * field that was never set looked deliberate at each site. This one is
+   * resolved once and the control below displays its result, which is what
+   * makes a wrong default visible instead of inferable.
+   */
+  function readDateFor(hid: string): string {
+    return getRow(hid).readAtDate || todayLocalDate();
+  }
 
   // Partition households by edge availability.
   const needsManual = households.filter(
@@ -173,11 +225,16 @@ export function PreflightPanel(props: PreflightPanelProps) {
   /**
    * The derived starting reading.
    *
-   *     startKwh = dialReading − usage(period start → readAt)
+   *     startKwh = dialReading − usage(period start → read date)
    *
    * The operator is asked the answerable question ("what does the dial say?")
    * rather than the unanswerable one ("what did it read on the 1st?"), and the
    * subtraction is over the interval that actually elapsed rather than to now.
+   *
+   * That second clause was false from #339 until #343: the read date had no
+   * control, so it was always the entry date. It is true now because
+   * `readDateFor()` is what the visible input writes and what `loadElapsed()`
+   * queries. If the control is ever removed, delete this sentence with it.
    *
    * Returns null while the elapsed usage is unknown, which is what keeps the
    * Generate button disabled rather than letting a half-resolved row through.
@@ -190,8 +247,14 @@ export function PreflightPanel(props: PreflightPanelProps) {
     return Number.isFinite(v) ? v : null;
   }
 
-  /** Fetch usage(period start → readAt) for this household's meter. */
-  async function loadElapsed(hid: string, readAtIso: string) {
+  /**
+   * Fetch usage(period start → read date) for this household's meter.
+   *
+   * Takes the `YYYY-MM-DD` date directly (#343). It previously took an ISO
+   * timestamp and sliced the first ten characters, which names the UTC day —
+   * a west-of-UTC evening entry would have queried through tomorrow.
+   */
+  async function loadElapsed(hid: string, readDate: string) {
     const deviceId = deviceIdByHouseholdId[hid];
     if (!deviceId || !periodStartDate) return;
     setRow(hid, { elapsedState: "loading", elapsedKwh: null });
@@ -202,7 +265,7 @@ export function PreflightPanel(props: PreflightPanelProps) {
         body: JSON.stringify({
           deviceIds: [deviceId],
           fromDate: periodStartDate,
-          toDate: readAtIso.slice(0, 10),
+          toDate: readDate,
         }),
       });
       if (!res.ok) {
@@ -239,8 +302,28 @@ export function PreflightPanel(props: PreflightPanelProps) {
   // ran backwards.
   const allSeedsValid = needsSeed.every((h) => {
     const v = derivedSeed(h.id);
-    return v != null && v >= 0;
+    return v != null && v >= 0 && readDateProblem(h.id) == null;
   });
+
+  /**
+   * Why this row's read date is unusable, or null (#343).
+   *
+   * Adding the control added two states the panel could not previously reach,
+   * so it owes them both an answer. `min`/`max` on the input are a hint the
+   * browser may enforce and a typed or pasted value can bypass; this is the
+   * check that actually gates Generate.
+   */
+  function readDateProblem(hid: string): string | null {
+    const date = readDateFor(hid);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Enter the date as YYYY-MM-DD.";
+    // String comparison is correct for zero-padded ISO dates and avoids
+    // parsing either side into an instant, which is where timezones get in.
+    if (periodStartDate && date < periodStartDate) {
+      return "That is before this period started — the usage since then cannot be worked out from a reading taken earlier.";
+    }
+    if (date > todayLocalDate()) return "That date has not happened yet.";
+    return null;
+  }
 
   const totalCount = households.length;
 
@@ -289,7 +372,7 @@ export function PreflightPanel(props: PreflightPanelProps) {
                   return {
                     deviceId: deviceIdByHouseholdId[h.id],
                     dialReadingKwh: dial.ok ? dial.value : 0,
-                    readAt: f.readAt || new Date().toISOString(),
+                    readAt: readAtIsoFor(readDateFor(h.id)),
                     startKwh: derivedSeed(h.id) ?? 0,
                   };
                 }),
@@ -424,13 +507,15 @@ export function PreflightPanel(props: PreflightPanelProps) {
             <p className="mb-2 text-[12px] text-muted-foreground">
               MBE has no starting reading for these meters, so it cannot work
               out what to print as the previous reading on the invoice. Enter
-              what each meter reads now.
+              what each meter reads, and the day you read it.
             </p>
             <ul className="space-y-3">
               {needsSeed.map((h) => {
                 const f = getRow(h.id);
                 const derived = derivedSeed(h.id);
                 const hint = priorHintByHouseholdId[h.id];
+                const readDate = readDateFor(h.id);
+                const dateProblem = readDateProblem(h.id);
                 return (
                   <li
                     key={h.id}
@@ -456,12 +541,55 @@ export function PreflightPanel(props: PreflightPanelProps) {
                       onChange={(e) => {
                         const v = e.target.value;
                         setRow(h.id, { dialReading: v });
-                        const when = f.readAt || new Date().toISOString();
                         if (f.elapsedKwh == null && f.elapsedState !== "loading") {
-                          void loadElapsed(h.id, when);
+                          void loadElapsed(h.id, readDateFor(h.id));
                         }
                       }}
                     />
+                    {/* #343 — the date the reading was taken.
+                        Day granularity because the usage query is day-granular
+                        and because it is what the operator can answer: they
+                        remember walking the site on Tuesday, not that it was
+                        14:20. Defaults to today so same-day entry — the common
+                        path — stays a single field, and deferred entry costs
+                        one tap rather than being silently wrong. */}
+                    <label
+                      htmlFor={`seed-read-date-${h.id}`}
+                      className="mt-2 block text-[11px] text-muted-foreground"
+                    >
+                      Day this reading was taken
+                    </label>
+                    <input
+                      id={`seed-read-date-${h.id}`}
+                      data-testid={`preflight-seed-read-date-${h.id}`}
+                      type="date"
+                      className="w-40 rounded-md border border-border bg-card px-2 py-1 font-mono text-xs"
+                      value={readDate}
+                      min={periodStartDate}
+                      max={todayLocalDate()}
+                      onChange={(e) => {
+                        const date = e.target.value;
+                        setRow(h.id, { readAtDate: date });
+                        // The elapsed figure belongs to the old date, so it is
+                        // cleared rather than left on screen next to a new one.
+                        // Refetching needs a dial value to be worth showing,
+                        // but the query does not depend on it — so refetch
+                        // whenever the row has one.
+                        if (parseField(f.dialReading).ok) {
+                          void loadElapsed(h.id, date);
+                        } else {
+                          setRow(h.id, { elapsedKwh: null, elapsedState: "idle" });
+                        }
+                      }}
+                    />
+                    {dateProblem && (
+                      <p
+                        className="mt-1 text-[11px] text-destructive-fg"
+                        data-testid={`preflight-seed-date-problem-${h.id}`}
+                      >
+                        {dateProblem}
+                      </p>
+                    )}
                     {/* Per-row cause. `hint` is this household's own last
                         recorded end_kwh, so its presence IS the per-row
                         signal: non-null means this household has been billed
@@ -491,7 +619,12 @@ export function PreflightPanel(props: PreflightPanelProps) {
                       )}
                       {f.elapsedState === "idle" && f.elapsedKwh != null && (
                         <span data-testid={`preflight-seed-math-${h.id}`}>
-                          Used since period start −{f.elapsedKwh.toLocaleString()} kWh
+                          {/* #343 — the window is named, not implied. The
+                              operator can only catch a wrong read date if the
+                              interval it produced is on screen next to the
+                              number it changed. */}
+                          Used from period start to {readDate} −
+                          {f.elapsedKwh.toLocaleString()} kWh
                           {derived != null && (
                             <>
                               {" "}· Starting reading{" "}
