@@ -701,32 +701,26 @@ export async function runGenerationFor(
       readingSource = "edge";
       deviceId = dev.deviceId;
     } else {
-      // Un-metered household with no manual override: surface as
-      // 'unmetered_no_manual'. Today's flow inserts a placeholder row
-      // (start_kwh=0, end_kwh/usage_kwh NULL); preserve that for backward
-      // compatibility — only emit the error when the caller explicitly asked
-      // for this household. For the bulk-implicit path (householdIds
-      // undefined), still insert the placeholder so the BillingTable row
-      // exists for inline manual edit.
-      if (householdIdsParam !== undefined && householdIdsParam.includes(hid)) {
-        results.push({
-          kind: "error",
-          householdId: hid,
-          householdName,
-          error:
-            "Household has no meter and no manual reading was supplied.",
-          code: "unmetered_no_manual",
-        });
-        continue;
-      }
-      // Implicit bulk path: write/preview the placeholder.
-      startKwh = 0;
-      endKwh = 0; // end_kwh is non-NULL only on UPSERT; the existing
-                  // schema permits null but the DB CHECK doesn't. We use 0
-                  // as a placeholder; the manual-edit PATCH sets actual end.
-      usageKwh = 0;
-      readingSource = "edge";
-      deviceId = null;
+      // Un-metered household with no manual override: skip and report with
+      // 'unmetered_no_manual'. This holds for BOTH the explicit dashboard
+      // path (householdIds includes this id) AND the implicit pull-mode path
+      // (householdIds === undefined) — #293.
+      //
+      // Pull-mode is an unattended cron. Writing a silent zeroed placeholder
+      // row (start_kwh=0, end_kwh=0, usage_kwh=0) there mis-bills an un-metered
+      // household as service-charge-only with no human in the loop; the only
+      // signal is the response payload. Per Alejandro's decision (2026-07-01,
+      // #293): no manual reading AND no OpenEMS data → do NOT bill; skip the
+      // tenant and report it so the cron/caller sees it. The dashboard path
+      // already emitted this same error; the two paths now agree.
+      results.push({
+        kind: "error",
+        householdId: hid,
+        householdName,
+        error: "Household has no meter and no manual reading was supplied.",
+        code: "unmetered_no_manual",
+      });
+      continue;
     }
 
     // Compute tier breakdown + total.

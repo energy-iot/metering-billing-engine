@@ -462,6 +462,25 @@ export function BillingTable({
         "Unknown household"
     );
 
+  // #293 — persistent "not billed — no meter data" indicator. Reads from
+  // PERSISTED state (households ∖ line items), not from a transient generate
+  // response, so it also reflects the unattended pull-mode cron: that path
+  // now SKIPS un-metered households with no manual reading (no zeroed
+  // placeholder row is written), so an un-metered household simply has no
+  // line item afterwards. A household counts here iff its edge is unavailable
+  // (no metered device / incomplete OpenEMS config — mirrors
+  // `runGenerationFor`'s un-metered branch) AND it has no line item in this
+  // period. Only meaningful once generation has run (some line items exist);
+  // before the first run every household is unbilled and the count would be
+  // noise, so the banner is gated on `lineItems.length > 0`.
+  const unbilledNoMeterNames = households
+    .filter(
+      (h) =>
+        (edgeAvailableByHouseholdId?.[h.id] ?? true) === false &&
+        !lineItemMap.has(h.id)
+    )
+    .map((h) => h.display_name);
+
   // Build summary rows for ClosePeriodDialog
   const closePeriodSummaryRows: ClosePeriodSummaryRow[] = [
     {
@@ -901,6 +920,32 @@ export function BillingTable({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* #293 — persistent "not billed — no meter data" indicator. Unlike the
+          transient generate-warnings block above (which only appears right
+          after an interactive Generate), this reads from persisted state, so
+          it surfaces households the unattended pull-mode cron skipped for
+          having no meter data and no manual reading. Gated on
+          `lineItems.length > 0` so it doesn't fire on a never-generated
+          period where every household is trivially unbilled. */}
+      {lineItems.length > 0 && unbilledNoMeterNames.length > 0 && (
+        <div data-testid="unbilled-no-meter-banner">
+          <Banner
+            tone="warn"
+            title={`${unbilledNoMeterNames.length} household${unbilledNoMeterNames.length === 1 ? "" : "s"} not billed — no meter data`}
+          >
+            <p>
+              These households have no meter and no manual reading, so no bill
+              was generated. Add a reading to bill them.
+            </p>
+            <ul className="mt-1 list-inside list-disc">
+              {unbilledNoMeterNames.map((name, i) => (
+                <li key={i}>{name}</li>
+              ))}
+            </ul>
+          </Banner>
         </div>
       )}
 
