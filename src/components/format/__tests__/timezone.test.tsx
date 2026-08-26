@@ -13,8 +13,13 @@ describe("formatTimezone", () => {
     expect(formatTimezone("Africa/Kampala", WINTER)).toBe("Africa/Kampala (UTC+3)");
   });
 
-  it("UTC renders a zero offset, not a bare id", () => {
-    expect(formatTimezone("UTC", SUMMER)).toBe("UTC (UTC+0)");
+  it("literal UTC renders bare — the id already IS the offset", () => {
+    expect(formatTimezone("UTC", SUMMER)).toBe("UTC");
+  });
+
+  it("zero-offset non-UTC zone keeps the parenthetical: Atlantic/Reykjavik", () => {
+    expect(formatTimezone("Atlantic/Reykjavik", SUMMER)).toBe("Atlantic/Reykjavik (UTC+0)");
+    expect(formatTimezone("Atlantic/Reykjavik", WINTER)).toBe("Atlantic/Reykjavik (UTC+0)");
   });
 
   it("DST zone: Europe/Berlin offset follows the reference date", () => {

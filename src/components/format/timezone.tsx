@@ -47,7 +47,8 @@ function getTZF(iana: string): Intl.DateTimeFormat {
  * Pure string formatter — no React context.
  *
  * Returns "IANA id (UTC±offset)", e.g. "Africa/Kampala (UTC+3)",
- * "UTC (UTC+0)", "Asia/Kolkata (UTC+5:30)". For DST zones the offset
+ * "Asia/Kolkata (UTC+5:30)". The literal "UTC" id renders bare "UTC"
+ * (the id already is the offset). For DST zones the offset
  * reflects `referenceDate` (defaults to now — pass an explicit Date for
  * deterministic output, e.g. in tests or when rendering a stored period).
  * Returns "—" for null / undefined / unrecognized IANA ids.
@@ -57,6 +58,12 @@ export function formatTimezone(
   referenceDate?: Date,
 ): string {
   if (iana == null || iana === "") return "—";
+  // Special-case the literal "UTC" id: the id already IS the offset, so
+  // "UTC (UTC+0)" is tautological — and it's the highest-frequency label
+  // (T1 defaults every existing period to UTC). Only the literal "UTC" —
+  // other zero-offset zones (e.g. Atlantic/Reykjavik) keep the
+  // parenthetical, because there the id doesn't reveal the offset.
+  if (iana === "UTC") return "UTC";
   const ref = referenceDate ?? new Date();
   if (Number.isNaN(ref.getTime())) return "—";
   let parts: Intl.DateTimeFormatPart[];
