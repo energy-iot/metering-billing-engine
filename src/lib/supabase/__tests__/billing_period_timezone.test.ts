@@ -76,6 +76,7 @@ const FIXTURE = {
   periodStamped: "bbbbbbbb-3540-4000-8354-000000000011",
   periodOverridden: "bbbbbbbb-3540-4000-8354-000000000012",
   periodOldApp: "bbbbbbbb-3540-4000-8354-000000000013",
+  periodAfterChange: "bbbbbbbb-3540-4000-8354-000000000014",
 };
 
 desc("billing period timezone stamp trigger (#354)", () => {
@@ -196,5 +197,45 @@ desc("billing period timezone stamp trigger (#354)", () => {
     // Only our two Kampala fixtures may be non-UTC. Anything else would mean
     // the migration backfilled or mutated pre-existing rows.
     expect(data).toEqual([]);
+  });
+
+  // ── Forward-only semantics (#357 AC-3) ──────────────────────────────────
+  // Changing microgrids.timezone must NOT rewrite any existing period's
+  // stamped zone (open or closed) — only periods created AFTER the change
+  // pick up the new zone, via the same stamp trigger.
+  it("changing microgrids.timezone leaves existing periods' stamped zones untouched, while new periods inherit the new zone", async () => {
+    // Operator changes the Kampala microgrid's zone.
+    const { error: updErr } = await svc
+      .from("microgrids")
+      .update({ timezone: "Africa/Nairobi" })
+      .eq("id", FIXTURE.microgridKampala);
+    expect(updErr).toBeNull();
+
+    // Existing periods — one created without a tz key, one that attempted an
+    // override — both keep the zone stamped at their INSERT.
+    const { data: existing, error: exErr } = await svc
+      .from("billing_periods")
+      .select("id, timezone")
+      .in("id", [FIXTURE.periodStamped, FIXTURE.periodOverridden]);
+    expect(exErr).toBeNull();
+    expect(existing?.map((p) => p.timezone)).toEqual([
+      "Africa/Kampala",
+      "Africa/Kampala",
+    ]);
+
+    // A period created AFTER the change is stamped with the new zone.
+    await insertOrThrow(svc, "billing_periods", {
+      id: FIXTURE.periodAfterChange,
+      microgrid_id: FIXTURE.microgridKampala,
+      start_date: "2026-10-01",
+      end_date: "2026-10-31",
+    });
+    const { data: fresh, error: freshErr } = await svc
+      .from("billing_periods")
+      .select("timezone")
+      .eq("id", FIXTURE.periodAfterChange)
+      .single();
+    expect(freshErr).toBeNull();
+    expect(fresh?.timezone).toBe("Africa/Nairobi");
   });
 });

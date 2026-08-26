@@ -3,6 +3,10 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessCommunity } from "@/lib/auth/access";
 import { validateCurrency } from "@/lib/validation/currency";
+import {
+  validateTimezone,
+  canonicalTimezone,
+} from "@/lib/validation/timezone";
 import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
 
 const UUID_RE =
@@ -63,6 +67,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Optional timezone (#357): validate when supplied; omitted → column
+  // DEFAULT 'UTC' (migration 00055). The billing-period stamp trigger
+  // inherits from this column, so an invalid value here would poison every
+  // future period on the microgrid — hence server-side rejection.
+  let timezoneInput: string | null = null;
+  if ("timezone" in body) {
+    timezoneInput =
+      typeof body.timezone === "string" ? body.timezone.trim() : "";
+    const tzErr = validateTimezone(timezoneInput);
+    if (tzErr) {
+      return NextResponse.json(
+        { error: tzErr, field: "timezone" },
+        { status: 422 }
+      );
+    }
+    // Stored canonically (case-folded, alias-resolved).
+    timezoneInput = canonicalTimezone(timezoneInput);
+  }
+
   const supabase = await createClient();
 
   if (!(await currentUserCanAccessCommunity(supabase, communityId))) {
@@ -84,6 +107,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     address_postal_code: readOptionalString(body.address_postal_code),
     lat: readOptionalNumber(body.lat),
     lng: readOptionalNumber(body.lng),
+    ...(timezoneInput !== null ? { timezone: timezoneInput } : {}),
   };
 
   const { data, error } = await supabase

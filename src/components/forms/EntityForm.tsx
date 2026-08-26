@@ -41,6 +41,7 @@ import {
   type AddressFieldName,
   type AddressValues,
 } from "./AddressFields";
+import { TimezoneField } from "./TimezoneField";
 import { CURRENCY_OPTIONS } from "@/lib/validation/currency";
 import { cn } from "@/lib/utils";
 import type {
@@ -105,6 +106,8 @@ type FormState = AddressValues & {
   name: string;
   geography_notes?: string;
   currency?: string;
+  /** IANA billing timezone (microgrid only, #357). */
+  timezone?: string;
   lat?: string; // kept as string for input binding
   lng?: string;
   /** Selected org ID when in community picker mode. */
@@ -151,6 +154,7 @@ function initialStateFor(props: EntityFormProps): FormState {
   if (props.entity === "microgrid") {
     const mgIv = props.initialValues ?? {};
     base.currency = mgIv.currency ?? "UGX";
+    base.timezone = mgIv.timezone ?? "UTC";
     base.lat = mgIv.lat != null ? String(mgIv.lat) : "";
     base.lng = mgIv.lng != null ? String(mgIv.lng) : "";
   }
@@ -180,6 +184,7 @@ function buildCreatePayload(
     // parentCommunityId is set in locked mode; selectedCommunityId is used in picker mode.
     payload.community_id = props.parentCommunityId ?? state.selectedCommunityId;
     payload.currency = state.currency ?? "UGX";
+    payload.timezone = state.timezone ?? "UTC";
     payload.lat = state.lat?.trim() ? state.lat.trim() : null;
     payload.lng = state.lng?.trim() ? state.lng.trim() : null;
   }
@@ -216,6 +221,9 @@ function buildPatchPayload(
   if (props.entity === "microgrid") {
     if ((state.currency ?? "") !== (initial.currency ?? "")) {
       payload.currency = state.currency;
+    }
+    if ((state.timezone ?? "") !== (initial.timezone ?? "")) {
+      payload.timezone = state.timezone;
     }
     const curLat = (state.lat ?? "").trim();
     const initLat = (initial.lat ?? "").trim();
@@ -623,6 +631,22 @@ export function EntityForm(props: EntityFormProps) {
                     </p>
                   )}
                 </div>
+                <TimezoneField
+                  value={state.timezone ?? "UTC"}
+                  onChange={(tz) => updateField("timezone", tz)}
+                  address={{
+                    address_country: state.address_country,
+                    lat: state.lat?.trim() ? Number(state.lat) : null,
+                    lng: state.lng?.trim() ? Number(state.lng) : null,
+                  }}
+                  storedValue={
+                    props.mode === "edit"
+                      ? (props.initialValues?.timezone ?? "UTC")
+                      : undefined
+                  }
+                  disabled={submitting}
+                  error={fieldErrors.timezone}
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label

@@ -56,6 +56,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // NOTE (#357): this route deliberately takes NO timezone parameter, and
+  // must not grow one. The period's timezone is stamped from the parent
+  // microgrid by trg_billing_period_stamp_timezone (migration 00055), which
+  // discards any client-supplied value — a `timezone` key here would be
+  // dead input at best and misleading API surface at worst. If that trigger
+  // is ever dropped, revisit this contract.
   const { data, error } = await supabase
     .from("billing_periods")
     .insert({
