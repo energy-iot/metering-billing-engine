@@ -29,6 +29,8 @@
  * explicit so the helper is fully unit-testable.
  */
 
+import { formatTimezone } from "@/components/format/timezone";
+
 import { roundKwh, roundAmount } from "./precision";
 
 /** Per-row input to {@link buildBillingPeriodCsv}. */
@@ -69,6 +71,15 @@ export interface CsvExportInput {
     start_date: string;
     end_date: string;
     status: string;
+    /**
+     * #358 — the IANA timezone the period was calculated under, from the
+     * immutable `billing_periods.timezone` stamp (#354; NEVER
+     * `microgrids.timezone`). Emitted via `formatTimezone` (#356) in the
+     * trailing "Period Timezone" column. Label of record ONLY — it is
+     * never used to reinterpret `start_date`/`end_date`, which are plain
+     * calendar DATEs emitted as-is.
+     */
+    timezone: string;
   };
   /**
    * Selected rate schedule (most-recent for the microgrid). `tiers`
@@ -225,6 +236,16 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
   header.push(`Total ${cur}`);
   header.push("Payment Status");
   header.push("Paid At");
+  // #358 — trailing so existing URA column positions are untouched.
+  header.push("Period Timezone");
+
+  // #358 — stamped-zone cell, identical on every row of the export.
+  // Reference date = period end so the emitted offset is the one that
+  // governed the stored period (deterministic — formatTimezone would
+  // otherwise default to "now", breaking the helper's purity contract).
+  const periodTimezoneCell = csvCell(
+    formatTimezone(input.period.timezone, new Date(input.period.end_date)),
+  );
 
   // ── Sort rows (stable secondary by line-item id) ──────────────────────────
   const sortedRows = [...input.rows].sort((a, b) => {
@@ -320,6 +341,7 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
       csvCell(roundAmount(totalAmount)),
       csvCell(paymentLabel),
       csvCell(isoDate(li.paid_at)),
+      periodTimezoneCell,
     ];
   });
 
