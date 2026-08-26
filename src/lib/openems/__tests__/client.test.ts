@@ -663,6 +663,117 @@ describe("OpenEmsClient", () => {
     });
   });
 
+  // ── #359: tz threading through getDeviceEnergy (the /api/openems/energy
+  // surface) + tz-aware DAY-BINNING in queryDailyEnergy. The binning tests
+  // are the load-bearing part: a tz-aware query with UTC day-keys still
+  // lands values in the wrong calendar cell.
+  describe("#359 timezone threading + day-binning", () => {
+    function energyPerPeriodResponse(
+      timestamps: number[],
+      data: Record<string, (number | null)[]>
+    ) {
+      return mockResponse({
+        jsonrpc: "2.0",
+        id: "id",
+        result: {
+          payload: { jsonrpc: "2.0", id: "id", result: { timestamps, data } },
+        },
+      });
+    }
+
+    it("getDeviceEnergy defaults the wire timezone to UTC", async () => {
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: {
+            payload: {
+              jsonrpc: "2.0",
+              id: "id",
+              result: { data: { "meter0/ActiveConsumptionEnergy": 1000 } },
+            },
+          },
+        })
+      );
+
+      await client.getDeviceEnergy(
+        [makeDeviceConfig("device-uuid-1", "edge0", "meter0")],
+        "2026-03-01",
+        "2026-03-10"
+      );
+
+      const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(body.params.payload.params.timezone).toBe("UTC");
+    });
+
+    it("getDeviceEnergy forwards a caller-supplied IANA zone verbatim (no offset math)", async () => {
+      fetchSpy.mockResolvedValue(
+        mockResponse({
+          jsonrpc: "2.0",
+          id: "id",
+          result: {
+            payload: {
+              jsonrpc: "2.0",
+              id: "id",
+              result: { data: { "meter0/ActiveConsumptionEnergy": 1000 } },
+            },
+          },
+        })
+      );
+
+      await client.getDeviceEnergy(
+        [makeDeviceConfig("device-uuid-1", "edge0", "meter0")],
+        "2026-03-01",
+        "2026-03-10",
+        "Africa/Kampala"
+      );
+
+      const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(body.params.payload.params.timezone).toBe("Africa/Kampala");
+    });
+
+    it("queryDailyEnergy bins day-keys in the requested zone, not UTC", async () => {
+      // Kampala local midnight 2026-03-10 == 2026-03-09T21:00:00Z. A UTC
+      // slice of this timestamp names 2026-03-09 — the previous day.
+      const kampalaMidnight = Date.UTC(2026, 2, 9, 21, 0, 0);
+      fetchSpy.mockResolvedValue(
+        energyPerPeriodResponse([kampalaMidnight], {
+          "meter0/ActiveConsumptionEnergy": [5000],
+        })
+      );
+
+      const byDate = await client.queryDailyEnergy(
+        "edge0",
+        ["meter0/ActiveConsumptionEnergy"],
+        "2026-03-10",
+        "2026-03-10",
+        "Africa/Kampala"
+      );
+
+      const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(body.params.payload.params.timezone).toBe("Africa/Kampala");
+      expect(byDate).toEqual({ "2026-03-10": 5 });
+    });
+
+    it("queryDailyEnergy keeps UTC day-keys under the default zone", async () => {
+      const utcNine = Date.UTC(2026, 2, 9, 21, 0, 0); // 2026-03-09 in UTC
+      fetchSpy.mockResolvedValue(
+        energyPerPeriodResponse([utcNine], {
+          "meter0/ActiveConsumptionEnergy": [2000],
+        })
+      );
+
+      const byDate = await client.queryDailyEnergy(
+        "edge0",
+        ["meter0/ActiveConsumptionEnergy"],
+        "2026-03-09",
+        "2026-03-09"
+      );
+
+      expect(byDate).toEqual({ "2026-03-09": 2 });
+    });
+  });
+
   describe("getEdgesChannelsValues", () => {
     it("parses channel values correctly", async () => {
       fetchSpy.mockResolvedValue(

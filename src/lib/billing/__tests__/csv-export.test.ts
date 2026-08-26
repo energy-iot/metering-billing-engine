@@ -685,7 +685,7 @@ describe("buildBillingPeriodCsv — Period Timezone column (#358)", () => {
     expect(dataCols[dataCols.length - 1]).toBe("UTC");
   });
 
-  it("a Kampala-stamped period emits 'Africa/Kampala (UTC+3)'", () => {
+  it("a Kampala-stamped period emits the raw IANA id 'Africa/Kampala' (#359)", () => {
     const csv = buildBillingPeriodCsv(
       makeInput({
         period: {
@@ -699,7 +699,10 @@ describe("buildBillingPeriodCsv — Period Timezone column (#358)", () => {
     );
     const lines = parseLines(csv);
     const dataCols = lines[1].split(",");
-    expect(dataCols[dataCols.length - 1]).toBe("Africa/Kampala (UTC+3)");
+    // #359 (PM decision): raw IANA id, not the human label
+    // "Africa/Kampala (UTC+3)" — stable and machine-parseable; the
+    // label's offset suffix varies with the DST reference date.
+    expect(dataCols[dataCols.length - 1]).toBe("Africa/Kampala");
   });
 
   it("HARD guard: the stamped zone never reinterprets the window dates or any date cell", () => {
@@ -728,6 +731,6 @@ describe("buildBillingPeriodCsv — Period Timezone column (#358)", () => {
       // All columns except the trailing Period Timezone cell are identical.
       expect(kiriCols.slice(0, -1)).toEqual(utcCols.slice(0, -1));
     }
-    expect(kiriLines[1].split(",").pop()).toBe("Pacific/Kiritimati (UTC+14)");
+    expect(kiriLines[1].split(",").pop()).toBe("Pacific/Kiritimati");
   });
 });

@@ -19,6 +19,7 @@ import { ConsumptionCalendarWidget } from "@/components/dashboard/ConsumptionCal
 import { ActivityLog, type ActivityEvent } from "@/components/dashboard/ActivityLog";
 import { DeleteEntityButton } from "@/components/forms/DeleteEntityButton";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
+import { dayKeyInZone, addDaysToDateKey } from "@/lib/timezone/day-key";
 
 // Microgrid Dashboard landing (D2 / #53, UX1a / #72, UX1b / #73).
 //
@@ -87,6 +88,7 @@ async function fetchDailyEnergyByDate(
   openemsEdges: { openems_edge_id: string; devices: { openems_component_id: string | null }[] }[],
   fromDate: string,
   toDate: string,
+  timezone: string,
 ): Promise<Record<string, number>> {
   if (openemsEdges.length === 0) return {};
   if (!emsConfig) return {};
@@ -105,12 +107,14 @@ async function fetchDailyEnergyByDate(
 
         if (channels.length === 0) return;
 
+        // #359 — the zone drives BOTH the query window and the day-keys
+        // (`queryDailyEnergy` bins its result keys in this zone too).
         const edgeDaily = await client.queryDailyEnergy(
           edge.openems_edge_id,
           channels,
           fromDate,
           toDate,
-          "UTC"
+          timezone
         );
 
         for (const [date, kwh] of Object.entries(edgeDaily)) {
@@ -138,7 +142,7 @@ export default async function MicrogridDashboardPage({
 
   // ── Microgrid metadata + access check (for Delete button, AC-UI-2) ──────
   const [{ data: microgridData }, canManage] = await Promise.all([
-    supabase.from("microgrids").select("id, name").eq("id", id).single(),
+    supabase.from("microgrids").select("id, name, timezone").eq("id", id).single(),
     currentUserCanAccessMicrogrid(supabase, id),
   ]);
 
@@ -263,18 +267,29 @@ export default async function MicrogridDashboardPage({
     await fetchEdgeStatusMap(emsConfig, openemsEdgeIds);
 
   // ── Daily energy for calendar ────────────────────────────────────────────
-  const today = new Date();
-  const toDateStr = today.toISOString().slice(0, 10);
-  const fromDate30 = new Date(today);
-  fromDate30.setDate(fromDate30.getDate() - 29); // 30 days including today
-  const fromDateStr = fromDate30.toISOString().slice(0, 10);
+  // #359 — live-vs-stamped split (tz-awareness anchor #353). The 30-day
+  // strip overlays two sources on one day-axis, so the axis' day-BINNING
+  // (not just the query window) is zone-aware:
+  //   - the live/open portion buckets by the live `microgrids.timezone`;
+  //   - days inside the previous CLOSED period bucket by that period's
+  //     immutable `billing_periods.timezone` stamp, so the cells agree
+  //     with that period's own bill after a zone change.
+  // The zone is a windowing/binning input for the ENERGY DATA only — it
+  // never reinterprets a period's plain-DATE start/end for display.
+  const liveTz = microgridData?.timezone ?? "UTC";
+  const stampedTz = prevPeriod?.timezone ?? liveTz;
 
-  // Build window of 30 date strings for the calendar
+  const today = new Date();
+  // "Today" as the operator's microgrid calendar sees it — a UTC slice
+  // would already be tomorrow (or still yesterday) for non-UTC zones.
+  const toDateStr = dayKeyInZone(today, liveTz);
+  const fromDateStr = addDaysToDateKey(toDateStr, -29); // 30 days incl. today
+
+  // Build window of 30 date strings for the calendar (plain consecutive
+  // calendar dates — identical labels in every zone once anchored).
   const windowDates: string[] = [];
   for (let i = 0; i < 30; i++) {
-    const d = new Date(fromDate30);
-    d.setDate(d.getDate() + i);
-    windowDates.push(d.toISOString().slice(0, 10));
+    windowDates.push(addDaysToDateKey(fromDateStr, i));
   }
 
   const openemsEdgesWithDevices = allEdgesRaw
@@ -284,12 +299,63 @@ export default async function MicrogridDashboardPage({
       devices: (e as EdgeWithDevices).devices ?? [],
     }));
 
-  const energyByDate = await fetchDailyEnergyByDate(
-    emsConfig,
-    openemsEdgesWithDevices,
-    fromDateStr,
-    toDateStr
-  );
+  // Boundary between the closed-period portion (stamped zone) and the
+  // live portion (live zone). Only materializes when the zones actually
+  // differ AND the closed period reaches into the window — otherwise one
+  // query in the live zone covers the whole strip.
+  let energyByDate: Record<string, number>;
+  let zoneBoundary: {
+    lastStampedDate: string;
+    stampedTz: string;
+    liveTz: string;
+  } | null = null;
+
+  if (
+    prevPeriod &&
+    stampedTz !== liveTz &&
+    prevPeriod.end_date >= fromDateStr
+  ) {
+    const closedTo =
+      prevPeriod.end_date < toDateStr ? prevPeriod.end_date : toDateStr;
+    const [closedPart, livePart] = await Promise.all([
+      fetchDailyEnergyByDate(
+        emsConfig,
+        openemsEdgesWithDevices,
+        fromDateStr,
+        closedTo,
+        stampedTz
+      ),
+      closedTo < toDateStr
+        ? fetchDailyEnergyByDate(
+            emsConfig,
+            openemsEdgesWithDevices,
+            addDaysToDateKey(closedTo, 1),
+            toDateStr,
+            liveTz
+          )
+        : Promise.resolve<Record<string, number>>({}),
+    ]);
+    // Each portion owns its side of the boundary — a stray key from one
+    // query never overwrites a cell the other zone governs.
+    energyByDate = {};
+    for (const [date, kwh] of Object.entries(closedPart)) {
+      if (date <= closedTo) energyByDate[date] = kwh;
+    }
+    for (const [date, kwh] of Object.entries(livePart)) {
+      if (date > closedTo) energyByDate[date] = kwh;
+    }
+    // Annotate the zone change on the axis (Architect guardrail: mark
+    // it, never re-bin a period to a uniform zone to hide it).
+    zoneBoundary = { lastStampedDate: closedTo, stampedTz, liveTz };
+  } else {
+    energyByDate = await fetchDailyEnergyByDate(
+      emsConfig,
+      openemsEdgesWithDevices,
+      fromDateStr,
+      toDateStr,
+      liveTz
+    );
+  }
 
   // ── Compute open-period summary ──────────────────────────────────────────
   const billingHref = draft
@@ -499,6 +565,8 @@ export default async function MicrogridDashboardPage({
           windowDates={windowDates}
           energyByDate={energyByDate}
           targetDailyKwh={targetDailyKwh}
+          todayDate={toDateStr}
+          zoneBoundary={zoneBoundary}
         />
       </div>
 

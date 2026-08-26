@@ -560,6 +560,7 @@ describe("PreflightPanel — seed readings (#339)", () => {
   function renderWithSeed(opts: {
     seedNeeded?: boolean;
     priorHint?: number | null;
+    periodTimezone?: string;
   } = {}) {
     const households = [makeHousehold("h-1", "Nakato")];
     return render(
@@ -574,6 +575,7 @@ describe("PreflightPanel — seed readings (#339)", () => {
           priorHintByHouseholdId={{ "h-1": opts.priorHint ?? null }}
           deviceIdByHouseholdId={{ "h-1": DEVICE }}
           periodStartDate="2026-08-01"
+          periodTimezone={opts.periodTimezone}
         />
       </Wrap>,
     );
@@ -622,6 +624,48 @@ describe("PreflightPanel — seed readings (#339)", () => {
     );
 
     await waitFor(() => expect(btn.disabled).toBe(false));
+  });
+
+  // #359 — the seed anchors to the period's start, so the elapsed-usage
+  // query must run in the period's STAMPED zone: a non-UTC operator's
+  // seed window must match the billing window, not a UTC one.
+  it("sends the period's stamped timezone with the elapsed-usage query (#359)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(energyResponse(214));
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithSeed({ periodTimezone: "Africa/Kampala" });
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/openems/energy");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.timezone).toBe("Africa/Kampala");
+    expect(body.fromDate).toBe("2026-08-01");
+  });
+
+  it("omits timezone when no stamp is provided (route defaults to UTC)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(energyResponse(214));
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithSeed();
+
+    fireEvent.change(
+      document.querySelector(
+        '[data-testid="preflight-seed-dial-h-1"]',
+      ) as HTMLInputElement,
+      { target: { value: "4196" } },
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect("timezone" in body).toBe(false);
   });
 
   // The operator types one number and a different one is stored. If the

@@ -1,5 +1,6 @@
 import type { DeviceConfig, DeviceDataAdapter, DeviceReading } from "@/lib/adapters/types";
 import { OpenEmsError } from "./errors";
+import { dayKeyInZone } from "@/lib/timezone/day-key";
 import { validateBackendUrl } from "./backend-url";
 import type { OpenEmsAuth } from "./auth";
 import type {
@@ -376,11 +377,17 @@ export class OpenEmsClient implements DeviceDataAdapter {
    * (Formerly getMeterEnergy — renamed to getDeviceEnergy.)
    *
    * Channel address: `${componentId}/ActiveConsumptionEnergy` (OpenEMS convention).
+   *
+   * `timezone` (IANA name, #359) is forwarded verbatim to
+   * `queryHistoricEnergy` — same threading as `getReadings` (#355) — so
+   * OpenEMS builds the local-day window from the zone name. Defaults to
+   * "UTC" for ambient callers with no period context.
    */
   async getDeviceEnergy(
     devices: DeviceConfig[],
     startDate: string,
-    endDate: string
+    endDate: string,
+    timezone: string = "UTC"
   ): Promise<DeviceEnergyResult[]> {
     const edgeGroups = new Map<
       string,
@@ -410,7 +417,8 @@ export class OpenEmsClient implements DeviceDataAdapter {
           edgeId,
           channels,
           startDate,
-          endDate
+          endDate,
+          timezone
         );
 
         for (const deviceInfo of deviceInfos) {
@@ -438,6 +446,12 @@ export class OpenEmsClient implements DeviceDataAdapter {
    *
    * Returns a map of { date (YYYY-MM-DD) → totalKwh } summed across all channels.
    * Days with no data for any channel are omitted from the result.
+   *
+   * The day-KEYS are bucketed in `timezone` (#359), not just the query
+   * window: OpenEMS returns period-start timestamps at local midnight in
+   * the requested zone, and `toISOString().slice(0, 10)` would name the
+   * UTC day — 21:00 the previous day for a Kampala midnight — so a
+   * tz-aware query with UTC binning still lands values in the wrong cell.
    */
   async queryDailyEnergy(
     edgeId: string,
@@ -471,7 +485,7 @@ export class OpenEmsClient implements DeviceDataAdapter {
     const byDate: Record<string, number> = {};
 
     for (let i = 0; i < timestamps.length; i++) {
-      const dateStr = new Date(timestamps[i]).toISOString().slice(0, 10);
+      const dateStr = dayKeyInZone(new Date(timestamps[i]), timezone);
       let dayTotal = 0;
       let hasData = false;
       for (const channelValues of Object.values(data)) {

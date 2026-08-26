@@ -350,4 +350,114 @@ describe("MicrogridDashboardPage — #73 widget integration", () => {
     // % of total: 200/500 = 40.0%
     expect(html).toContain("40.0%");
   });
+
+  // ── #359 — live-vs-stamped split on the consumption calendar ────────────
+  //
+  // When the previous CLOSED period reaches into the 30-day window and its
+  // stamped zone differs from the live microgrid zone, the page issues TWO
+  // daily-energy queries — the closed portion in the period's stamped
+  // `billing_periods.timezone`, the rest in the live `microgrids.timezone` —
+  // and annotates the boundary instead of re-binning either side.
+  it("splits the daily-energy query at the closed-period boundary when zones differ (#359)", async () => {
+    const { dayKeyInZone, addDaysToDateKey } = await import(
+      "@/lib/timezone/day-key"
+    );
+    const liveTz = "Africa/Kampala";
+    const todayLive = dayKeyInZone(new Date(), liveTz);
+    const closedEnd = addDaysToDateKey(todayLive, -5);
+    const closedStart = addDaysToDateKey(closedEnd, -15); // 16 days ≥ 7
+
+    const closedPeriod = {
+      id: "bp-closed-tz",
+      microgrid_id: "mg-1",
+      status: "closed",
+      start_date: closedStart,
+      end_date: closedEnd,
+      timezone: "UTC", // stamped zone ≠ live zone
+      created_at: `${closedStart}T00:00:00Z`,
+      closed_at: `${closedEnd}T12:00:00Z`,
+    };
+
+    let bpCallCount = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "microgrids")
+        return buildQuery({ id: "mg-1", name: "MG", timezone: liveTz });
+      if (table === "edges") return buildQuery([OPENEMS_EDGE]);
+      if (table === "billing_periods") {
+        bpCallCount++;
+        if (bpCallCount === 1) return buildQuery([]); // no open period
+        return buildQuery([closedPeriod]);
+      }
+      if (table === "billing_line_items") return buildQuery([]);
+      if (table === "microgrid_recent_activity") return buildQuery([]);
+      return buildQuery([]);
+    });
+
+    const jsx = await MicrogridDashboardPage({
+      params: Promise.resolve({ id: "mg-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    // Two queries: closed portion in the STAMPED zone, live portion in the
+    // LIVE zone, split at the closed period's end date.
+    const tzArgs = queryDailyEnergyMock.mock.calls.map((c) => ({
+      fromDate: c[2],
+      toDate: c[3],
+      timezone: c[4],
+    }));
+    expect(tzArgs).toHaveLength(2);
+    const closedCall = tzArgs.find((a) => a.timezone === "UTC");
+    const liveCall = tzArgs.find((a) => a.timezone === liveTz);
+    expect(closedCall?.toDate).toBe(closedEnd);
+    expect(liveCall?.fromDate).toBe(addDaysToDateKey(closedEnd, 1));
+    expect(liveCall?.toDate).toBe(todayLive);
+
+    // The zone change is annotated on the axis, never smoothed away.
+    expect(html).toContain("consumption-calendar-zone-boundary");
+  });
+
+  it("issues a single live-zone query when the stamped and live zones agree (#359)", async () => {
+    const { dayKeyInZone, addDaysToDateKey } = await import(
+      "@/lib/timezone/day-key"
+    );
+    const liveTz = "Africa/Kampala";
+    const todayLive = dayKeyInZone(new Date(), liveTz);
+    const closedEnd = addDaysToDateKey(todayLive, -5);
+    const closedStart = addDaysToDateKey(closedEnd, -15);
+
+    const closedPeriod = {
+      id: "bp-closed-same-tz",
+      microgrid_id: "mg-1",
+      status: "closed",
+      start_date: closedStart,
+      end_date: closedEnd,
+      timezone: liveTz, // stamped zone == live zone
+      created_at: `${closedStart}T00:00:00Z`,
+      closed_at: `${closedEnd}T12:00:00Z`,
+    };
+
+    let bpCallCount = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "microgrids")
+        return buildQuery({ id: "mg-1", name: "MG", timezone: liveTz });
+      if (table === "edges") return buildQuery([OPENEMS_EDGE]);
+      if (table === "billing_periods") {
+        bpCallCount++;
+        if (bpCallCount === 1) return buildQuery([]);
+        return buildQuery([closedPeriod]);
+      }
+      if (table === "billing_line_items") return buildQuery([]);
+      if (table === "microgrid_recent_activity") return buildQuery([]);
+      return buildQuery([]);
+    });
+
+    const jsx = await MicrogridDashboardPage({
+      params: Promise.resolve({ id: "mg-1" }),
+    });
+    const html = renderToStaticMarkup(jsx as React.ReactElement);
+
+    expect(queryDailyEnergyMock).toHaveBeenCalledTimes(1);
+    expect(queryDailyEnergyMock.mock.calls[0][4]).toBe(liveTz);
+    expect(html).not.toContain("consumption-calendar-zone-boundary");
+  });
 });

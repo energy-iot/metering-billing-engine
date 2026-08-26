@@ -798,11 +798,13 @@ export function BillingTable({
                   Label of record ONLY: it must never be fed into
                   <LocalDate> to reinterpret the window dates above —
                   start/end are plain calendar DATEs and render as-is. */}
-              <Timezone
-                iana={period.timezone}
-                referenceDate={new Date(period.end_date)}
-                className="ml-2 text-sm font-normal text-muted-foreground"
-              />
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                {"· "}
+                <Timezone
+                  iana={period.timezone}
+                  referenceDate={new Date(period.end_date)}
+                />
+              </span>
             </h2>
             <span className="mt-1 inline-block">
               <StatusChip kind="billingPeriod" status={period.status} />
@@ -1016,6 +1018,7 @@ export function BillingTable({
           priorHintByHouseholdId={priorHintByHouseholdId ?? {}}
           deviceIdByHouseholdId={deviceIdByHouseholdId ?? {}}
           periodStartDate={period.start_date}
+          periodTimezone={period.timezone}
         />
       )}
 
