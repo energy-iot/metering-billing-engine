@@ -803,9 +803,11 @@ describe("BillingTable — per-period timezone label (#358)", () => {
   it("renders the stamped zone as a muted inline label beside the date range", () => {
     const { container } = renderWithTimezone("Africa/Kampala");
     const h2 = container.querySelector("h2");
-    expect(h2?.textContent).toContain("Africa/Kampala (UTC+3)");
+    // #359 (Designer nit): the zone is joined with a "· " separator, same
+    // as the invoice header and the microgrid header.
+    expect(h2?.textContent).toContain("· Africa/Kampala (UTC+3)");
     const label = Array.from(h2?.querySelectorAll("span") ?? []).find(
-      (el) => el.textContent === "Africa/Kampala (UTC+3)"
+      (el) => el.textContent === "· Africa/Kampala (UTC+3)"
     );
     expect(label).toBeDefined();
     expect(label?.className).toContain("text-muted-foreground");
@@ -817,7 +819,7 @@ describe("BillingTable — per-period timezone label (#358)", () => {
     const label = Array.from(h2?.querySelectorAll("span") ?? []).find(
       (el) => el.className.includes("text-muted-foreground")
     );
-    expect(label?.textContent).toBe("UTC");
+    expect(label?.textContent).toBe("· UTC");
   });
 
   it("HARD guard: window dates render identically under any stamped zone", () => {

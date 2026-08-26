@@ -218,6 +218,46 @@ describe("ConsumptionCalendarWidget", () => {
 
     // Widget renders — absolute mode means no pct, no relative comparison
     expect(html).toContain("Consumption (last 30 days)");
+    // #359 — no zoneBoundary prop → no zone-change annotation.
+    expect(html).not.toContain("consumption-calendar-zone-boundary");
+  });
+
+  // #359 — when the strip crosses a timezone change (closed period stamped
+  // in one zone, live portion in another), the boundary is ANNOTATED on the
+  // axis — never smoothed away by re-binning a period to a uniform zone.
+  it("renders the zone-change annotation when zoneBoundary is present (#359)", () => {
+    const jsx = React.createElement(ConsumptionCalendarWidget, {
+      windowDates: sampleDates,
+      energyByDate: {},
+      targetDailyKwh: null,
+      todayDate: sampleDates[29],
+      zoneBoundary: {
+        lastStampedDate: sampleDates[9],
+        stampedTz: "UTC",
+        liveTz: "Africa/Kampala",
+      },
+    });
+    const html = renderToStaticMarkup(jsx);
+
+    expect(html).toContain("consumption-calendar-zone-boundary");
+    // Both zones named via the #356 human label.
+    expect(html).toContain("UTC");
+    expect(html).toContain("Africa/Kampala (UTC+3)");
+  });
+
+  it("uses the server-computed todayDate for the future cutoff (#359)", () => {
+    // Pretend "today" (live zone) is day 10 of the window — later days must
+    // render as future regardless of the runner's UTC clock.
+    const jsx = React.createElement(ConsumptionCalendarWidget, {
+      windowDates: sampleDates,
+      energyByDate: { [sampleDates[15]]: 12.5 },
+      targetDailyKwh: null,
+      todayDate: sampleDates[9],
+    });
+    const html = renderToStaticMarkup(jsx);
+    // Day 16 has data but sits past todayDate → future, so its kWh must
+    // not render.
+    expect(html).not.toContain("12.5");
   });
 });
 

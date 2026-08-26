@@ -61,6 +61,14 @@ export interface PreflightPanelProps {
   deviceIdByHouseholdId?: Record<string, string>;
   /** #339 — period start, the lower bound of the elapsed-usage query. */
   periodStartDate?: string;
+  /**
+   * #359 — the period's stamped `billing_periods.timezone` (IANA id). The
+   * seed anchors to the period's start, so the elapsed-usage window is
+   * built in the same zone the bill runs on — a non-UTC operator's seed
+   * would otherwise be derived over a UTC window while the bill runs on
+   * the stamped zone. NEVER the live `microgrids.timezone` here.
+   */
+  periodTimezone?: string;
 }
 
 interface RowFormState {
@@ -158,6 +166,7 @@ export function PreflightPanel(props: PreflightPanelProps) {
     priorHintByHouseholdId = {},
     deviceIdByHouseholdId = {},
     periodStartDate,
+    periodTimezone,
   } = props;
   const router = useRouter();
 
@@ -266,6 +275,10 @@ export function PreflightPanel(props: PreflightPanelProps) {
           deviceIds: [deviceId],
           fromDate: periodStartDate,
           toDate: readDate,
+          // #359 — the stamped zone, so seed-derivation window == billing
+          // window. Omitted (route defaults to UTC) only when the caller
+          // predates the prop.
+          ...(periodTimezone ? { timezone: periodTimezone } : {}),
         }),
       });
       if (!res.ok) {

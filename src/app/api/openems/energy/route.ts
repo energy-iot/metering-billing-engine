@@ -4,11 +4,21 @@ import { createOpenEmsClient, OpenEmsError } from "@/lib/openems";
 import { getMicrogridEmsConfig } from "@/lib/openems/config";
 import type { DeviceEnergyResult } from "@/lib/openems/types";
 import type { DeviceConfig } from "@/lib/adapters/types";
+import { validateTimezone } from "@/lib/validation/timezone";
 
 type EnergyRequestBody = {
   deviceIds: string[];
   fromDate: string;
   toDate: string;
+  /**
+   * #359 — caller-supplied IANA zone the day-window is built in (same
+   * threading as billing's `getReadings`, #355). Period-scoped callers
+   * (e.g. the preflight seed derivation) pass the period's stamped
+   * `billing_periods.timezone` so the queried window matches the billing
+   * window; ambient callers pass the live `microgrids.timezone`.
+   * Optional for backward compatibility — absent means "UTC".
+   */
+  timezone?: string;
 };
 
 type DeviceError = {
@@ -48,6 +58,16 @@ export async function POST(request: NextRequest) {
       { error: "fromDate and toDate are required (YYYY-MM-DD format)" },
       { status: 400 }
     );
+  }
+
+  // #359 — validate the caller-supplied zone (no numeric-offset math; the
+  // IANA name is passed through and OpenEMS/ICU resolve the offset).
+  const timezone = body.timezone ?? "UTC";
+  if (body.timezone !== undefined) {
+    const tzError = validateTimezone(body.timezone);
+    if (tzError) {
+      return NextResponse.json({ error: tzError }, { status: 400 });
+    }
   }
 
   // Look up devices with parent edge + microgrid (RLS-enforced).
@@ -160,7 +180,8 @@ export async function POST(request: NextRequest) {
     const results: DeviceEnergyResult[] = await client.getDeviceEnergy(
       openEmsDeviceConfigs,
       body.fromDate,
-      body.toDate
+      body.toDate,
+      timezone
     );
 
     return NextResponse.json({ results, errors });

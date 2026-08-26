@@ -381,7 +381,9 @@ describe("GET /api/billing-periods/[periodId]/export-csv", () => {
     // date cells are NOT shifted by it (label of record, not a formatting
     // input — the byte-exact header pin + cols[1] Issue Date assertions
     // above run against the same Kampala-stamped fixture).
-    expect(lines[1].split(",").pop()).toBe("Africa/Kampala (UTC+3)");
+    // #359 (PM decision): the CSV cell is the RAW IANA id, not the human
+    // "(UTC+3)" label — stable + machine-parseable for export consumers.
+    expect(lines[1].split(",").pop()).toBe("Africa/Kampala");
   });
 
   it("filename sanitization: microgrid name with special chars → lowered + dashed", async () => {

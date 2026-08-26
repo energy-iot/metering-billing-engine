@@ -29,8 +29,6 @@
  * explicit so the helper is fully unit-testable.
  */
 
-import { formatTimezone } from "@/components/format/timezone";
-
 import { roundKwh, roundAmount } from "./precision";
 
 /** Per-row input to {@link buildBillingPeriodCsv}. */
@@ -74,10 +72,14 @@ export interface CsvExportInput {
     /**
      * #358 — the IANA timezone the period was calculated under, from the
      * immutable `billing_periods.timezone` stamp (#354; NEVER
-     * `microgrids.timezone`). Emitted via `formatTimezone` (#356) in the
-     * trailing "Period Timezone" column. Label of record ONLY — it is
-     * never used to reinterpret `start_date`/`end_date`, which are plain
-     * calendar DATEs emitted as-is.
+     * `microgrids.timezone`). Emitted as the RAW IANA id (#359, PM
+     * decision) in the trailing "Period Timezone" column — stable and
+     * machine-parseable for export consumers, unlike the human label
+     * whose "(UTC±h)" suffix varies with the DST reference date. In-app
+     * and invoice surfaces keep the human `formatTimezone` label; only
+     * this CSV column is raw. Label of record ONLY — it is never used to
+     * reinterpret `start_date`/`end_date`, which are plain calendar DATEs
+     * emitted as-is.
      */
     timezone: string;
   };
@@ -239,13 +241,9 @@ export function buildBillingPeriodCsv(input: CsvExportInput): string {
   // #358 — trailing so existing URA column positions are untouched.
   header.push("Period Timezone");
 
-  // #358 — stamped-zone cell, identical on every row of the export.
-  // Reference date = period end so the emitted offset is the one that
-  // governed the stored period (deterministic — formatTimezone would
-  // otherwise default to "now", breaking the helper's purity contract).
-  const periodTimezoneCell = csvCell(
-    formatTimezone(input.period.timezone, new Date(input.period.end_date)),
-  );
+  // #358/#359 — stamped-zone cell, identical on every row of the export.
+  // Raw IANA id, not the human label (see CsvExportInput.period.timezone).
+  const periodTimezoneCell = csvCell(input.period.timezone);
 
   // ── Sort rows (stable secondary by line-item id) ──────────────────────────
   const sortedRows = [...input.rows].sort((a, b) => {
