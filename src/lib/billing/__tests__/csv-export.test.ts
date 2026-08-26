@@ -3,7 +3,7 @@
  *
  * The helper is fully data-driven; these tests cover the AC-spec'd
  * invariants:
- *   - 19-column base header (+ 2 per tier) — `OpenEMS Meter ID`
+ *   - 20-column base header (+ 2 per tier) — `OpenEMS Meter ID`
  *     (renamed) at index 4, `Meter Serial` (new) at index 5 (#232).
  *   - Per-row VAT/service/subtotal derivation from
  *     `community.invoice_config.tax.rate_pct` (NOT `rateSchedule.tax_rate`).
@@ -87,6 +87,7 @@ function makeInput(overrides: Partial<CsvExportInput> = {}): CsvExportInput {
       start_date: "2026-04-01",
       end_date: "2026-04-30",
       status: "closed",
+      timezone: "UTC",
     },
     rateSchedule: {
       tiers: TIERS_2,
@@ -115,7 +116,7 @@ function parseLines(csv: string): string[] {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("buildBillingPeriodCsv — header + structure", () => {
-  it("emits 19 fixed columns + 2 per tier (4-tier microgrid → 27 columns)", () => {
+  it("emits 20 fixed columns + 2 per tier (4-tier microgrid → 28 columns)", () => {
     // #232: base columns shift from 18 → 19 (Meter Serial inserted at
     // index 5, after the renamed `OpenEMS Meter ID` at index 4).
     const csv = buildBillingPeriodCsv(
@@ -123,7 +124,8 @@ describe("buildBillingPeriodCsv — header + structure", () => {
     );
     const lines = parseLines(csv);
     const headerCols = lines[0].split(",");
-    expect(headerCols.length).toBe(19 + 8);
+    // #358: base columns shift 19 → 20 (trailing "Period Timezone").
+    expect(headerCols.length).toBe(20 + 8);
     expect(headerCols[0]).toBe("Invoice Number");
     expect(headerCols[1]).toBe("Issue Date");
     expect(headerCols[2]).toBe("Household");
@@ -134,10 +136,10 @@ describe("buildBillingPeriodCsv — header + structure", () => {
     expect(headerCols[8]).toBe("Address");
   });
 
-  it("2-tier microgrid → 19 + 4 = 23 columns", () => {
+  it("2-tier microgrid → 20 + 4 = 24 columns", () => {
     const csv = buildBillingPeriodCsv(makeInput());
     const cols = parseLines(csv)[0].split(",");
-    expect(cols.length).toBe(19 + 4);
+    expect(cols.length).toBe(20 + 4);
   });
 
   it("currency token threads into Service / VAT / Total / tier headers", () => {
@@ -442,9 +444,10 @@ describe("buildBillingPeriodCsv — payment-status title case", () => {
       lineItem: { ...makeRow().lineItem, payment_status: input },
     });
     const csv = buildBillingPeriodCsv(makeInput({ rows: [row] }));
-    // Payment Status is the 2nd-to-last column.
+    // Payment Status is the 3rd-to-last column (#358 appended
+    // Period Timezone after Paid At).
     const cols = parseLines(csv)[1].split(",");
-    expect(cols[cols.length - 2]).toBe(expected);
+    expect(cols[cols.length - 3]).toBe(expected);
   });
 });
 
@@ -665,5 +668,66 @@ describe("buildBillingPeriodCsv — #232 display-side rounding masks float-dust"
     expect(cols[17]).toBe("5000"); // service charge — rounded
     // energy = 25000 + 24000 = 49000, +service 5000 = 54000.
     expect(cols[18]).toBe("54000");
+  });
+});
+
+// ── #358 — stamped period timezone column ────────────────────────────────────
+describe("buildBillingPeriodCsv — Period Timezone column (#358)", () => {
+  it("emits a trailing 'Period Timezone' header column", () => {
+    const cols = parseLines(buildBillingPeriodCsv(makeInput()))[0].split(",");
+    expect(cols[cols.length - 1]).toBe("Period Timezone");
+  });
+
+  it("historical (UTC-stamped) periods emit bare 'UTC'", () => {
+    const csv = buildBillingPeriodCsv(makeInput());
+    const lines = parseLines(csv);
+    const dataCols = lines[1].split(",");
+    expect(dataCols[dataCols.length - 1]).toBe("UTC");
+  });
+
+  it("a Kampala-stamped period emits 'Africa/Kampala (UTC+3)'", () => {
+    const csv = buildBillingPeriodCsv(
+      makeInput({
+        period: {
+          id: "00000000-0000-0000-0000-0000000000aa",
+          start_date: "2026-04-01",
+          end_date: "2026-04-30",
+          status: "closed",
+          timezone: "Africa/Kampala",
+        },
+      }),
+    );
+    const lines = parseLines(csv);
+    const dataCols = lines[1].split(",");
+    expect(dataCols[dataCols.length - 1]).toBe("Africa/Kampala (UTC+3)");
+  });
+
+  it("HARD guard: the stamped zone never reinterprets the window dates or any date cell", () => {
+    // Pacific/Kiritimati is UTC+14 year-round — if the timezone were used
+    // as a date-formatting input anywhere in the serializer, some date
+    // cell would shift relative to a UTC-stamped export. Only the trailing
+    // Period Timezone cell may differ between the two exports.
+    const base = {
+      id: "00000000-0000-0000-0000-0000000000aa",
+      start_date: "2026-04-01",
+      end_date: "2026-04-30",
+      status: "closed",
+    };
+    const utcCsv = buildBillingPeriodCsv(
+      makeInput({ period: { ...base, timezone: "UTC" } }),
+    );
+    const kiriCsv = buildBillingPeriodCsv(
+      makeInput({ period: { ...base, timezone: "Pacific/Kiritimati" } }),
+    );
+    const utcLines = parseLines(utcCsv);
+    const kiriLines = parseLines(kiriCsv);
+    expect(kiriLines.length).toBe(utcLines.length);
+    for (let i = 0; i < utcLines.length; i++) {
+      const utcCols = utcLines[i].split(",");
+      const kiriCols = kiriLines[i].split(",");
+      // All columns except the trailing Period Timezone cell are identical.
+      expect(kiriCols.slice(0, -1)).toEqual(utcCols.slice(0, -1));
+    }
+    expect(kiriLines[1].split(",").pop()).toBe("Pacific/Kiritimati (UTC+14)");
   });
 });

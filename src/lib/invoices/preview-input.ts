@@ -223,6 +223,9 @@ export function assembleSyntheticPreviewInput({
     enteredByUserName: "Sample Operator",
     billingPeriodStart: periodStart.toISOString(),
     billingPeriodEnd: periodEnd.toISOString(),
+    // #358 — preview has no stored period, so mirror the T1 (#354)
+    // column default: "UTC".
+    billingPeriodTimezone: "UTC",
     // Audit/decoration fields preserved for future extension; not consumed
     // by the renderer today but documented in the helper contract.
     _previewMeta: {
