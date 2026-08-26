@@ -84,6 +84,7 @@ const period: BillingPeriod = {
   status: "draft",
   created_at: "2026-03-01T00:00:00Z",
   closed_at: null,
+  timezone: "UTC",
 };
 
 const households: Household[] = [

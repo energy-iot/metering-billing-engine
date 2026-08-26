@@ -62,6 +62,7 @@ function makePeriod(overrides?: Partial<BillingPeriod>): BillingPeriod {
     status: "draft",
     created_at: "2026-04-01T00:00:00Z",
     closed_at: null,
+    timezone: "UTC",
     ...overrides,
   };
 }
