@@ -538,10 +538,18 @@ export async function runGenerationFor(
             edgeOpenemsId: d.edgeOpenemsId,
             componentId: d.componentId,
           }));
+        // #355: the window's timezone is the PERIOD's stamped value
+        // (`billing_periods.timezone`, written once by the BEFORE INSERT
+        // trigger from #354) — never `microgrids.timezone`, which the
+        // operator can change later. Regenerating a closed period after a
+        // microgrid timezone change must reproduce the identical window and
+        // therefore byte-identical line items; if the stamp trigger ever
+        // starts re-stamping on UPDATE, revisit this guarantee.
         const readings = await client.getReadings(
           deviceConfigs,
           billingPeriod.start_date,
-          billingPeriod.end_date
+          billingPeriod.end_date,
+          billingPeriod.timezone
         );
         usageMap = new Map<string, number | null>();
         for (const r of readings) usageMap.set(r.deviceId, r.usageKwh);
