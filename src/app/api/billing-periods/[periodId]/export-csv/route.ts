@@ -87,7 +87,7 @@ export async function GET(
   //    missing → 404.
   const { data: periodRow, error: periodErr } = await supabase
     .from("billing_periods")
-    .select("id, microgrid_id, start_date, end_date, status")
+    .select("id, microgrid_id, start_date, end_date, status, timezone")
     .eq("id", periodId)
     .maybeSingle();
 
@@ -326,6 +326,8 @@ export async function GET(
       start_date: periodRow.start_date as string,
       end_date: periodRow.end_date as string,
       status: periodRow.status as string,
+      // #358 — the immutable per-period stamp (NOT microgrids.timezone).
+      timezone: periodRow.timezone as string,
     },
     rateSchedule: {
       tiers: rateScheduleTiers,

@@ -141,6 +141,7 @@ function periodRow(overrides: Record<string, unknown> = {}) {
     start_date: "2026-04-01",
     end_date: "2026-04-30",
     status: "closed",
+    timezone: "Africa/Kampala", // #358 — stamped zone threaded into the CSV
     ...overrides,
   };
 }
@@ -328,9 +329,9 @@ describe("GET /api/billing-periods/[periodId]/export-csv", () => {
     const lines = stripped.split("\r\n");
     if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
     expect(lines.length).toBe(1);
-    // #232: Header has 19 base columns + tier columns (Tier 1 kWh +
-    // Tier 1 UGX), so 19 + 2 = 21.
-    expect(lines[0].split(",").length).toBe(19 + 2);
+    // #232: 19 base columns; #358 adds trailing "Period Timezone" → 20.
+    // Plus tier columns (Tier 1 kWh + Tier 1 UGX), so 20 + 2 = 22.
+    expect(lines[0].split(",").length).toBe(20 + 2);
     expect(lines[0]).toContain("Tier 1 kWh");
     expect(lines[0]).toContain("Tier 1 UGX");
   });
@@ -348,7 +349,7 @@ describe("GET /api/billing-periods/[periodId]/export-csv", () => {
       "Invoice Number,Issue Date,Household,Account Number,OpenEMS Meter ID,Meter Serial," +
         "Meter Type,Customer Type,Address,Phone,Begin kWh,End kWh,Usage kWh," +
         "Tier 1 kWh,Tier 1 UGX,Service Charge UGX,Taxable Subtotal UGX,VAT UGX,Total UGX," +
-        "Payment Status,Paid At",
+        "Payment Status,Paid At,Period Timezone",
     );
   });
 
@@ -364,6 +365,23 @@ describe("GET /api/billing-periods/[periodId]/export-csv", () => {
     expect(lines[1]).toBeDefined();
     const cols = lines[1].split(",");
     expect(cols[5]).toBe("MS-1");
+  });
+
+  it("200: trailing Period Timezone cell carries the stamped zone (#358)", async () => {
+    const { GET } = await import("../route");
+    const res = await GET(makeReq(), {
+      params: Promise.resolve({ periodId: PERIOD_ID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const stripped = body.startsWith("\ufeff") ? body.slice(1) : body;
+    const lines = stripped.split("\r\n");
+    expect(lines[1]).toBeDefined();
+    // Fixture stamps Africa/Kampala; the window dates in the filename and
+    // date cells are NOT shifted by it (label of record, not a formatting
+    // input — the byte-exact header pin + cols[1] Issue Date assertions
+    // above run against the same Kampala-stamped fixture).
+    expect(lines[1].split(",").pop()).toBe("Africa/Kampala (UTC+3)");
   });
 
   it("filename sanitization: microgrid name with special chars → lowered + dashed", async () => {

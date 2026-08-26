@@ -10,6 +10,7 @@ import { formatCurrency } from "@/components/format/currency";
 import { Kwh } from "@/components/format/kwh";
 import { formatKwh } from "@/components/format/kwh";
 import { LocalDate } from "@/components/format/local-date";
+import { Timezone } from "@/components/format/timezone";
 import { useLocale } from "@/components/format/locale-context";
 import { StatusChip } from "@/components/ui/status-chip";
 import { CopyTable, type ColumnDef } from "@/components/ui/copy-table";
@@ -792,6 +793,16 @@ export function BillingTable({
                   <LocalDate value={period.end_date + "T00:00:00"} />
                 </>
               )}
+              {/* #358 — the timezone the period was calculated under, from
+                  the immutable `billing_periods.timezone` stamp (#354).
+                  Label of record ONLY: it must never be fed into
+                  <LocalDate> to reinterpret the window dates above —
+                  start/end are plain calendar DATEs and render as-is. */}
+              <Timezone
+                iana={period.timezone}
+                referenceDate={new Date(period.end_date)}
+                className="ml-2 text-sm font-normal text-muted-foreground"
+              />
             </h2>
             <span className="mt-1 inline-block">
               <StatusChip kind="billingPeriod" status={period.status} />

@@ -125,6 +125,7 @@ export async function GET(
         microgrid_id,
         start_date,
         end_date,
+        timezone,
         microgrids!inner (
           id,
           community_id,
@@ -570,6 +571,8 @@ export async function GET(
       currency: (microgrid.currency as string | null) ?? null,
       billingPeriodStart: period.start_date as string | null,
       billingPeriodEnd: period.end_date as string | null,
+      // #358 — the immutable per-period stamp (NOT microgrids.timezone).
+      billingPeriodTimezone: period.timezone as string | null,
     });
   } catch (err) {
     if (err instanceof ZodError) {

@@ -43,6 +43,7 @@ import {
 import { formatCurrency, formatRate } from "@/components/format/currency";
 import { formatKwh } from "@/components/format/kwh";
 import { formatLocalDate } from "@/components/format/local-date";
+import { formatTimezone } from "@/components/format/timezone";
 import type {
   BillingLineItem,
   Community,
@@ -138,6 +139,16 @@ export interface RenderInvoiceInput {
    */
   billingPeriodStart?: string | null;
   billingPeriodEnd?: string | null;
+  /**
+   * #358 — the IANA timezone the billing period was calculated under, from
+   * the immutable `billing_periods.timezone` stamp (#354; NEVER
+   * `microgrids.timezone`). Rendered as a label beside the period range via
+   * the pure `formatTimezone` helper (#356 — react-pdf can't render the
+   * `<Timezone>` span). Label of record ONLY: it must NOT be used to
+   * reinterpret `billingPeriodStart`/`billingPeriodEnd`, which are plain
+   * calendar DATEs rendered as-is. Omitted/null → no zone label.
+   */
+  billingPeriodTimezone?: string | null;
 }
 
 // ── Visual constants ─────────────────────────────────────────────────────────
@@ -542,17 +553,25 @@ function formatBillingPeriodRange(
     return "—";
   }
   const sameYear = sd.getUTCFullYear() === ed.getUTCFullYear();
+  // #358 HARD guard: start/end are plain calendar DATEs ("YYYY-MM-DD",
+  // parsed as UTC midnight). Pin formatting to UTC so the window renders
+  // as-is on any host — without the pin, a render host west of UTC shows
+  // the previous day (the exact re-shift bug the tz-awareness initiative
+  // #353 fixes; production Vercel runs TZ=UTC, which is why this never
+  // surfaced there). The stamped period timezone is a LABEL and must
+  // never be threaded in here.
   const startStr = formatLocalDate(
     sd,
     locale,
     sameYear
-      ? { day: "numeric", month: "short" }
-      : { day: "numeric", month: "short", year: "numeric" },
+      ? { day: "numeric", month: "short", timeZone: "UTC" }
+      : { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" },
   );
   const endStr = formatLocalDate(ed, locale, {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   });
   return `${startStr} – ${endStr}`;
 }
@@ -682,6 +701,21 @@ function InvoiceDocument(props: RenderProps): React.ReactElement {
         )
       : "—";
 
+  // #358 — stamped-zone label. Reference date = period end (a stored
+  // record must show the offset that governed it, and an explicit Date
+  // keeps the PDF byte-deterministic — formatTimezone defaults to "now").
+  const billingPeriodTz =
+    input.billingPeriodTimezone && input.billingPeriodEnd
+      ? formatTimezone(
+          input.billingPeriodTimezone,
+          new Date(input.billingPeriodEnd),
+        )
+      : null;
+  const billingPeriodCell =
+    billingPeriodTz && billingPeriodTz !== "—"
+      ? `${billingPeriodRange} · ${billingPeriodTz}`
+      : billingPeriodRange;
+
   const readingSrc = buildReadingSourceLines(input, props.locale);
 
   const tariffPlan = (() => {
@@ -768,7 +802,7 @@ function InvoiceDocument(props: RenderProps): React.ReactElement {
                     label="Issue Date"
                     value={formatLocalDate(props.issueDate, props.locale)}
                   />
-                  <MetaItem label="Billing Period" value={billingPeriodRange} />
+                  <MetaItem label="Billing Period" value={billingPeriodCell} />
                   <MetaItem
                     label="Due Date"
                     value={formatLocalDate(props.dueDate, props.locale)}
