@@ -49,6 +49,7 @@ const PERIOD_1: BillingPeriod = {
   status: "closed",
   created_at: "2026-02-01T00:00:00Z",
   closed_at: "2026-03-01T00:00:00Z",
+  timezone: "UTC",
 };
 
 const PERIOD_2: BillingPeriod = {
@@ -59,6 +60,7 @@ const PERIOD_2: BillingPeriod = {
   status: "draft",
   created_at: "2026-03-01T00:00:00Z",
   closed_at: null,
+  timezone: "UTC",
 };
 
 const SUMMARIES = {
