@@ -3,6 +3,10 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { currentUserCanAccessMicrogrid } from "@/lib/auth/access";
 import { validateCurrency } from "@/lib/validation/currency";
+import {
+  validateTimezone,
+  canonicalTimezone,
+} from "@/lib/validation/timezone";
 import { countEntityDescendants } from "@/lib/entity-descendants";
 import {
   errorBody,
@@ -24,6 +28,9 @@ import { MICROGRID_PUBLIC_COLUMNS } from "@/lib/types/microgrid-columns";
  * org_manager of the microgrid's parent org (via community → org).
  *
  * Validation: currency (if sent) must be valid ISO 4217 (422 on RangeError).
+ * timezone (if sent) must be a valid IANA zone id — literal 'UTC' or an
+ * Area/Location id that Intl.DateTimeFormat resolves; stored in canonical
+ * form (422 otherwise, #357 — see src/lib/validation/timezone.ts).
  * Duplicate rename (same community → same name) → 409 with exact copy.
  */
 export async function PATCH(
@@ -77,6 +84,27 @@ export async function PATCH(
       );
     }
     updates.currency = c;
+  }
+
+  if ("timezone" in body) {
+    const tz = typeof body.timezone === "string" ? body.timezone.trim() : "";
+    const err = validateTimezone(tz);
+    if (err) {
+      return NextResponse.json(
+        { error: err, field: "timezone" },
+        { status: 422 }
+      );
+    }
+    // Forward-only semantics (#357): this UPDATE touches only
+    // microgrids.timezone. Existing billing_periods rows (open or closed)
+    // keep the zone stamped at their INSERT by
+    // trg_billing_period_stamp_timezone (migration 00055) — nothing here
+    // rewrites them, and the next created period inherits the new zone via
+    // that trigger. If the trigger is ever dropped or per-period overrides
+    // are introduced, revisit this route's contract.
+    // Stored canonically (case-folded, alias-resolved) so the column never
+    // accumulates variants of the same zone.
+    updates.timezone = canonicalTimezone(tz) as string;
   }
 
   const OPTIONAL_STRING_FIELDS = [
