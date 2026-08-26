@@ -295,7 +295,7 @@ describe("OpenEmsClient", () => {
           })
         );
 
-      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-10");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-10", "UTC");
 
       // Should have made exactly 2 fetch calls (one per edge)
       expect(fetchSpy).toHaveBeenCalledTimes(2);
@@ -338,7 +338,7 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC");
       expect(readings[0].usageKwh).toBe(1.5);
     });
 
@@ -365,7 +365,7 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC");
       expect(readings[0].usageKwh).toBeNull();
     });
 
@@ -390,7 +390,7 @@ describe("OpenEmsClient", () => {
         })
       );
 
-      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02");
+      const readings = await client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC");
       expect(readings[0].usageKwh).toBeNull();
     });
 
@@ -404,11 +404,11 @@ describe("OpenEmsClient", () => {
       ];
 
       await expect(
-        client.getReadings(devices, "2026-03-01", "2026-03-02")
+        client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC")
       ).rejects.toThrow(OpenEmsError);
 
       await expect(
-        client.getReadings(devices, "2026-03-01", "2026-03-02")
+        client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC")
       ).rejects.toMatchObject({ code: "DEVICE_INVALID_DATA_SOURCE" });
     });
 
@@ -422,8 +422,130 @@ describe("OpenEmsClient", () => {
       ];
 
       await expect(
-        client.getReadings(devices, "2026-03-01", "2026-03-02")
+        client.getReadings(devices, "2026-03-01", "2026-03-02", "UTC")
       ).rejects.toMatchObject({ code: "DEVICE_INVALID_DATA_SOURCE" });
+    });
+  });
+
+  // ── #355: period timezone threads through getReadings → queryHistoricEnergy
+  //
+  // The billing window's local-day boundary is built by OpenEMS from the IANA
+  // zone NAME. MBE passes the name verbatim and does no numeric-offset math —
+  // these tests assert on the RPC params object (the wire payload), not just
+  // on which method was called.
+  describe("getReadings timezone threading (#355)", () => {
+    function energyResponse(data: Record<string, number | null>) {
+      return mockResponse({
+        jsonrpc: "2.0",
+        id: "id",
+        result: {
+          payload: { jsonrpc: "2.0", id: "id", result: { data } },
+        },
+      });
+    }
+
+    function rpcParamsOfCall(callIndex = 0) {
+      const body = JSON.parse(
+        fetchSpy.mock.calls[callIndex][1]?.body as string
+      );
+      return body.params.payload.params;
+    }
+
+    const devices: DeviceConfig[] = [
+      makeDeviceConfig("device-uuid-1", "edge0", "meter0"),
+    ];
+
+    it("passes a non-UTC IANA zone verbatim into the queryHistoricTimeseriesEnergy params", async () => {
+      fetchSpy.mockResolvedValue(
+        energyResponse({ "meter0/ActiveConsumptionEnergy": 5000 })
+      );
+
+      await client.getReadings(
+        devices,
+        "2026-06-01",
+        "2026-06-30",
+        "Africa/Kampala"
+      );
+
+      // The whole params object, not a spot-check: the window is exactly the
+      // caller's dates plus the zone name, nothing derived.
+      expect(rpcParamsOfCall()).toEqual({
+        fromDate: "2026-06-01",
+        toDate: "2026-06-30",
+        channels: ["meter0/ActiveConsumptionEnergy"],
+        timezone: "Africa/Kampala",
+      });
+    });
+
+    it("same-day period (fromDate == toDate) in a non-UTC zone → single local day, dates untouched", async () => {
+      // OpenEMS treats `toDate` as INCLUSIVE (the query window is
+      // [fromDate 00:00 local, toDate+1day 00:00 local) built server-side
+      // from the zone), so fromDate == toDate is a valid one-local-day
+      // window — per #253's same-day periods. MBE's job is only to hand
+      // both dates and the zone name over unmodified.
+      fetchSpy.mockResolvedValue(
+        energyResponse({ "meter0/ActiveConsumptionEnergy": 1000 })
+      );
+
+      await client.getReadings(
+        devices,
+        "2026-08-15",
+        "2026-08-15",
+        "Africa/Kampala"
+      );
+
+      const params = rpcParamsOfCall();
+      expect(params.fromDate).toBe("2026-08-15");
+      expect(params.toDate).toBe("2026-08-15");
+      expect(params.fromDate).toBe(params.toDate);
+      expect(params.timezone).toBe("Africa/Kampala");
+    });
+
+    it("DST transition window (Europe/Berlin): zone NAME on the wire, no numeric offset anywhere in the payload", async () => {
+      // 2026-03-29 is the Europe/Berlin spring-forward day. The correct
+      // window across it cannot be expressed as a fixed offset — it must be
+      // built from the zone name, and OpenEMS is the side that builds it.
+      fetchSpy.mockResolvedValue(
+        energyResponse({ "meter0/ActiveConsumptionEnergy": 3000 })
+      );
+
+      await client.getReadings(
+        devices,
+        "2026-03-28",
+        "2026-03-30",
+        "Europe/Berlin"
+      );
+
+      const params = rpcParamsOfCall();
+      // Byte-identical date strings — no local/UTC re-derivation happened.
+      expect(params.fromDate).toBe("2026-03-28");
+      expect(params.toDate).toBe("2026-03-30");
+      expect(params.timezone).toBe("Europe/Berlin");
+
+      // Mutation guard: the entire wire payload carries the IANA name and
+      // NO numeric-offset representation of it. Would catch a regression
+      // that "resolves" the zone to +01:00/+02:00 before sending.
+      const rawBody = fetchSpy.mock.calls[0][1]?.body as string;
+      expect(rawBody).toContain("Europe/Berlin");
+      expect(rawBody).not.toMatch(/[+-]\d{2}:\d{2}/);
+      expect(rawBody).not.toMatch(/GMT|UTC[+-]/);
+    });
+
+    it("UTC-stamped periods behave exactly as before (no-op regression)", async () => {
+      // Pre-#355 getReadings fell through to queryHistoricEnergy's "UTC"
+      // default. Passing "UTC" explicitly must produce the identical params.
+      fetchSpy.mockResolvedValue(
+        energyResponse({ "meter0/ActiveConsumptionEnergy": 5000 })
+      );
+
+      await client.getReadings(devices, "2026-03-01", "2026-03-10", "UTC");
+
+      expect(rpcParamsOfCall()).toEqual({
+        fromDate: "2026-03-01",
+        toDate: "2026-03-10",
+        channels: ["meter0/ActiveConsumptionEnergy"],
+        timezone: "UTC",
+      });
     });
   });
 

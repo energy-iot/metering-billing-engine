@@ -43,7 +43,8 @@ vi.mock("@/lib/openems", async () => {
       getReadings: async (
         devices: { id: string }[],
         startDate: string,
-        endDate: string
+        endDate: string,
+        _timezone: string
       ) =>
         devices.map((d) => ({
           deviceId: d.id,
