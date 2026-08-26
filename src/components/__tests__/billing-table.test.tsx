@@ -783,3 +783,56 @@ describe("BillingTable", () => {
     expect(screen.queryByText(/^generate payment link$/i)).toBeNull();
   });
 });
+
+// ── #358 — per-period timezone display ───────────────────────────────────────
+//
+// The stamped `billing_periods.timezone` (#354) renders as a muted inline
+// label beside the period date range. It is a label of record ONLY — the
+// HARD guard test below fails if anyone ever feeds it into <LocalDate> as
+// a formatting input (that would re-shift the plain-DATE window and
+// reintroduce the bug the tz-awareness initiative #353 fixes).
+describe("BillingTable — per-period timezone label (#358)", () => {
+  function renderWithTimezone(timezone: string) {
+    return render(
+      <Wrapper>
+        <BillingTable {...baseProps} period={{ ...period, timezone }} />
+      </Wrapper>
+    );
+  }
+
+  it("renders the stamped zone as a muted inline label beside the date range", () => {
+    const { container } = renderWithTimezone("Africa/Kampala");
+    const h2 = container.querySelector("h2");
+    expect(h2?.textContent).toContain("Africa/Kampala (UTC+3)");
+    const label = Array.from(h2?.querySelectorAll("span") ?? []).find(
+      (el) => el.textContent === "Africa/Kampala (UTC+3)"
+    );
+    expect(label).toBeDefined();
+    expect(label?.className).toContain("text-muted-foreground");
+  });
+
+  it("historical (pre-fix) periods render bare 'UTC'", () => {
+    const { container } = renderWithTimezone("UTC");
+    const h2 = container.querySelector("h2");
+    const label = Array.from(h2?.querySelectorAll("span") ?? []).find(
+      (el) => el.className.includes("text-muted-foreground")
+    );
+    expect(label?.textContent).toBe("UTC");
+  });
+
+  it("HARD guard: window dates render identically under any stamped zone", () => {
+    // Pacific/Kiritimati is UTC+14 year-round; if period.timezone were
+    // (incorrectly) used to reinterpret the window DATEs, the rendered
+    // dates would shift relative to the UTC-stamped render.
+    const utc = renderWithTimezone("UTC");
+    const utcText = utc.container.querySelector("h2")?.textContent ?? "";
+    utc.unmount();
+    const kiri = renderWithTimezone("Pacific/Kiritimati");
+    const kiriText = kiri.container.querySelector("h2")?.textContent ?? "";
+    // Strip each render's own zone label; what remains is the date range.
+    const utcDates = utcText.replace("UTC", "").trim();
+    const kiriDates = kiriText.replace("Pacific/Kiritimati (UTC+14)", "").trim();
+    expect(utcDates.length).toBeGreaterThan(0);
+    expect(kiriDates).toBe(utcDates);
+  });
+});

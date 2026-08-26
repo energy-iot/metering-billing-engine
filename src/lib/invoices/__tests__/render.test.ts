@@ -310,6 +310,8 @@ function buildF1Input(): RenderInvoiceInput {
     currency: "UGX",
     billingPeriodStart: "2026-04-01",
     billingPeriodEnd: "2026-04-30",
+    // #358 — stamped zone (label of record; must not shift the range).
+    billingPeriodTimezone: "Africa/Kampala",
   };
 }
 
@@ -441,6 +443,12 @@ describe("renderInvoicePdf — fixtures (#203 PDF1b)", () => {
       "Edge reading captured",
       "Pay Now",
       "VAT",
+      // #358 — stamped period timezone beside the Billing Period range.
+      // Asserted as two tokens: the narrow meta cell line-wraps between
+      // the id and the offset, so pdf-parse text extraction inserts a
+      // newline inside "Africa/Kampala (UTC+3)".
+      "Africa/Kampala",
+      "(UTC+3)",
     ]);
 
     maybeAssertByteStability("full-config-with-logo", buf);
@@ -543,6 +551,35 @@ describe("renderInvoicePdf — fixtures (#203 PDF1b)", () => {
     expect(reconcile(15.000, 250.00, 3750)).toBe(true);
 
     maybeAssertByteStability("regression-nfe-2026-00003", buf);
+  });
+
+  // ── #358 — per-period timezone on the invoice PDF ──────────────────────────
+
+  it("#358: omitted billingPeriodTimezone → no zone label (historical callers)", async () => {
+    const input = { ...buildF1Input(), logoBytes: null };
+    delete (input as Partial<RenderInvoiceInput>).billingPeriodTimezone;
+    const buf = await renderInvoicePdf(input);
+    await expectStructuralPdfShape(buf, ["NFE-2026-00421"], ["Africa/Kampala"]);
+  });
+
+  it("#358 HARD guard: the stamped zone labels the range but never shifts the window dates", async () => {
+    // Pacific/Midway is UTC-11 year-round. If billingPeriodTimezone were
+    // (incorrectly) fed into date formatting, the plain calendar DATEs
+    // 2026-04-01 / 2026-04-30 (parsed as UTC midnight) would render as
+    // 31 Mar / 29 Apr. They must render as-is: "1 Apr – 30 Apr" (the
+    // year wraps to the next extracted line, so it's asserted separately
+    // via the forbidden shifted forms). The range formatter is pinned to
+    // timeZone: "UTC" so this holds on any host TZ, not just UTC runners.
+    const buf = await renderInvoicePdf({
+      ...buildF1Input(),
+      logoBytes: null,
+      billingPeriodTimezone: "Pacific/Midway",
+    });
+    await expectStructuralPdfShape(
+      buf,
+      ["Pacific/Midway", "(UTC-11)", "1 Apr – 30 Apr"],
+      ["31 Mar", "29 Apr –", "– 29 Apr"],
+    );
   });
 
   it("rejects invalid invoice_config via parseInvoiceConfig (ZodError)", async () => {

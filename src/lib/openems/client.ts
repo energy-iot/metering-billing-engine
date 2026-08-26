@@ -306,11 +306,16 @@ export class OpenEmsClient implements DeviceDataAdapter {
    * and converts Wh to kWh.
    *
    * Channel address: `${componentId}/ActiveConsumptionEnergy` (OpenEMS convention).
+   *
+   * `timezone` (IANA name) is forwarded verbatim to `queryHistoricEnergy`, so
+   * OpenEMS builds the local-day window — including DST transitions — from the
+   * zone name. No offset arithmetic happens on this side (#355).
    */
   async getReadings(
     devices: DeviceConfig[],
     startDate: string,
-    endDate: string
+    endDate: string,
+    timezone: string
   ): Promise<DeviceReading[]> {
     // Validate and group devices by OpenEMS edge ID
     const edgeGroups = new Map<
@@ -346,7 +351,8 @@ export class OpenEmsClient implements DeviceDataAdapter {
           edgeId,
           channels,
           startDate,
-          endDate
+          endDate,
+          timezone
         );
 
         for (const deviceInfo of deviceInfos) {
