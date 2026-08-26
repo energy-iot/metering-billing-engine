@@ -581,11 +581,15 @@ describe("PreflightPanel — seed readings (#339)", () => {
     );
   }
 
-  function energyResponse(totalKwh: number) {
+  // Mirrors the real /api/openems/energy shape (DeviceEnergyResult): the
+  // field is `energyKwh`, NOT `totalKwh` — the mismatch #367 fixed. Keep the
+  // mock on the route's real field name so a reader/route divergence fails
+  // here instead of only in production.
+  function energyResponse(energyKwh: number) {
     return {
       ok: true,
       status: 200,
-      json: async () => ({ results: [{ deviceId: DEVICE, totalKwh }] }),
+      json: async () => ({ results: [{ deviceId: DEVICE, energyKwh }] }),
     };
   }
 
@@ -624,6 +628,17 @@ describe("PreflightPanel — seed readings (#339)", () => {
     );
 
     await waitFor(() => expect(btn.disabled).toBe(false));
+
+    // #367 guard: the fetched `energyKwh` value must actually FLOW into the
+    // rendered elapsed-usage math — not merely avoid the error branch. Before
+    // the fix the reader looked up `totalKwh`, got undefined, and hit the
+    // null-guard error path, which "no crash" assertions could never catch.
+    const math = document.querySelector(
+      '[data-testid="preflight-seed-math-h-1"]',
+    );
+    expect(math?.textContent).toContain("214");
+    // 4196 − 214 — the derived seed from the concrete fetched value.
+    expect(math?.textContent).toContain("3,982");
   });
 
   // #359 — the seed anchors to the period's start, so the elapsed-usage
@@ -834,7 +849,7 @@ describe("PreflightPanel — read date (#343)", () => {
   function windowedFetch(fallbackKwh: number | null = null) {
     return vi.fn(async (_url: string, init: { body: string }) => {
       const body = JSON.parse(init.body) as { toDate?: string };
-      const totalKwh =
+      const energyKwh =
         body.toDate === READ_DAY
           ? USAGE_TO_READ_DAY
           : body.toDate === TODAY
@@ -843,7 +858,8 @@ describe("PreflightPanel — read date (#343)", () => {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ results: [{ deviceId: DEVICE, totalKwh }] }),
+        // Real route field name (`energyKwh`, per DeviceEnergyResult) — #367.
+        json: async () => ({ results: [{ deviceId: DEVICE, energyKwh }] }),
       };
     });
   }

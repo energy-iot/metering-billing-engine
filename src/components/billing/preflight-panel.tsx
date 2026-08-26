@@ -286,14 +286,18 @@ export function PreflightPanel(props: PreflightPanelProps) {
         return;
       }
       const body = (await res.json()) as {
-        results?: Array<{ deviceId: string; totalKwh: number | null }>;
+        // DeviceEnergyResult — the route's contract names the field
+        // `energyKwh` (#367). NB: the result also carries `energyWh`;
+        // this display is in kWh, so `energyKwh` is the correct pick
+        // (`energyWh` would be a 1000x unit bug).
+        results?: Array<{ deviceId: string; energyKwh: number | null }>;
       };
       const hit = (body.results ?? []).find((r) => r.deviceId === deviceId);
-      if (!hit || hit.totalKwh == null) {
+      if (!hit || hit.energyKwh == null) {
         setRow(hid, { elapsedState: "error", elapsedKwh: null });
         return;
       }
-      setRow(hid, { elapsedState: "idle", elapsedKwh: hit.totalKwh });
+      setRow(hid, { elapsedState: "idle", elapsedKwh: hit.energyKwh });
     } catch {
       setRow(hid, { elapsedState: "error", elapsedKwh: null });
     }
