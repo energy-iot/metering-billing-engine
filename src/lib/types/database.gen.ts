@@ -214,6 +214,7 @@ export type Database = {
           microgrid_id: string
           start_date: string
           status: Database["public"]["Enums"]["billing_period_status"]
+          timezone: string
         }
         Insert: {
           closed_at?: string | null
@@ -223,6 +224,7 @@ export type Database = {
           microgrid_id: string
           start_date: string
           status?: Database["public"]["Enums"]["billing_period_status"]
+          timezone?: string
         }
         Update: {
           closed_at?: string | null
@@ -232,6 +234,7 @@ export type Database = {
           microgrid_id?: string
           start_date?: string
           status?: Database["public"]["Enums"]["billing_period_status"]
+          timezone?: string
         }
         Relationships: [
           {
@@ -629,6 +632,7 @@ export type Database = {
           lat: number | null
           lng: number | null
           name: string
+          timezone: string
         }
         Insert: {
           address_city?: string | null
@@ -657,6 +661,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           name: string
+          timezone?: string
         }
         Update: {
           address_city?: string | null
@@ -685,6 +690,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           name?: string
+          timezone?: string
         }
         Relationships: [
           {
