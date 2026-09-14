@@ -11,9 +11,14 @@
  *
  * Active link: bg-accent text-accent-foreground + aria-current="page"
  * Idle link:   text-muted-foreground hover:bg-accent hover:text-accent-foreground
+ * Pending link (navigation announced, route not yet settled): inline spinner +
+ *   aria-busy="true" + data-pending="true" so the click reads as recorded and
+ *   double-clicks are visibly redundant. Clears when usePathname() settles.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import * as React from "react";
+import { announceNavigationStart } from "@/components/ui/navigation-progress";
 
 export type SidebarEntry = {
   label: string;
@@ -32,16 +37,31 @@ export function isActive(pathname: string, entry: SidebarEntry): boolean {
 
 export function SidebarNavLinks({ entries }: { entries: SidebarEntry[] }) {
   const pathname = usePathname();
+  const [pendingHref, setPendingHref] = React.useState<string | null>(null);
+
+  // Navigation settled → clear the pending affordance.
+  React.useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
 
   return (
     <nav aria-label="Primary" className="flex-1 space-y-1 px-3 py-4">
       {entries.map((entry) => {
         const active = isActive(pathname, entry);
+        const pending = pendingHref === entry.href && !active;
         return (
           <Link
             key={entry.href}
             href={entry.href}
             aria-current={active ? "page" : undefined}
+            aria-busy={pending || undefined}
+            data-pending={pending || undefined}
+            onClick={() => {
+              if (entry.href !== pathname) {
+                setPendingHref(entry.href);
+                announceNavigationStart(entry.href);
+              }
+            }}
             className={
               active
                 ? "flex items-center rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-foreground"
@@ -49,9 +69,25 @@ export function SidebarNavLinks({ entries }: { entries: SidebarEntry[] }) {
             }
           >
             {entry.label}
+            {pending && <NavSpinner />}
           </Link>
         );
       })}
     </nav>
+  );
+}
+
+function NavSpinner() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="ml-auto h-3.5 w-3.5 animate-spin"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+    </svg>
   );
 }

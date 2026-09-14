@@ -20,8 +20,10 @@
 //   • Each link's chevron + count are announced via composed text.
 
 import * as React from "react";
+import Link from "next/link";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "@/lib/utils";
+import { announceNavigationStart } from "@/components/ui/navigation-progress";
 
 export type HierarchyKind = "Organization" | "Community" | "Microgrid" | "Edge" | "Household";
 
@@ -43,6 +45,28 @@ export interface HierarchyNavProps {
 }
 
 export function HierarchyNav({ levels, className }: HierarchyNavProps) {
+  const [pendingHref, setPendingHref] = React.useState<string | null>(null);
+  const clearTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // No usePathname() here on purpose: this breadcrumb renders inside dozens
+  // of server pages whose tests mock next/navigation partially. Pending
+  // clears via unmount (successful nav swaps the page) plus a safety timeout
+  // (failed nav stays mounted) — no router subscription needed.
+  React.useEffect(() => {
+    return () => {
+      if (clearTimer.current) clearTimeout(clearTimer.current);
+    };
+  }, []);
+
+  const handleNavClick = (href: string, active?: boolean) => {
+    if (active) return;
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    setPendingHref(href);
+    announceNavigationStart(href);
+    // Safety: clear the affordance if the navigation never settles.
+    clearTimer.current = setTimeout(() => setPendingHref(null), 4000);
+  };
+
   return (
     <nav
       aria-label="Hierarchy breadcrumb"
@@ -50,10 +74,14 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
     >
       {levels.map((it, i) => {
         const hasSiblings = it.count > 1;
+        const pending = pendingHref === it.href && !it.active;
         const segment = (
-          <a
+          <Link
             href={it.href}
             aria-current={it.active ? "page" : undefined}
+            aria-busy={pending || undefined}
+            data-pending={pending || undefined}
+            onClick={() => handleNavClick(it.href, it.active)}
             className={cn(
               "inline-flex flex-col items-start rounded-md px-2.5 py-1 no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               it.active
@@ -69,7 +97,19 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
                 <span aria-hidden="true" className="mr-0.5 h-3.5 w-1 rounded-sm bg-primary" />
               )}
               {it.label}
-              {hasSiblings && (
+              {pending && (
+                <svg
+                  aria-hidden="true"
+                  className="h-3 w-3 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+              )}
+              {!pending && hasSiblings && (
                 <>
                   <span
                     aria-label={`${it.count} ${it.kind.toLowerCase()}s`}
@@ -81,7 +121,7 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
                 </>
               )}
             </span>
-          </a>
+          </Link>
         );
         return (
           <React.Fragment key={`${it.kind}-${it.href}`}>
@@ -99,12 +139,13 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
                     </DropdownMenu.Label>
                     {it.siblings.map((s) => (
                       <DropdownMenu.Item key={s.href} asChild>
-                        <a
+                        <Link
                           href={s.href}
+                          onClick={() => handleNavClick(s.href)}
                           className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-[13px] text-foreground outline-none data-[highlighted]:bg-muted"
                         >
                           {s.label}
-                        </a>
+                        </Link>
                       </DropdownMenu.Item>
                     ))}
                   </DropdownMenu.Content>
