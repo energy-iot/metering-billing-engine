@@ -36,8 +36,13 @@ export function NavigationProgress() {
   // transitions AWAY from this value — never off `visible`, which would
   // re-fire the effect on show and strangle the 4s safety (pr-374 review).
   const startPathRef = React.useRef<string | null>(null);
+  // Latest committed pathname, readable from the event listener below.
+  // Synced in an effect (never during render): clicks only land on committed
+  // UI, so this is always the path the announced navigation starts from.
   const pathnameRef = React.useRef(pathname);
-  pathnameRef.current = pathname;
+  React.useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
 
   // Show immediately on any announced navigation start.
   React.useEffect(() => {
