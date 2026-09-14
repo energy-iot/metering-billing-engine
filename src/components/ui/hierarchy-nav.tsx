@@ -24,6 +24,7 @@ import Link from "next/link";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "@/lib/utils";
 import { announceNavigationStart } from "@/components/ui/navigation-progress";
+import { NavSpinner } from "@/components/ui/nav-spinner";
 
 export type HierarchyKind = "Organization" | "Community" | "Microgrid" | "Edge" | "Household";
 
@@ -49,9 +50,22 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
   const clearTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // No usePathname() here on purpose: this breadcrumb renders inside dozens
-  // of server pages whose tests mock next/navigation partially. Pending
-  // clears via unmount (successful nav swaps the page) plus a safety timeout
-  // (failed nav stays mounted) — no router subscription needed.
+  // of server pages whose tests mock next/navigation partially. Instead of a
+  // router subscription, pending clears when the destination breadcrumb
+  // arrives: a successful navigation re-renders these `levels` (new array
+  // from the server page), so if the clicked href is now the active segment
+  // — or gone entirely — the flight is over. A still-non-active match means
+  // the nav hasn't landed; the 4s safety covers the failed-nav case.
+  React.useEffect(() => {
+    if (pendingHref == null) return;
+    const match = levels.find(
+      (l) =>
+        l.href === pendingHref ||
+        (l.siblings ?? []).some((s) => s.href === pendingHref),
+    );
+    if (!match || match.active) setPendingHref(null);
+  }, [levels, pendingHref]);
+
   React.useEffect(() => {
     return () => {
       if (clearTimer.current) clearTimeout(clearTimer.current);
@@ -97,18 +111,7 @@ export function HierarchyNav({ levels, className }: HierarchyNavProps) {
                 <span aria-hidden="true" className="mr-0.5 h-3.5 w-1 rounded-sm bg-primary" />
               )}
               {it.label}
-              {pending && (
-                <svg
-                  aria-hidden="true"
-                  className="h-3 w-3 animate-spin"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                </svg>
-              )}
+              {pending && <NavSpinner className="h-3 w-3" />}
               {!pending && hasSiblings && (
                 <>
                   <span

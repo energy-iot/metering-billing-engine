@@ -69,4 +69,23 @@ describe("NavigationProgress", () => {
     });
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("stays visible while a slow navigation is still in flight (pr-374)", () => {
+    vi.useFakeTimers();
+    render(<NavigationProgress />);
+    act(() => {
+      announceNavigationStart("/microgrids");
+    });
+    // 1s passes with NO pathname change — the 350ms settle-hide must not
+    // fire; only a real transition or the 4s safety may hide the bar.
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole("status", { name: "Loading page" })).toBeDefined();
+    // And the 4s safety still applies when the route never settles.
+    act(() => {
+      vi.advanceTimersByTime(3100);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
 });

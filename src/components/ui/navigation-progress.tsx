@@ -32,14 +32,24 @@ export function NavigationProgress() {
   const pathname = usePathname();
   const [visible, setVisible] = React.useState(false);
   const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pathname the in-flight navigation started from. The hide effect keys off
+  // transitions AWAY from this value — never off `visible`, which would
+  // re-fire the effect on show and strangle the 4s safety (pr-374 review).
+  const startPathRef = React.useRef<string | null>(null);
+  const pathnameRef = React.useRef(pathname);
+  pathnameRef.current = pathname;
 
   // Show immediately on any announced navigation start.
   React.useEffect(() => {
     const onStart = () => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
+      startPathRef.current = pathnameRef.current;
       setVisible(true);
       // Safety: never trap the bar on screen if the route never settles.
-      hideTimer.current = setTimeout(() => setVisible(false), 4000);
+      hideTimer.current = setTimeout(() => {
+        startPathRef.current = null;
+        setVisible(false);
+      }, 4000);
     };
     window.addEventListener(MBE_NAVIGATION_START_EVENT, onStart);
     return () => {
@@ -48,21 +58,24 @@ export function NavigationProgress() {
     };
   }, []);
 
-  // Hide shortly after the pathname settles. Skips the mount render so the
-  // bar doesn't flash on first load.
+  // Hide shortly after the pathname settles onto a new route. Skips the
+  // mount render so the bar doesn't flash on first load, and ignores
+  // re-renders where the pathname hasn't moved away from the start path.
   const mounted = React.useRef(false);
   React.useEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
       return;
     }
-    if (!visible) return;
+    if (startPathRef.current == null) return;
+    if (pathname === startPathRef.current) return;
+    startPathRef.current = null;
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => setVisible(false), 350);
     return () => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
-  }, [pathname, visible]);
+  }, [pathname]);
 
   if (!visible) return null;
 

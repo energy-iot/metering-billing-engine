@@ -306,4 +306,54 @@ describe("HierarchyNav — pending navigation feedback", () => {
     expect(link!.getAttribute("aria-busy")).toBeNull();
     expect(link!.getAttribute("data-pending")).toBeNull();
   });
+
+  it("pending clears when the destination breadcrumb arrives (pr-374)", async () => {
+    const { container, rerender } = render(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Organization",
+            label: "Nearly Free Energy",
+            count: 1,
+            href: "/",
+            active: false,
+          },
+          {
+            kind: "Community",
+            label: "Kisakye",
+            count: 1,
+            href: "/communities/comm-k",
+            active: true,
+          },
+        ]}
+      />,
+    );
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(container.querySelectorAll("a")[0]);
+    expect(container.querySelectorAll("a")[0].getAttribute("aria-busy")).toBe("true");
+
+    // Destination renders: clicked href is now the active segment.
+    rerender(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Organization",
+            label: "Nearly Free Energy",
+            count: 1,
+            href: "/",
+            active: true,
+          },
+          {
+            kind: "Community",
+            label: "Kisakye",
+            count: 1,
+            href: "/communities/comm-k",
+            active: false,
+          },
+        ]}
+      />,
+    );
+    expect(container.querySelectorAll("a")[0].getAttribute("aria-busy")).toBeNull();
+    expect(container.querySelectorAll("a")[0].getAttribute("data-pending")).toBeNull();
+  });
 });
