@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { LogoutButton } from "./logout-button";
 import { SidebarNav } from "./sidebar-nav";
+import { NavigationProgress } from "@/components/ui/navigation-progress";
 
 export default async function DashboardLayout({
   children,
@@ -33,6 +34,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex min-h-screen">
+      <NavigationProgress />
       {/* Sidebar */}
       <aside className="flex w-64 flex-col border-r border-border bg-muted">
         <div className="border-b border-border px-6 py-4">

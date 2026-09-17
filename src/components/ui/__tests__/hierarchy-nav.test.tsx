@@ -254,3 +254,106 @@ describe("HierarchyNav — empty-state placeholder", () => {
     expect(container.querySelector(".rounded-pill")).toBeNull();
   });
 });
+
+// ── Pending navigation feedback ──────────────────────────────────────────
+
+describe("HierarchyNav — pending navigation feedback", () => {
+  it("clicking a non-active segment marks it aria-busy + data-pending", async () => {
+    const { container } = render(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Organization",
+            label: "Nearly Free Energy",
+            count: 1,
+            href: "/",
+            active: false,
+          },
+          {
+            kind: "Community",
+            label: "Kisakye",
+            count: 1,
+            href: "/communities/comm-k",
+            active: true,
+          },
+        ]}
+      />,
+    );
+    const { fireEvent } = await import("@testing-library/react");
+    const links = container.querySelectorAll("a");
+    fireEvent.click(links[0]);
+    expect(links[0].getAttribute("aria-busy")).toBe("true");
+    expect(links[0].getAttribute("data-pending")).toBe("true");
+  });
+
+  it("clicking the active segment does NOT mark it pending", async () => {
+    const { container } = render(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Microgrid",
+            label: "Block A",
+            count: 1,
+            href: "/microgrids/mg-1",
+            active: true,
+          },
+        ]}
+      />,
+    );
+    const { fireEvent } = await import("@testing-library/react");
+    const link = container.querySelector("a");
+    fireEvent.click(link!);
+    expect(link!.getAttribute("aria-busy")).toBeNull();
+    expect(link!.getAttribute("data-pending")).toBeNull();
+  });
+
+  it("pending clears when the destination breadcrumb arrives (pr-374)", async () => {
+    const { container, rerender } = render(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Organization",
+            label: "Nearly Free Energy",
+            count: 1,
+            href: "/",
+            active: false,
+          },
+          {
+            kind: "Community",
+            label: "Kisakye",
+            count: 1,
+            href: "/communities/comm-k",
+            active: true,
+          },
+        ]}
+      />,
+    );
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(container.querySelectorAll("a")[0]);
+    expect(container.querySelectorAll("a")[0].getAttribute("aria-busy")).toBe("true");
+
+    // Destination renders: clicked href is now the active segment.
+    rerender(
+      <HierarchyNav
+        levels={[
+          {
+            kind: "Organization",
+            label: "Nearly Free Energy",
+            count: 1,
+            href: "/",
+            active: true,
+          },
+          {
+            kind: "Community",
+            label: "Kisakye",
+            count: 1,
+            href: "/communities/comm-k",
+            active: false,
+          },
+        ]}
+      />,
+    );
+    expect(container.querySelectorAll("a")[0].getAttribute("aria-busy")).toBeNull();
+    expect(container.querySelectorAll("a")[0].getAttribute("data-pending")).toBeNull();
+  });
+});
